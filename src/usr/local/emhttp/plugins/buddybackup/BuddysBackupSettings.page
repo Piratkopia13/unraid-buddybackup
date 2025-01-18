@@ -1,0 +1,49 @@
+Menu="BuddyBackup:2"
+Title="Buddy's Backups"
+---
+<?php
+?>
+<style>
+  .narrow {
+    width: 50px !important;
+  }
+</style>
+<form markdown="1" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#file" value="buddybackup/buddybackup.cfg">
+_(Enable)_:
+: <select name="ReceiveBackups" class="align">
+    <?=mk_option($cfg['ReceiveBackups'], "disable", "_(No)_");?>
+    <?=mk_option($cfg['ReceiveBackups'], "enable", "_(Yes)_");?>
+  </select>
+
+:enable_backup_receive_plug:
+    > oookeh
+:end
+
+_(Buddy's SSH public key (get this from your buddy))_:
+: <input type="text" name="DestinationPubSSHKey" class="align" value="<?=$cfg['DestinationPubSSHKey'];?>">
+
+_(Destination parent dataset (must match buddy's setting))_:
+: <select name="ReceiveDestinationDataset" class="align">
+  <?=datasets("ReceiveDestinationDataset", false)?>
+  </select>
+
+_(Snapshot retention)_:
+: <input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly
+
+&nbsp;
+: <input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> Daily
+
+&nbsp;
+: <input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> Monthly
+
+&nbsp;
+: <input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> Yearly
+
+:retention_plug:
+    > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.
+:end
+
+&nbsp;
+: <input type="submit" name="#apply" value="<?=_('Apply')?>">
+</form>

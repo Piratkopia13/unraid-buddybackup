@@ -1,0 +1,75 @@
+<?xml version='1.0' standalone='yes'?>
+
+<!DOCTYPE PLUGIN [
+  <!ENTITY name      "buddybackup">
+  <!ENTITY author    "Alexander Wester">
+  <!ENTITY version   "2025.01.18">
+  <!ENTITY launch    "Settings/BuddyBackup">
+  <!ENTITY branch    "main">
+  <!ENTITY gitURL    "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
+  <!ENTITY gitRelURL "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
+  <!ENTITY pluginURL "&gitURL;/&name;.plg">
+
+  <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
+  <!ENTITY pkgPath   "/boot/config/plugins/&name;">
+  <!ENTITY pkgName   "&name;.txz">
+  <!ENTITY pkgMD5    "cf8cc30cf8ec869b4c3d8a839997449f">
+]>
+
+<PLUGIN  name="&name;"
+         author="&author;"
+         version="&version;"
+         pluginURL="&pluginURL;"
+         >
+    <CHANGES>
+    ##&name;
+###2025.01.18 - BuddyBackup
+    Initial release
+    </CHANGES>
+
+    <!--
+    The 'plugin' package file.
+    -->
+    <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
+      <URL>&gitRelURL;/&pkgName;</URL>
+      <MD5>&pkgMD5;</MD5>
+    </FILE>
+
+    <!-- Copy sanoid default conf -->
+    <FILE Name="&pkgPath;/sanoid.defaults.conf">
+      <LOCAL>/etc/sanoid/sanoid.defaults.conf</LOCAL>
+    </FILE>
+    
+    <FILE Run="/bin/bash">
+        <INLINE>
+            echo ""
+            echo "-----------------------------------------------------------"
+            echo " &name; has been installed."
+            echo " I like potatoes."
+            echo " Version: &version;"
+            echo "-----------------------------------------------------------"
+            echo ""
+        </INLINE>
+    </FILE>
+
+    <!--
+    The 'remove' script.
+    -->
+    <FILE Run="/bin/bash" Method="remove">
+        <INLINE>
+            &emhttp;/scripts/rc.buddybackup uninstall
+
+            removepkg &pkgPath;/&pkgName;
+
+            echo ""
+            echo "-----------------------------------------------------------"
+            echo " &name; has been uninstalled."
+            echo " Version: &version;"
+            echo "-----------------------------------------------------------"
+            echo ""
+
+            exit 0
+        </INLINE>
+    </FILE>
+
+</PLUGIN>

@@ -1,0 +1,225 @@
+#!/bin/bash
+plugin="buddybackup"
+
+# Current prerequisites: Sanoid and Python has to be installed
+# The python requirement can be removed if restrict_zfs.py is rewritten in bash (which shouldnt be too hard since it mainly does regex comparisons)
+
+# TODO:
+# Simplify settings
+#   replace cron schedule?
+# Test ssh connection to verify that restrict_zfs.py works. eg. send "ls" or something sneakier like "zfs send && ls" and verify that it gets blocked, otherwise warn user!
+# Rewrite restrict_zfs.py to bash and remove python as a prerequisite
+# Add status like last completed backup (and maybe backup size?) to Unraid Dashboard
+# Make sure it works after unraid reboots
+# Test between fresh unraid installs
+# 
+
+# cd /mnt/user/sonic/buddybackup_plugin/src
+# makepkg -l y -c y ../buddybackup.txz && upgradepkg --install-new --reinstall ../buddybackup.txz
+
+enable_backups_to_buddy() {
+    logger "Enabling BuddyBackup" -t"${plugin}"
+
+    # generate new ssh keys to access buddy if the keys don't already exist
+    if [ ! -f "${private_ssh_key_path}" ] || [ ! -f "${private_ssh_key_path}.pub" ]; then
+        logger "Generating new key pair" -t"${plugin}"
+        rm "${private_ssh_key_path}" >/dev/null 2>&1
+        rm "${private_ssh_key_path}.pub" >/dev/null 2>&1
+        ssh-keygen -q -t ed25519 -f "${private_ssh_key_path}" -N ''
+    fi
+
+    # test SSH connection to buddy
+    eval $(test_connection "${host}")
+    if [[ "${connection_status}" == "ok" ]]; then
+        logger "auth ok, do something" -t"${plugin}"
+    else
+        logger "failed to connect to buddy: ${connection_result}" -t"${plugin}"
+    fi
+}
+
+disable_backups_to_buddy() {
+    logger "Disabling BuddyBackup" -t"${plugin}"
+}
+
+enable_backups_from_buddy() {
+    if [[ -z "${ReceiveDestinationDataset}" ]]; then
+        echo "Can not enable backups from buddy, no recieve destination dataset set."
+        return
+    fi
+
+    # add buddybackup_receiver to "AllowUsers list" in /etc/ssh/sshd_config if AllowUsers exists (and restart sshd)
+    # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
+    sed -i 's/^#\?AllowUsers .*/AllowUsers root/' /etc/ssh/sshd_config
+    sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${receiving_user}'/' /etc/ssh/sshd_config
+    /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+
+    # make buddybackup_receiver user (with a homedir)
+    useradd -m -s /bin/bash "${receiving_user}"
+    # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="restrict_zfs.py" '
+    mkdir "/home/${receiving_user}/.ssh"
+    chmod 700 "/home/${receiving_user}/.ssh"
+    touch "/home/${receiving_user}/.ssh/authorized_keys"
+    chmod 644 "/home/${receiving_user}/.ssh/authorized_keys"
+    chown -R ${receiving_user}:${receiving_user} "/home/${receiving_user}/"
+    echo "restrict,command=\"restrict_zfs.py\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
+
+    cp "/boot/config/plugins/${plugin}/restrict_zfs.py" "/home/${receiving_user}"
+    chmod +x "/home/${receiving_user}/restrict_zfs.py"
+
+    zfs allow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
+
+    # save retention to sanoid conf
+    sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
+    hourly = ${ReceiveDestinationRententionHourly}\n\
+    daily = ${ReceiveDestinationRententionDaily}\n\
+    monthly = ${ReceiveDestinationRententionMonthly}\n\
+    hourly = ${ReceiveDestinationRententionHourly}\n\
+    autosnap = no\n\
+    autoprune = yes\n")
+    echo "${sanoid_conf}" > "${sanoid_config_path}"
+}
+
+disable_backups_from_buddy() {
+    # remove buddybackup_receiver from "AllowUsers list" in /etc/ssh/sshd_config (and restart sshd)
+    sed -i 's/ '${receiving_user}'//' /etc/ssh/sshd_config
+    /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+
+    rm -r "/home/${receiving_user}" >/dev/null 2>&1
+
+    # todo: if $ReceiveDestinationDataset has changed since enable_backups_from_buddy() we don't know which dataset to zfs unallow. Fix that
+    if [[ "${ReceiveDestinationDataset}" ]]; then
+        echo "DestinationDataset: ${ReceiveDestinationDataset}"
+        zfs unallow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
+    fi
+
+    userdel "${receiving_user}"
+}
+
+enable_syncoid_cron() {
+    logger "Enabling syncoid cron" -t"${plugin}"
+
+    rm "${syncoid_cron_file}" >/dev/null 2>&1
+    echo "# Generated cron settings for plugin buddybackup" > "${syncoid_cron_file}"
+    echo -e "${BackupCron} flock -n /var/lock/buddybackup-syncoid -c \"/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup send_backup >> /var/log/buddybackup.log 2>&1\"\n" >> "${syncoid_cron_file}"
+    /usr/local/sbin/update_cron
+}
+
+disable_syncoid_cron() {
+    logger "Disabling syncoid cron" -t"${plugin}"
+
+    rm "${syncoid_cron_file}" >/dev/null 2>&1
+    /usr/local/sbin/update_cron
+}
+
+update() {
+    if [[ "${BackupToBuddy}" == "enable" ]] then
+        enable_backups_to_buddy
+    else
+        disable_backups_to_buddy
+    fi
+
+    if [[ "${ReceiveBackups}" == "enable" ]] then
+        enable_backups_from_buddy
+    else
+        disable_backups_from_buddy
+    fi
+
+    if [[ ! -z "${BackupCron}" ]] then
+        enable_syncoid_cron
+    else
+        disable_syncoid_cron
+    fi
+}
+
+send_backup() {
+    logger "Sending backup to buddy" -t"${plugin}"
+
+    result=($(syncoid --no-privilege-elevation --sendoptions=w --sshkey "${private_ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}"))
+    logger "Result: ${result}" -t"${plugin}"
+}
+
+enable_sanoid_cron() {
+    rm "${sanoid_cron_file}" >/dev/null 2>&1
+    echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
+    echo '*/15 * * * * flock -n /var/run/sanoid/cron-take.lock -c "TZ=UTC sanoid --configdir=${sanoid_config_dir} --take-snapshots" >> /var/log/buddybackup.log 2>&1' >> "${sanoid_cron_file}"
+    echo -e '*/15 * * * * flock -n /var/run/sanoid/cron-prune.lock -c "sanoid --configdir=${sanoid_config_dir} --prune-snapshots" >> /var/log/buddybackup.log 2>&1\n' >> "${sanoid_cron_file}"
+    /usr/local/sbin/update_cron
+}
+
+disable_sanoid_cron() {
+    rm "${sanoid_cron_file}" >/dev/null 2>&1
+    /usr/local/sbin/update_cron
+}
+
+test_connection() {
+    host=$1
+    if [[ -z "${host}" ]] then
+        host="${DestinationHost}"
+    fi
+    # test SSH connection to buddy
+    ssh_status=$(ssh -i "${private_ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${host}" echo ok 2>&1)
+    if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
+        echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
+    elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
+        echo "connection_status=\"no auth\"; connection_result=\"${ssh_status}\""
+    else
+        echo "connection_status=\"fail\"; connection_result=\"${ssh_status}\""
+    fi
+}
+
+test_connection_cmd() {
+    host=$1
+    if [[ -z "${host}" ]] then
+        host="${DestinationHost}"
+    fi
+    echo "<h2>Trying to connect to ${host} over SSH..<br>"
+
+    eval $(test_connection "${host}")
+    case "${connection_status}" in
+        ("ok") echo "Success!<br>" ;;
+        ("no auth") echo "Authentication failed. Make sure buddy has enabled \"Buddy's Backups\" and entered your public key.<br>" ;;
+        ("fail") echo "Failed: ${connection_result}<br>" ;;
+        (*) echo "unexpected error" ;;
+    esac
+
+    echo "</h2>"
+}
+
+uninstall() {
+    disable_backups_to_buddy
+    disable_backups_from_buddy
+    disable_sanoid_cron
+}
+
+# read our configuration.
+CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
+source $CONFIG
+
+receiving_user="buddybackup_receiver"
+private_ssh_key_path="/boot/config/plugins/${plugin}/buddybackup_sender_key"
+sanoid_cron_file="/boot/config/plugins/${plugin}/sanoid.cron"
+syncoid_cron_file="/boot/config/plugins/${plugin}/syncoid.cron"
+sanoid_config_path="/boot/config/plugins/${plugin}/sanoid.conf"
+
+case "$1" in
+	('update')
+		update
+	;;
+    ('send_backup')
+		send_backup
+	;;
+    ('enable_sanoid_cron')
+		enable_sanoid_cron
+	;;
+    ('disable_sanoid_cron')
+		disable_sanoid_cron
+	;;
+    ('test_connection')
+		test_connection_cmd "$2"
+	;;
+    ('uninstall')
+		uninstall
+	;;
+	(*)
+		echo "usage $0 update|send_backup|enable_sanoid_cron|disable_sanoid_cron|test_connection|uninstall"
+esac

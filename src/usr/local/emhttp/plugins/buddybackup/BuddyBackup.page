@@ -1,0 +1,44 @@
+Menu="Utilities"
+Title="Buddy Backup (Preview)"
+Type="xmenu"
+Icon="buddybackup.png"
+Tag="buddybackup"
+---
+<?php
+    $plugin = "buddybackup";
+    $cfg_file  = "/boot/config/plugins/$plugin/$plugin.cfg";
+    $cfg = parse_plugin_cfg($plugin, true);
+
+    function datasets($cfg_option, $only_encrypted = true) {
+        global $cfg;
+        $datasets = mk_option($cfg[$cfg_option], "", "none");
+        $raw_datasets = array();
+        if (exec("zfs list -rH -o name,encryption", $raw_datasets)) {
+            foreach ($raw_datasets as $set) {
+                $parts = preg_split('/\s+/', $set);
+                if ($parts[1] != "off" || !$only_encrypted) {
+                    $datasets .= mk_option($cfg[$cfg_option], $parts[0], $parts[0]);
+                } else {
+                    $datasets .= mk_option($cfg[$cfg_option], $parts[0], "{$parts[0]} (not encrypted)", "disabled");
+                }
+            }
+        } else {
+            $datasets = mk_option(null, "", "failed to list datasets", "disabled");
+        }
+        return $datasets;
+    }
+    
+?>
+<style>
+    select.align {
+        min-width:300px;
+        max-width:30;
+    }
+    select.hide {
+        display:none;
+    }
+</style>
+<span>
+BuddyBackup aims to simplify backing up to/from a buddy that is also running Unraid and using ZFS.<br>
+This plugin sets up authentication and syncs raw encrypted zfs snapshots meaning that your backup buddy will not have access to read any of your backed up data and can not access your server for anything other than receiving your data.
+</span>

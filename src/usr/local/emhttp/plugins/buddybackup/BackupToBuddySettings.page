@@ -1,0 +1,61 @@
+Menu="BuddyBackup:1"
+Title="Backup to Buddy"
+---
+<?php
+    $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
+    if (file_exists($public_ssh_key_path)) {
+      $public_ssh_key	= file_get_contents($public_ssh_key_path);
+    } else {
+      $public_ssh_key	= "";
+    }
+    $rc_name = "rc.{$plugin}";
+    $rc_script = "/plugins/{$plugin}/scripts/{$rc_name}";
+?>
+<script>
+  function test_connection(button) {
+    $(button).val('Testing...');
+    openChanges('<?=$rc_name?> test_connection "'+$(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val()+'"', '_(Connection test)_')
+    setTimeout(function(){$(button).val("_(Test connection)_")},5000);
+  }
+</script>
+<form markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg">
+<input type="hidden" name="#command" value="<?=$rc_script?>">
+<input type="hidden" name="#arg[1]" value="update">
+_(Enable)_:
+: <select name="BackupToBuddy" class="align">
+    <?=mk_option($cfg['BackupToBuddy'], "disable", "_(No)_");?>
+    <?=mk_option($cfg['BackupToBuddy'], "enable", "_(Yes)_");?>
+  </select>
+
+:enable_backup_send_plug:
+    > potato
+:end
+
+_(Buddy's hostname or IP adress)_:
+: <input type="text" name="DestinationHost" class="align" value="<?=$cfg['DestinationHost'];?>">
+<input type="button" value="_(Test connection)_" onclick="test_connection(this)">
+
+_(Your SSH public key (send this to you buddy))_:
+: <input disabled type="text" class="align" value="<?=$public_ssh_key;?>">
+
+_(ZFS dataset to backup)_:
+: <select name="SourceDataset" class="align">
+  <?=datasets("SourceDataset")?>
+  </select>
+
+_(Cron schedule)_:
+: <input type="text" name="BackupCron" class="align" value="<?=$cfg['BackupCron'];?>">
+
+_(Destination parent dataset (must match buddy's setting in section below))_:
+: <input type="text" name="SendDestinationDataset" class="align" value="<?=$cfg['SendDestinationDataset'];?>">
+
+&nbsp;
+: <input type="submit" name="#apply" value="<?=_('Apply')?>">
+</form>
+
+<form markdown="1" method="POST" action="/update.php" target="progressFrame">
+<input type="hidden" name="#command" value="<?=$rc_script?>">
+<input type="hidden" name="#arg[1]" value="send_backup">
+: <input type="submit" name="#apply" value="<?=_('Send backup')?>">
+</form>
