@@ -20,25 +20,25 @@ plugin="buddybackup"
 enable_backups_to_buddy() {
     logger "Enabling BuddyBackup" -t"${plugin}"
 
-    # generate new ssh keys to access buddy if the keys don't already exist
-    if [ ! -f "${private_ssh_key_path}" ] || [ ! -f "${private_ssh_key_path}.pub" ]; then
-        logger "Generating new key pair" -t"${plugin}"
-        rm "${private_ssh_key_path}" >/dev/null 2>&1
-        rm "${private_ssh_key_path}.pub" >/dev/null 2>&1
-        ssh-keygen -q -t ed25519 -f "${private_ssh_key_path}" -N ''
-    fi
-
     # test SSH connection to buddy
     eval $(test_connection "${host}")
     if [[ "${connection_status}" == "ok" ]]; then
         logger "auth ok, do something" -t"${plugin}"
     else
         logger "failed to connect to buddy: ${connection_result}" -t"${plugin}"
+        return
+    fi
+
+    if [[ ! -z "${BackupCron}" ]] then
+        enable_syncoid_cron
+    else
+        disable_syncoid_cron
     fi
 }
 
 disable_backups_to_buddy() {
     logger "Disabling BuddyBackup" -t"${plugin}"
+    disable_syncoid_cron
 }
 
 enable_backups_from_buddy() {
@@ -72,11 +72,14 @@ enable_backups_from_buddy() {
     sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
     hourly = ${ReceiveDestinationRententionHourly}\n\
     daily = ${ReceiveDestinationRententionDaily}\n\
+    weekly = ${ReceiveDestinationRententionWeekly}\n\
     monthly = ${ReceiveDestinationRententionMonthly}\n\
-    hourly = ${ReceiveDestinationRententionHourly}\n\
+    yearly = ${ReceiveDestinationRententionYearly}\n\
     autosnap = no\n\
     autoprune = yes\n")
     echo "${sanoid_conf}" > "${sanoid_config_path}"
+
+    enable_sanoid_cron
 }
 
 disable_backups_from_buddy() {
@@ -93,6 +96,8 @@ disable_backups_from_buddy() {
     fi
 
     userdel "${receiving_user}"
+
+    disable_sanoid_cron
 }
 
 enable_syncoid_cron() {
@@ -123,26 +128,27 @@ update() {
     else
         disable_backups_from_buddy
     fi
-
-    if [[ ! -z "${BackupCron}" ]] then
-        enable_syncoid_cron
-    else
-        disable_syncoid_cron
-    fi
 }
 
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
-    result=($(syncoid --no-privilege-elevation --sendoptions=w --sshkey "${private_ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}"))
-    logger "Result: ${result}" -t"${plugin}"
+    if result=$(syncoid --no-privilege-elevation --sendoptions=w --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
+        result+="Successfully sent backup to buddy!"
+    else 
+        printf -v result "Sending backup failed. Error code $?. Full output:\n${result}"
+    fi
+    logger "${result}" -t"${plugin}"
+    if [[ "${1}" == "echo" ]]; then
+        echo "${result}"
+    fi
 }
 
 enable_sanoid_cron() {
     rm "${sanoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo '*/15 * * * * flock -n /var/run/sanoid/cron-take.lock -c "TZ=UTC sanoid --configdir=${sanoid_config_dir} --take-snapshots" >> /var/log/buddybackup.log 2>&1' >> "${sanoid_cron_file}"
-    echo -e '*/15 * * * * flock -n /var/run/sanoid/cron-prune.lock -c "sanoid --configdir=${sanoid_config_dir} --prune-snapshots" >> /var/log/buddybackup.log 2>&1\n' >> "${sanoid_cron_file}"
+    echo "*/15 * * * * flock -n /var/run/sanoid/cron-take.lock -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\" >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo -e "*/15 * * * * flock -n /var/run/sanoid/cron-prune.lock -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\" >> /var/log/buddybackup.log 2>&1\n" >> "${sanoid_cron_file}"
     /usr/local/sbin/update_cron
 }
 
@@ -157,7 +163,7 @@ test_connection() {
         host="${DestinationHost}"
     fi
     # test SSH connection to buddy
-    ssh_status=$(ssh -i "${private_ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${host}" echo ok 2>&1)
+    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${host}" echo ok 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
         echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
     elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
@@ -189,6 +195,7 @@ uninstall() {
     disable_backups_to_buddy
     disable_backups_from_buddy
     disable_sanoid_cron
+    disable_syncoid_cron
 }
 
 # read our configuration.
@@ -196,17 +203,18 @@ CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
 source $CONFIG
 
 receiving_user="buddybackup_receiver"
-private_ssh_key_path="/boot/config/plugins/${plugin}/buddybackup_sender_key"
-sanoid_cron_file="/boot/config/plugins/${plugin}/sanoid.cron"
-syncoid_cron_file="/boot/config/plugins/${plugin}/syncoid.cron"
-sanoid_config_path="/boot/config/plugins/${plugin}/sanoid.conf"
+plugin_path="/boot/config/plugins/${plugin}"
+ssh_key_path="${plugin_path}/buddybackup_sender_key"
+sanoid_cron_file="${plugin_path}/sanoid.cron"
+syncoid_cron_file="${plugin_path}/syncoid.cron"
+sanoid_config_path="${plugin_path}/sanoid.conf"
 
 case "$1" in
 	('update')
 		update
 	;;
     ('send_backup')
-		send_backup
+		send_backup "$2"
 	;;
     ('enable_sanoid_cron')
 		enable_sanoid_cron

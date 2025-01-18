@@ -27,6 +27,32 @@ Tag="buddybackup"
         }
         return $datasets;
     }
+
+    $warnings = array();
+    $disable_send = false;
+    $disable_receive = false;
+
+    // Check prerequisites
+    function exist_and_executable($c, $which = true) {
+        return exec("if [ ! -x \"" . (($which) ? "$(which $c)" : $c) . "\" ]; then echo false; else echo true; fi") == "true";
+    }
+    if (!exist_and_executable("zfs")) {
+        array_push($warnings, "ZFS utilities are not found. This plugin does not work without ZFS and Unraid version >=6.12.0.");
+        $disable_send = true;
+        $disable_receive = true;
+    }
+    if (!exist_and_executable("/usr/local/sbin/sanoid", false)) {
+        array_push($warnings, "Sanoid is not installed. Receiving backups will be disabled.");
+        $disable_receive = true;
+    }
+    if (!exist_and_executable("/usr/local/sbin/syncoid", false)) {
+        array_push($warnings, "Syncoid is not installed. Sending backups will be disabled.");
+        $disable_send = true;
+    }
+    if (!exist_and_executable("python3")) {
+        array_push($warnings, "Python3 is not installed. Receiving backups will be disabled. This requirement will be removed soon.");
+        $disable_receive = true;
+    }
     
 ?>
 <style>
@@ -37,7 +63,26 @@ Tag="buddybackup"
     select.hide {
         display:none;
     }
+    #warning-box {
+        background-color: rgba(255, 255, 0, 0.7);
+        color: darkred;
+        padding: 8px 10px;
+    }
+    fieldset {
+        display: contents;
+    }
 </style>
+<?if (!empty($warnings)): ?>
+<div id="warning-box">
+    <h2>
+        <i class="fa fa-exclamation-triangle"></i>
+        Warning
+    </h2>
+    <?foreach ($warnings as $w):?>
+    <h3><?=$w?></h3>
+    <?endforeach;?>
+</div>
+<?endif;?>
 <span>
 BuddyBackup aims to simplify backing up to/from a buddy that is also running Unraid and using ZFS.<br>
 This plugin sets up authentication and syncs raw encrypted zfs snapshots meaning that your backup buddy will not have access to read any of your backed up data and can not access your server for anything other than receiving your data.

@@ -10,52 +10,69 @@ Title="Backup to Buddy"
     }
     $rc_name = "rc.{$plugin}";
     $rc_script = "/plugins/{$plugin}/scripts/{$rc_name}";
+
+    $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
+  function showPopup(cmd, title, info, button=0, callback=null) {
+    // button = 0 : hide CLOSE button (default)
+    // button = 1 : show CLOSE button
+    swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"},function(close){
+      if ($('#submit_button').length > 0) $('#submit_button').remove();
+    });
+    $('.sweet-alert').addClass('nchan');
+    $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
+    $('pre#swalbody').append(info+"<br><br>");
+    $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2},function(data) {
+      $('pre#swalbody').append(data.replace(/\n/g, "<br>"));
+      if (callback) {
+        callback(data);
+      }
+    });
+  }
+
   function test_connection(button) {
-    $(button).val('Testing...');
-    openChanges('<?=$rc_name?> test_connection "'+$(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val()+'"', '_(Connection test)_')
-    setTimeout(function(){$(button).val("_(Test connection)_")},5000);
+    ip = $(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val();
+    showPopup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+".. Note: You won't see any output until action is finished.")
+  }
+  function send_backup(button) {
+    showPopup('<?=$rc_name?> send_backup echo', '_(Send ZFS snapshots to buddy)_', "Sending.. Note: You won't see any output until sending is finished.")
   }
 </script>
 <form markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
-<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg">
-<input type="hidden" name="#command" value="<?=$rc_script?>">
-<input type="hidden" name="#arg[1]" value="update">
+<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
+<input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
+<input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 _(Enable)_:
-: <select name="BackupToBuddy" class="align">
+: <select name="BackupToBuddy" class="align" <?=$disabled?>>
     <?=mk_option($cfg['BackupToBuddy'], "disable", "_(No)_");?>
     <?=mk_option($cfg['BackupToBuddy'], "enable", "_(Yes)_");?>
   </select>
 
 :enable_backup_send_plug:
-    > potato
+    > Enable automatically scheduled ZFS snapshot syncs (using syncoid) to your buddy. Your buddy's retention settings decide when your backed up snapshots will be deleted.
 :end
 
 _(Buddy's hostname or IP adress)_:
-: <input type="text" name="DestinationHost" class="align" value="<?=$cfg['DestinationHost'];?>">
-<input type="button" value="_(Test connection)_" onclick="test_connection(this)">
+: <input type="text" name="DestinationHost" class="align" value="<?=$cfg['DestinationHost'];?>" <?=$disabled?>>
+<input type="button" value="_(Test connection)_" onclick="test_connection(this)" <?=$disabled?>>
 
 _(Your SSH public key (send this to you buddy))_:
-: <input disabled type="text" class="align" value="<?=$public_ssh_key;?>">
+: <input disabled type="text" class="align" value="<?=$public_ssh_key;?>" <?=$disabled?>>
 
 _(ZFS dataset to backup)_:
-: <select name="SourceDataset" class="align">
+: <select name="SourceDataset" class="align" <?=$disabled?>>
   <?=datasets("SourceDataset")?>
   </select>
 
 _(Cron schedule)_:
-: <input type="text" name="BackupCron" class="align" value="<?=$cfg['BackupCron'];?>">
+: <input type="text" name="BackupCron" class="align" value="<?=$cfg['BackupCron'];?>" <?=$disabled?>>
 
 _(Destination parent dataset (must match buddy's setting in section below))_:
-: <input type="text" name="SendDestinationDataset" class="align" value="<?=$cfg['SendDestinationDataset'];?>">
+: <input type="text" name="SendDestinationDataset" class="align" value="<?=$cfg['SendDestinationDataset'];?>" <?=$disabled?>>
 
 &nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>">
-</form>
+: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+<input type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
 
-<form markdown="1" method="POST" action="/update.php" target="progressFrame">
-<input type="hidden" name="#command" value="<?=$rc_script?>">
-<input type="hidden" name="#arg[1]" value="send_backup">
-: <input type="submit" name="#apply" value="<?=_('Send backup')?>">
 </form>

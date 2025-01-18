@@ -1,25 +1,28 @@
 <?xml version='1.0' standalone='yes'?>
 
 <!DOCTYPE PLUGIN [
-  <!ENTITY name      "buddybackup">
-  <!ENTITY author    "Alexander Wester">
-  <!ENTITY version   "2025.01.18">
-  <!ENTITY launch    "Settings/BuddyBackup">
-  <!ENTITY branch    "main">
-  <!ENTITY gitURL    "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
-  <!ENTITY gitRelURL "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
-  <!ENTITY pluginURL "&gitURL;/&name;.plg">
+  <!ENTITY name         "buddybackup">
+  <!ENTITY displayName  "Buddy Backup">
+  <!ENTITY author       "Alexander Wester">
+  <!ENTITY version      "2025.01.18">
+  <!ENTITY launch       "Settings/BuddyBackup">
+  <!ENTITY branch       "main">
+  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
+  <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
+  <!ENTITY pluginURL     "&gitURL;/&name;.plg">
 
-  <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
-  <!ENTITY pkgPath   "/boot/config/plugins/&name;">
-  <!ENTITY pkgName   "&name;.txz">
-  <!ENTITY pkgMD5    "cf8cc30cf8ec869b4c3d8a839997449f">
+  <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
+  <!ENTITY pkgPath       "/boot/config/plugins/&name;">
+  <!ENTITY pkgName       "&name;.txz">
+  <!ENTITY pkgMD5       "cf8cc30cf8ec869b4c3d8a839997449f">
 ]>
 
-<PLUGIN  name="&name;"
+<PLUGIN  name="&displayName;"
          author="&author;"
          version="&version;"
          pluginURL="&pluginURL;"
+         launch="&launch;"
+         min="6.12.0"
          >
     <CHANGES>
     ##&name;
@@ -33,6 +36,20 @@
     <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
       <URL>&gitRelURL;/&pkgName;</URL>
       <MD5>&pkgMD5;</MD5>
+      <!-- <LOCAL>/mnt/user/sonic/buddybackup_plugin/&pkgName;</LOCAL> -->
+    </FILE>
+
+    <!-- Create default buddybackup.cfg -->
+    <FILE Name="&pkgPath;/&name;.cfg">
+      <INLINE>
+        BackupToBuddy=disable
+        ReceiveBackups=disable
+        ReceiveDestinationRententionHourly=0
+        ReceiveDestinationRententionDaily=7
+        ReceiveDestinationRententionWeekly=4
+        ReceiveDestinationRententionMonthly=3
+        ReceiveDestinationRententionYearly=0
+      </INLINE>
     </FILE>
 
     <!-- Copy sanoid default conf -->
@@ -42,6 +59,15 @@
     
     <FILE Run="/bin/bash">
         <INLINE>
+            # generate new ssh keys to access buddy if the keys don't already exist
+            ssh_key_path="&pkgPath;/buddybackup_sender_key"
+            if [ ! -f "${ssh_key_path}" ] || [ ! -f "${ssh_key_path}.pub" ]; then
+                echo "Generating new key pair.."
+                rm "${ssh_key_path}" &gt;/dev/null 2&gt;&amp;1
+                rm "${ssh_key_path}.pub" &gt;/dev/null 2&gt;&amp;1
+                ssh-keygen -q -t ed25519 -f "${ssh_key_path}" -N ''
+            fi
+
             echo ""
             echo "-----------------------------------------------------------"
             echo " &name; has been installed."

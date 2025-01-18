@@ -2,6 +2,7 @@ Menu="BuddyBackup:2"
 Title="Buddy's Backups"
 ---
 <?php
+  $disabled = ($disable_receive) ? "disabled" : "";
 ?>
 <style>
   .narrow {
@@ -9,41 +10,46 @@ Title="Buddy's Backups"
   }
 </style>
 <form markdown="1" method="POST" action="/update.php" target="progressFrame">
-<input type="hidden" name="#file" value="buddybackup/buddybackup.cfg">
+<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
+<input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
+<input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 _(Enable)_:
-: <select name="ReceiveBackups" class="align">
+: <select name="ReceiveBackups" class="align" <?=$disabled?>>
     <?=mk_option($cfg['ReceiveBackups'], "disable", "_(No)_");?>
     <?=mk_option($cfg['ReceiveBackups'], "enable", "_(Yes)_");?>
   </select>
 
 :enable_backup_receive_plug:
-    > oookeh
+    > Enable receival of Buddy's backups. Buddy will not be able to connect to you unless this is enabled.
 :end
 
 _(Buddy's SSH public key (get this from your buddy))_:
-: <input type="text" name="DestinationPubSSHKey" class="align" value="<?=$cfg['DestinationPubSSHKey'];?>">
+: <input type="text" name="DestinationPubSSHKey" class="align" value="<?=$cfg['DestinationPubSSHKey'];?>" <?=$disabled?>>
 
 _(Destination parent dataset (must match buddy's setting))_:
-: <select name="ReceiveDestinationDataset" class="align">
+: <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
   <?=datasets("ReceiveDestinationDataset", false)?>
   </select>
 
 _(Snapshot retention)_:
-: <input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly
+: <input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow" <?=$disabled?>> Hourly
 
 &nbsp;
-: <input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> Daily
+: <input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow" <?=$disabled?>> Daily
 
 &nbsp;
-: <input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> Monthly
+: <input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow" <?=$disabled?>> Weekly
 
 &nbsp;
-: <input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> Yearly
+: <input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow" <?=$disabled?>> Monthly
+
+&nbsp;
+: <input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow" <?=$disabled?>> Yearly
 
 :retention_plug:
     > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.
 :end
 
 &nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>">
+: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
 </form>
