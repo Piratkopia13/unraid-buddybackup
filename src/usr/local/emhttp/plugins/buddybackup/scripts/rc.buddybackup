@@ -12,8 +12,7 @@ plugin="buddybackup"
 # Make sure it works after unraid reboots
 # Test between fresh unraid installs
 
-# cd /mnt/user/sonic/buddybackup_plugin/src
-# makepkg -l y -c y ../buddybackup.txz && upgradepkg --install-new --reinstall ../buddybackup.txz
+# cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
 
 enable_backups_to_buddy() {
     logger "Enabling BuddyBackup" -t"${plugin}"
