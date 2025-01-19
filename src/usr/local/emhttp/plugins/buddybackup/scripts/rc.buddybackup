@@ -2,17 +2,15 @@
 plugin="buddybackup"
 
 # Current prerequisites: Sanoid and Python has to be installed
-# The python requirement can be removed if restrict_zfs.py is rewritten in bash (which shouldnt be too hard since it mainly does regex comparisons)
+# The python requirement can be removed if restrict_zfs.py is rewritten in bash (I have started this, but got stuck since bash regex does not support zero-or-more expresssions "(?:)"" )
 
 # TODO:
 # Simplify settings
 #   replace cron schedule?
-# Test ssh connection to verify that restrict_zfs.py works. eg. send "ls" or something sneakier like "zfs send && ls" and verify that it gets blocked, otherwise warn user!
-# Rewrite restrict_zfs.py to bash and remove python as a prerequisite
+# Test ssh connection to verify that restrict_zfs works. eg. send "ls" or something sneakier like "zfs send && ls" and verify that it gets blocked, otherwise warn user!
 # Add status like last completed backup (and maybe backup size?) to Unraid Dashboard
 # Make sure it works after unraid reboots
 # Test between fresh unraid installs
-# 
 
 # cd /mnt/user/sonic/buddybackup_plugin/src
 # makepkg -l y -c y ../buddybackup.txz && upgradepkg --install-new --reinstall ../buddybackup.txz
@@ -55,16 +53,13 @@ enable_backups_from_buddy() {
 
     # make buddybackup_receiver user (with a homedir)
     useradd -m -s /bin/bash "${receiving_user}"
-    # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="restrict_zfs.py" '
+    # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
     mkdir "/home/${receiving_user}/.ssh"
     chmod 700 "/home/${receiving_user}/.ssh"
     touch "/home/${receiving_user}/.ssh/authorized_keys"
     chmod 644 "/home/${receiving_user}/.ssh/authorized_keys"
     chown -R ${receiving_user}:${receiving_user} "/home/${receiving_user}/"
-    echo "restrict,command=\"restrict_zfs.py\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
-
-    cp "/boot/config/plugins/${plugin}/restrict_zfs.py" "/home/${receiving_user}"
-    chmod +x "/home/${receiving_user}/restrict_zfs.py"
+    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/scripts/restrict_zfs.py\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
 
     zfs allow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
 
@@ -133,7 +128,7 @@ update() {
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
-    if result=$(syncoid --no-privilege-elevation --sendoptions=w --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
+    if result=$(syncoid --no-privilege-elevation --no-sync-snap --sendoptions=w --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
         result+="Successfully sent backup to buddy!"
     else 
         printf -v result "Sending backup failed. Error code $?. Full output:\n${result}"

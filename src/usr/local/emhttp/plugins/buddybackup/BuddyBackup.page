@@ -50,7 +50,7 @@ Tag="buddybackup"
         $disable_send = true;
     }
     if (!exist_and_executable("python3")) {
-        array_push($warnings, "Python3 is not installed. Receiving backups will be disabled. This requirement will be removed soon.");
+        array_push($warnings, "Python3 is not installed. Receiving backups will be disabled.");
         $disable_receive = true;
     }
     

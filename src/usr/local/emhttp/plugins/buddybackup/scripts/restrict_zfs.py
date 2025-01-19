@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+# Script originally from https://github.com/Derkades/ssh-zfs-receive
+# Under GNU General Public License v3.0
+# Some modifications have been made to remove support for commands not needed
+
 import os
 import re
 import subprocess
@@ -40,21 +45,9 @@ ALLOWED_COMMANDS = [
     r'ps -Ao args=',
     r'zfs get -H (?:name|receive_resume_token|-p used|syncoid:sync) ' + DATASET + REDIRS,
     r'zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)guid,creation ' + DATASET + REDIRS,
-    r'zfs get all -s local -H ' + DATASET,
     r'zfs list -o name,origin -t filesystem,volume -Hr ' + DATASET,
-    # If syncoid --no-sync-snap is *not* used, the following line may work with SYNCOID_SNAPSHOT
-    # instead of DATASET_SNAPSHOT to be more restrictive
-    r'zfs rollback -R ' + DATASET_SNAPSHOT,
     MBUFFER_OR_NC_CMD + PIPE + COMPRESS_CMD + r'\s*zfs receive\s+' + SHORTOPTSVALS + DATASET + REDIRS,
     r'zfs receive -A '+ DATASET,
-    r'zfs send\s+' + SHORTOPTSVALS + r'(?:-t [0-9a-f-]+|-[iI] ' + DATASET_SNAPSHOT + r'(?: ' + DATASET_SNAPSHOT + r')?)' + REDIRS + r'(?:' + PIPE + MBUFFER_CMD + r'(?:' + PIPE + SOCAT_CMD + r')?)?',
-    r'zfs snapshot ' + SYNCOID_SNAPSHOT,
-    # the script used to only allow destroying SYNCOID_SNAPSHOT but using --no-sync-snap it wanted to destroy "autosnap" snaps
-    # loosening the restriction should be safe IF zfs delegation is used with a non-root user (SHOULD be mandatory for security)
-    r'zfs destroy ' + DATASET_SNAPSHOT,
-    r'zfs hold ' + SYNCOID_HOLD + r'\s+' + DATASET_SNAPSHOT,
-    r'zfs release ' + SYNCOID_HOLD + r'\s+' + DATASET_SNAPSHOT,
-    r'zfs send\s+.*', # alex test. NOT SAFE FOR PROD
 ]
 
 COMPILED = [re.compile(command) for command in ALLOWED_COMMANDS]
