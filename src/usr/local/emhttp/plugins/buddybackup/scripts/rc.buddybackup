@@ -6,6 +6,11 @@ plugin="buddybackup"
 
 # cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
 
+unraid_notify() {
+    # Call the Unraid notification script
+    /usr/local/emhttp/webGui/scripts/notify -s "BuddyBackup" -d "$1" -i "$2"
+}
+
 enable_backups_to_buddy() {
     logger "Enabling BuddyBackup" -t"${plugin}"
 
@@ -129,6 +134,9 @@ send_backup() {
         printf -v result "${result}\n\nSuccessfully sent backup to buddy!"
     else 
         printf -v result "Sending backup failed. Error code $?. Full output:\n\n${result}"
+        if [[ ! "${1}" == "echo" ]]; then
+            unraid_notify "${result}" "alert"
+        fi
     fi
     logger "${result}" -t"${plugin}"
     if [[ "${1}" == "echo" ]]; then
