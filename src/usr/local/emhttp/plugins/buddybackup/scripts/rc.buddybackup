@@ -41,7 +41,9 @@ disable_backups_to_buddy() {
 
 enable_backups_from_buddy() {
     if [[ -z "${ReceiveDestinationDataset}" ]]; then
-        echo "Can not enable backups from buddy, no recieve destination dataset set."
+        err="Can not enable backups from buddy, no recieve destination dataset set."
+        logger "${err}" -t"${plugin}"
+        echo "${err}"
         return
     fi
 
@@ -54,9 +56,9 @@ enable_backups_from_buddy() {
     # make buddybackup_receiver user (with a homedir)
     useradd -m -s /bin/bash "${receiving_user}"
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
-    mkdir "/home/${receiving_user}/.ssh"
+    mkdir "/home/${receiving_user}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${receiving_user}/.ssh"
-    touch "/home/${receiving_user}/.ssh/authorized_keys"
+    touch "/home/${receiving_user}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${receiving_user}/.ssh/authorized_keys"
     chown -R ${receiving_user}:${receiving_user} "/home/${receiving_user}/"
     echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/scripts/restrict_zfs.py\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
@@ -86,11 +88,10 @@ disable_backups_from_buddy() {
 
     # todo: if $ReceiveDestinationDataset has changed since enable_backups_from_buddy() we don't know which dataset to zfs unallow. Fix that
     if [[ "${ReceiveDestinationDataset}" ]]; then
-        echo "DestinationDataset: ${ReceiveDestinationDataset}"
-        zfs unallow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
+        zfs unallow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}" >/dev/null 2>&1
     fi
 
-    userdel "${receiving_user}"
+    userdel "${receiving_user}" >/dev/null 2>&1
 
     disable_sanoid_cron
 }
