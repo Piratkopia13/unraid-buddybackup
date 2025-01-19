@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.01.18">
+  <!ENTITY version      "2025.01.19">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5       "cf8cc30cf8ec869b4c3d8a839997449f">
+  <!ENTITY pkgMD5        "21668cb21c11e6370097c395edbf6b71">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -26,6 +26,8 @@
          >
     <CHANGES>
     ##&name;
+###2025.01.19
+  Bug fixes
 ###2025.01.18 - BuddyBackup
     Initial release
     </CHANGES>
