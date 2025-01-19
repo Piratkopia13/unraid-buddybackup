@@ -4,14 +4,6 @@ plugin="buddybackup"
 # Current prerequisites: Sanoid and Python has to be installed
 # The python requirement can be removed if restrict_zfs.py is rewritten in bash (I have started this, but got stuck since bash regex does not support zero-or-more expresssions "(?:)"" )
 
-# TODO:
-# Simplify settings
-#   replace cron schedule?
-# Test ssh connection to verify that restrict_zfs works. eg. send "ls" or something sneakier like "zfs send && ls" and verify that it gets blocked, otherwise warn user!
-# Add status like last completed backup (and maybe backup size?) to Unraid Dashboard
-# Make sure it works after unraid reboots
-# Test between fresh unraid installs
-
 # cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
 
 enable_backups_to_buddy() {
@@ -53,7 +45,7 @@ enable_backups_from_buddy() {
     /etc/rc.d/rc.sshd restart >/dev/null 2>&1
 
     # make buddybackup_receiver user (with a homedir)
-    useradd -m -s /bin/bash "${receiving_user}"
+    useradd -m -s /bin/bash "${receiving_user}" >/dev/null 2>&1
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
     mkdir "/home/${receiving_user}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${receiving_user}/.ssh"
@@ -72,7 +64,8 @@ enable_backups_from_buddy() {
     monthly = ${ReceiveDestinationRententionMonthly}\n\
     yearly = ${ReceiveDestinationRententionYearly}\n\
     autosnap = no\n\
-    autoprune = yes\n")
+    autoprune = yes\n\
+    recursive = yes\n")
     echo "${sanoid_conf}" > "${sanoid_config_path}"
 
     enable_sanoid_cron
@@ -128,10 +121,14 @@ update() {
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
-    if result=$(syncoid --no-privilege-elevation --no-sync-snap --sendoptions=w --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
-        result+="Successfully sent backup to buddy!"
+    syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w"
+    if [[ "${BackupRecursive}" == "enable" ]] then
+        syncoid_flags+=" --recursive"
+    fi
+    if result=$(syncoid ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
+        printf -v result "${result}\n\nSuccessfully sent backup to buddy!"
     else 
-        printf -v result "Sending backup failed. Error code $?. Full output:\n${result}"
+        printf -v result "Sending backup failed. Error code $?. Full output:\n\n${result}"
     fi
     logger "${result}" -t"${plugin}"
     if [[ "${1}" == "echo" ]]; then
@@ -142,8 +139,8 @@ send_backup() {
 enable_sanoid_cron() {
     rm "${sanoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo "*/15 * * * * flock -n /var/run/sanoid/cron-take.lock -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\" >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
-    echo -e "*/15 * * * * flock -n /var/run/sanoid/cron-prune.lock -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\" >> /var/log/buddybackup.log 2>&1\n" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\" >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo -e "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\" >> /var/log/buddybackup.log 2>&1\n" >> "${sanoid_cron_file}"
     /usr/local/sbin/update_cron
 }
 

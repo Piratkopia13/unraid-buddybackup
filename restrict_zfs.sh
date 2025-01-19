@@ -14,6 +14,7 @@ REDIRS="(?:\s+(?:2>/dev/null|2>&1))?"
 ALLOWED_COMMANDS=(
     "^exit$"
     "^echo -n$"
+    "^echo ok$"
     "^command -v (gzip|zcat|pigz|zstd|xz|lzop|lz4|mbuffer|socat|busybox)$"
     "^zpool get -o value -H feature@extensible_dataset ${POOL}$"
     "^ps -Ao args=$"

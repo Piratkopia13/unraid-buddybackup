@@ -40,6 +40,7 @@ SHORTOPTSVALS = r'(?:-[A-Za-z0-9]+(?:\s+[a-z0-9:._=/-]+)?\s+)*'
 ALLOWED_COMMANDS = [
     r'exit',
     r'echo -n',
+    r'echo ok',
     r'command -v (?:gzip|zcat|pigz|zstd|xz|lzop|lz4|mbuffer|socat|busybox)',
     r'zpool get -o value -H feature@extensible_dataset ' + POOL,
     r'ps -Ao args=',

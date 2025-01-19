@@ -14,6 +14,15 @@ Title="Backup to Buddy"
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
+  $(function() { 
+    $('form').find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea').not('.lock').each(function(){$(this).on('input change',function() {
+      var form = $(this).parentsUntil('form').parent();
+      form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
+          return this.value + ' (apply changes to do this)';
+      });
+    })})
+  })
+
   function showPopup(cmd, title, info, button=0, callback=null) {
     // button = 0 : hide CLOSE button (default)
     // button = 1 : show CLOSE button
@@ -65,6 +74,16 @@ _(ZFS dataset to backup)_:
   <?=datasets("SourceDataset")?>
   </select>
 
+_(Backup child datasets)_:
+: <select name="BackupRecursive" class="align" <?=$disabled?>>
+    <?=mk_option($cfg['BackupRecursive'], "no", "_(No)_");?>
+    <?=mk_option($cfg['BackupRecursive'], "yes", "_(Yes)_");?>
+  </select>
+
+:backup_child_datasets_plug:
+    > Enable to recursively backup all child datasets under the chosen source dataset above.
+:end
+
 _(Cron schedule)_:
 : <input type="text" name="BackupCron" class="align" value="<?=$cfg['BackupCron'];?>" <?=$disabled?>>
 
@@ -73,6 +92,6 @@ _(Destination parent dataset (must match buddy's setting in section below))_:
 
 &nbsp;
 : <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-<input type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+<input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
 
 </form>
