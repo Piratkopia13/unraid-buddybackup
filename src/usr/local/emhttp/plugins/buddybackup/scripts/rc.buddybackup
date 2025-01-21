@@ -98,7 +98,8 @@ enable_syncoid_cron() {
 
     rm "${syncoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${syncoid_cron_file}"
-    echo -e "${BackupCron} flock -n /var/lock/buddybackup-syncoid -c \"/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup send_backup >> /var/log/buddybackup.log 2>&1\"\n" >> "${syncoid_cron_file}"
+    echo "${BackupCron} { ${timestamp_cmd}; flock -n /var/lock/buddybackup-syncoid -c \"/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup send_backup\"; } >> /var/log/buddybackup.log 2>&1" >> "${syncoid_cron_file}"
+    echo -e "\n" >> "${syncoid_cron_file}"
     /usr/local/sbin/update_cron
 }
 
@@ -127,28 +128,26 @@ send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
     syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w"
-    if [[ "${BackupRecursive}" == "enable" ]] then
+    if [[ "${BackupRecursive}" == "yes" ]] then
         syncoid_flags+=" --recursive"
     fi
     if result=$(syncoid ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
-        printf -v result "${result}\n\nSuccessfully sent backup to buddy!"
+        printf -v result "${result}\n\nSuccessfully synced backup to buddy!"
     else 
         printf -v result "Sending backup failed. Error code $?. Full output:\n\n${result}"
         if [[ ! "${1}" == "echo" ]]; then
             unraid_notify "${result}" "alert"
         fi
     fi
-    logger "${result}" -t"${plugin}"
-    if [[ "${1}" == "echo" ]]; then
-        echo "${result}"
-    fi
+    echo "${result}" # always echo to put result in the log file
 }
 
 enable_sanoid_cron() {
     rm "${sanoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\" >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
-    echo -e "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\" >> /var/log/buddybackup.log 2>&1\n" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo -e "\n" >> "${sanoid_cron_file}"
     /usr/local/sbin/update_cron
 }
 
@@ -201,6 +200,7 @@ uninstall() {
 # read our configuration.
 CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
 source $CONFIG
+timestamp_cmd="printf \"\\n%s: \\n\" \"\$(date \"+%F %T\")\""
 
 receiving_user="buddybackup_receiver"
 plugin_path="/boot/config/plugins/${plugin}"
