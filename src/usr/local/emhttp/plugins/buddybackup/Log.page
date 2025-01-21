@@ -1,0 +1,32 @@
+Menu="BuddyBackup:4"
+Title="Log"
+---
+<script>
+    let api_url = "/plugins/<?=$plugin?>/api.php";
+
+    function get_log() {
+        $.post(api_url, { cmd:"get_log" }, function(data) {
+            log = $('#buddybackup-log');
+            if (log.text() != data) {
+                log.text(data);
+                log.animate({scrollTop:log.prop("scrollHeight") - log.height()}, 200)
+            }
+        });
+    }
+
+    $(function () {
+        setInterval(function () {
+            get_log();
+        }, 2000);
+    });
+</script>
+<style>
+    #buddybackup-log {
+        overflow: auto;
+        height: 300px;
+        width: 100%;
+        padding: 20px;
+        background-color: rgba(0, 0, 0, 0.1)
+    }
+</style>
+<textarea readonly id='buddybackup-log'>Loading...</textarea>
