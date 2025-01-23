@@ -2,8 +2,6 @@ Menu="BuddyBackup:4"
 Title="Log"
 ---
 <script>
-    let api_url = "/plugins/<?=$plugin?>/api.php";
-
     function get_log() {
         $.post(api_url, { cmd:"get_log" }, function(data) {
             log = $('#buddybackup-log');

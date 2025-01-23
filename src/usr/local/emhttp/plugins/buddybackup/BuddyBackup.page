@@ -72,6 +72,9 @@ Tag="buddybackup"
         display: contents;
     }
 </style>
+<script>
+    let api_url = "/plugins/<?=$plugin?>/api.php";
+</script>
 <?if (!empty($warnings)): ?>
 <div id="warning-box">
     <h2>

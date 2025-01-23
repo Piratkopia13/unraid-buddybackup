@@ -1,0 +1,60 @@
+Menu="BuddyBackup:3"
+Title="Restore from Buddy"
+---
+<?php
+
+?>
+<script>    
+    function get_buddy_snapshots() {
+        list = $('form').find('select[name="RestoreSnapshot"]');
+        list.html("<option selected disabled>Fetching snapshots from buddy..</option>");
+
+        $.post(api_url, { cmd:"get_buddy_snapshots" })
+            .done(function(data) {
+                list.html("");
+
+                json = JSON.parse(data);
+                if (json.status != "ok") {
+                    list.html("<option selected disabled>Failed! "+json.error+"</option>");    
+                    return;
+                }
+
+                $.each(json.data, function(dataset_name, dataset_data) {
+                    list.append('<option disabled>'+dataset_name+'</option>'); 
+                    $.each(dataset_data, function(snap_name, snap_data) {
+                        list.append('<option value="'+snap_name+'">'+snap_name+'</option>'); 
+                    })
+                })
+                // var snapshots = data.split("\r\n");
+                // for (var i = 0; i < snapshots.length - 1; i++) {
+                //     list.append('<option value="'+snapshots[i]+'">'+snapshots[i]+'</option>');
+                // }
+            })
+            .fail(function(xhr, status, error) {
+                list.html("<option selected disabled>Failed! "+error+"</option>");
+            }
+        );
+    }
+    $(function() { 
+        get_buddy_snapshots();
+    })
+</script>
+Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>
+
+<form markdown="1">
+
+_(Snapshot to restore)_:
+: <select name="RestoreSnapshot" class="align">
+  <option selected disabled>Fetching snapshots from buddy..</option>
+  </select>
+  <input type="button" value="_(Fetch snapshots)_" onclick="get_buddy_snapshots()">
+
+_(Destination dataset)_:
+: <select name="RestoreReceiveDestinationDataset" class="align">
+  <?=datasets("", false)?>
+  </select>
+
+&nbsp;
+: <input type="button" value="_(Restore snapshot)_" onclick="restore_snapshot(this)">
+
+</form>

@@ -190,6 +190,57 @@ test_connection_cmd() {
     echo "</h2>"
 }
 
+get_buddy_snapshots() {
+    cmd="zfs list -o name,origin -t filesystem,volume -Hr '${SendDestinationDataset}'"
+    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${DestinationHost}" "${cmd}" 2>&1)
+    if [ $? -ne 0 ]; then
+        ssh_result=$(echo "${ssh_result}" | sed 's/\r//g') # Remove ^M characters
+        printf '{"status": "failed", error: "%s"}' "${ssh_result}"
+        return
+    fi
+    # ssh_result should now contain one line per dataset/child dataset
+
+    cmds=()
+    datasets=()
+    while IFS= read -r line; do
+        dataset=$(echo "${line}" | sed 's/\s.*$//')
+        cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation '${dataset}'" )
+        datasets+=( "${dataset}" )
+    done <<< "${ssh_result}"
+    
+    json="{\"status\": \"ok\", \"data\": {"
+    for ((i = 0; i < ${#cmds[@]}; i++))
+    do
+        json+="\"${datasets[$i]}\":{"
+        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${DestinationHost}" "${cmds[$i]}" 2>&1)
+        if [ $? -ne 0 ]; then
+            ssh_sub_result=$(echo "${ssh_sub_result}" | sed 's/\r//g') # Remove ^M characters
+            printf '{"status": "failed", error: "%s"}' "${ssh_sub_result}"
+            return
+        fi
+
+        while IFS= read -r line; do
+            # Parse out snap, guid, creation from every 2 lines
+            # examples lines:
+            # disk4/offsite_backup/appdata@syncoid_2025-01-21:03:00:03-GMT01:00        guid    13997382453328167196    -
+            # disk4/offsite_backup/appdata@syncoid_2025-01-21:03:00:03-GMT01:00        creation        1737424803      -
+
+            snap=$(echo \"${line}\" | tr -s ' ' | cut -d '@' -f 2 | cut -d ' ' -f 1)
+            guid=$(echo \"${line}\" | tr -s ' ' | cut -d ' ' -f 3)
+            IFS= read -r line
+            creation=$(echo \"${line}\" | tr -s ' ' | cut -d ' ' -f 3)
+
+            json+="\"${snap}\":{\"guid\":\"${guid}\",\"creation\":\"${creation}\"}," 
+        done <<< "${ssh_sub_result}"
+        json="${json::-1}" # Remove trailing comma
+
+        json+="},"
+    done
+    json="${json::-1}" # Remove trailing comma
+    json+="}}"
+    echo "${json}"
+}
+
 uninstall() {
     disable_backups_to_buddy
     disable_backups_from_buddy
@@ -225,6 +276,9 @@ case "$1" in
     ('test_connection')
 		test_connection_cmd "$2"
 	;;
+    ('get_buddy_snapshots')
+        get_buddy_snapshots
+    ;;
     ('uninstall')
 		uninstall
 	;;
