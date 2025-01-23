@@ -28,7 +28,7 @@ _(Buddy's SSH public key (get this from your buddy))_:
 
 _(Destination parent dataset (must match buddy's setting))_:
 : <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
-  <?=datasets("ReceiveDestinationDataset", false)?>
+  <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
   </select>
 
 _(Snapshot retention)_:

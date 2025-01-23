@@ -8,8 +8,6 @@ Title="Backup to Buddy"
     } else {
       $public_ssh_key	= "";
     }
-    $rc_name = "rc.{$plugin}";
-    $rc_script = "/plugins/{$plugin}/scripts/{$rc_name}";
 
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
@@ -23,29 +21,12 @@ Title="Backup to Buddy"
     })})
   })
 
-  function showPopup(cmd, title, info, button=0, callback=null) {
-    // button = 0 : hide CLOSE button (default)
-    // button = 1 : show CLOSE button
-    swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"},function(close){
-      if ($('#submit_button').length > 0) $('#submit_button').remove();
-    });
-    $('.sweet-alert').addClass('nchan');
-    $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
-    $('pre#swalbody').append(info+"<br><br>");
-    $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2},function(data) {
-      $('pre#swalbody').append(data.replace(/\n/g, "<br>"));
-      if (callback) {
-        callback(data);
-      }
-    });
-  }
-
   function test_connection(button) {
     ip = $(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val();
-    showPopup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+".. Note: You won't see any output until action is finished.")
+    buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+".. Note: You won't see any output until action is finished.")
   }
   function send_backup(button) {
-    showPopup('<?=$rc_name?> send_backup echo', '_(Send ZFS snapshots to buddy)_', "Sending.. Note: You won't see any output until sending is finished.")
+    buddybackup_show_popup('<?=$rc_name?> send_backup echo', '_(Send ZFS snapshots to buddy)_', "Sending.. Note: You won't see any output until sending is finished.")
   }
 </script>
 <form markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
@@ -71,7 +52,7 @@ _(Your SSH public key (send this to you buddy))_:
 
 _(ZFS dataset to backup)_:
 : <select name="SourceDataset" class="align" <?=$disabled?>>
-  <?=datasets("SourceDataset")?>
+  <?=datasets($cfg["SourceDataset"])?>
   </select>
 
 _(Backup child datasets)_:

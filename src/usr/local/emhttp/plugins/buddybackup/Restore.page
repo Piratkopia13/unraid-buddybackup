@@ -6,55 +6,65 @@ Title="Restore from Buddy"
 ?>
 <script>    
     function get_buddy_snapshots() {
-        list = $('form').find('select[name="RestoreSnapshot"]');
-        list.html("<option selected disabled>Fetching snapshots from buddy..</option>");
+        list = $('#restore-snapshot');
+        list.html("<option selected disabled value=''>Fetching snapshots from buddy..</option>");
 
         $.post(api_url, { cmd:"get_buddy_snapshots" })
             .done(function(data) {
-                list.html("");
+                list.html("<option selected disabled value=''>Select from list</option>");
 
                 json = JSON.parse(data);
                 if (json.status != "ok") {
-                    list.html("<option selected disabled>Failed! "+json.error+"</option>");    
+                    list.html("<option selected disabled value=''>Failed! "+json.error+"</option>");    
                     return;
                 }
 
                 $.each(json.data, function(dataset_name, dataset_data) {
-                    list.append('<option disabled>'+dataset_name+'</option>'); 
+                    list.append('<option disabled value="">'+dataset_name+'</option>'); 
                     $.each(dataset_data, function(snap_name, snap_data) {
                         list.append('<option value="'+snap_name+'">'+snap_name+'</option>'); 
                     })
                 })
-                // var snapshots = data.split("\r\n");
-                // for (var i = 0; i < snapshots.length - 1; i++) {
-                //     list.append('<option value="'+snapshots[i]+'">'+snapshots[i]+'</option>');
-                // }
             })
             .fail(function(xhr, status, error) {
-                list.html("<option selected disabled>Failed! "+error+"</option>");
+                list.html("<option selected disabled value=''>Failed! "+error+"</option>");
             }
         );
     }
+
+    function restore_snapshot() {
+        var snap = $('#restore-snapshot').find(':selected').val();
+        var destination_dataset = $('#restore-destination').find(':selected').val();
+        buddybackup_show_popup('<?=$rc_name?> restore_snapshot "'+snap+'" "'+destination_dataset+'"', '_(Restore snapshot)_', "Restoring snapshot '"+snap+"' to dataset '"+destination_dataset+"'.. Note: You won't see any output until action is finished.")
+    }
+
     $(function() { 
         get_buddy_snapshots();
+        $('#restore-form').find('select').not('.lock').each(function() { $(this).on('input change', function() {
+            var snap = $('#restore-snapshot').find(':selected').val();
+            var destination_dataset = $('#restore-destination').find(':selected').val();
+            if (snap.length === 0 || destination_dataset.length === 0) {
+                $('#restore-button').prop('disabled', true);
+            } else {
+                $('#restore-button').prop('disabled', false);
+            }
+        })});
     })
 </script>
 Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>
 
-<form markdown="1">
-
+<form id="restore-form" markdown="1">
 _(Snapshot to restore)_:
-: <select name="RestoreSnapshot" class="align">
+: <select id="restore-snapshot" name="RestoreSnapshot" class="align">
   <option selected disabled>Fetching snapshots from buddy..</option>
   </select>
   <input type="button" value="_(Fetch snapshots)_" onclick="get_buddy_snapshots()">
 
 _(Destination dataset)_:
-: <select name="RestoreReceiveDestinationDataset" class="align">
+: <select id="restore-destination" name="RestoreReceiveDestinationDataset" class="align">
   <?=datasets("", false)?>
   </select>
 
 &nbsp;
-: <input type="button" value="_(Restore snapshot)_" onclick="restore_snapshot(this)">
-
+: <input id="restore-button" type="button" value="_(Restore snapshot)_" disabled onclick="restore_snapshot()">
 </form>
