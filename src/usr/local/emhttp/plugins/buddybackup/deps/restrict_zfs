@@ -1,0 +1,88 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use Getopt::Long qw(GetOptions);
+use Sys::Syslog qw(:standard :macros);
+use Scalar::Util qw(looks_like_number);
+
+my $POOL = qr/'[\w-]+'/;
+my $DATASET = qr/'[\w\/-]+'/;
+my $DATASET_SNAPSHOT = qr/'[\w\/-]+('?)@('?)[\w:-]+'/;
+
+my $SYNCOID_SNAPSHOT = qr/'[\w\/-]+'@('?)syncoid_[\w:-]+\1/;
+
+my $REDIRS = qr/(?:\s+(?:2>\/dev\/null|2>&1))?/;
+my $PIPE = qr/\s*\|\s*/;
+my $MBUFFER_CMD = qr/mbuffer (?:-[rR] \d+[kM])? (?:-W \d+ -I [\w.:-]+ )?-q -s \d+[kM] -m \d+[kM]/;
+my $COMPRESS_CMD = qr/(?:(?:gzip -3|zcat|pigz -(?:\d+|dc)|(?:zstd|zstdmt) -(?:\d+|dc)|xz(?: -d)?|lzop(?: -dfc)?|lz4(?: -dc)?)\s*\|)?/;
+my $SHORTOPTSVALS = qr/(?:-[A-Za-z0-9]+(?:\s+[a-z0-9:._=\/-]+)?\s+)*/;
+
+my @ALLOWED_COMMANDS = (
+    qr/exit/,
+    qr/echo -n/,
+    qr/echo ok/,
+    qr/command -v (?:zstd|zstdmt|mbuffer)/,
+    qr/zpool get -o value -H feature\@extensible_dataset $POOL/,
+    qr/ps -Ao args=/,
+    qr/zfs get -H (?:name|receive_resume_token|-p used|syncoid:sync) $DATASET$REDIRS/,
+    qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
+    qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
+    qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
+    qr/zfs receive -A $DATASET/,
+    qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
+    qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT/,
+    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
+    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
+);
+
+sub check_allowed {
+    my ($command) = @_;
+    foreach my $regex (@ALLOWED_COMMANDS) {
+        return 1 if $command =~ $regex;
+    }
+    return 0;
+}
+
+my $dry_run = 0;
+my $verbose = 0;
+my @log = ();
+GetOptions(
+    'dry-run' => \$dry_run,
+    'verbose' => \$verbose,
+    'log=s@'  => \@log,
+);
+@log = ('syslog') unless @log;
+
+my $original_command = $ENV{'SSH_ORIGINAL_COMMAND'};
+die "No SSH_ORIGINAL_COMMAND environment variable" unless defined $original_command;
+
+openlog('buddybackup-restrict-ssh', 'pid', LOG_USER);
+
+foreach my $command (split /;/, $original_command) {
+    $command =~ s/^\s+|\s+$//g;
+    my $is_allowed = check_allowed($command);
+
+    my $log_text;
+    if (!$is_allowed) {
+        $log_text = "blocked command: $command";
+    } elsif ($dry_run) {
+        $log_text = "would run command: $command";
+    } else {
+        if ($verbose) {
+            $log_text = "running command: $command";
+        }
+        system($command) == 0 or warn "Failed to execute command: $!";
+    }
+
+    if ($log_text) {
+        if (grep { $_ eq 'stderr' } @log) {
+            print STDERR "$log_text\n";
+        }
+        if (grep { $_ eq 'syslog' } @log) {
+            syslog(LOG_INFO, $log_text);
+        }
+    }
+}
+
+closelog();
