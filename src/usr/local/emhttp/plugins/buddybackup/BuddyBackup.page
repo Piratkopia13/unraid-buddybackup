@@ -42,18 +42,6 @@ Tag="buddybackup"
         $disable_send = true;
         $disable_receive = true;
     }
-    if (!exist_and_executable("/usr/local/sbin/sanoid", false)) {
-        array_push($warnings, "Sanoid is not installed. Receiving backups will be disabled.");
-        $disable_receive = true;
-    }
-    if (!exist_and_executable("/usr/local/sbin/syncoid", false)) {
-        array_push($warnings, "Syncoid is not installed. Sending backups will be disabled.");
-        $disable_send = true;
-    }
-    if (!exist_and_executable("python3")) {
-        array_push($warnings, "Python3 is not installed. Receiving backups will be disabled.");
-        $disable_receive = true;
-    }
     
 ?>
 <style>

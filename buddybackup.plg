@@ -9,12 +9,12 @@
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
-  <!ENTITY pluginURL     "&gitURL;/&name;.plg">
+  <!ENTITY pluginURL     "&gitRelURL;/&name;.plg">
 
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "02c62f9d8bff6c50ab5f8622870a9ecc">
+  <!ENTITY pkgMD5        "8342b6176fe2251828cf24caab9bd362">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -22,6 +22,7 @@
          version="&version;"
          pluginURL="&pluginURL;"
          launch="&launch;"
+         icon="&gitURL;/src/usr/local/emhttp/plugins/buddybackup/buddybackup.png"
          min="6.12.0"
          >
     <CHANGES>
@@ -53,33 +54,24 @@
         ReceiveDestinationRententionYearly=0
       </INLINE>
     </FILE>
-
-    <!-- Copy sanoid default conf -->
-    <FILE Name="&pkgPath;/sanoid.defaults.conf">
-      <LOCAL>/etc/sanoid/sanoid.defaults.conf</LOCAL>
-    </FILE>
     
     <FILE Run="/bin/bash">
         <INLINE>
-            # generate new ssh keys to access buddy if the keys don't already exist
-            ssh_key_path="&pkgPath;/buddybackup_sender_key"
-            if [ ! -f "${ssh_key_path}" ] || [ ! -f "${ssh_key_path}.pub" ]; then
-                echo "Generating new key pair.."
-                rm "${ssh_key_path}" &gt;/dev/null 2&gt;&amp;1
-                rm "${ssh_key_path}.pub" &gt;/dev/null 2&gt;&amp;1
-                ssh-keygen -q -t ed25519 -f "${ssh_key_path}" -N ''
-            fi
-
             &emhttp;/scripts/rc.buddybackup update
 
             echo ""
             echo "-----------------------------------------------------------"
             echo " &name; has been installed."
-            echo " I like potatoes."
+            echo " Happy backups"
             echo " Version: &version;"
             echo "-----------------------------------------------------------"
             echo ""
         </INLINE>
+    </FILE>
+
+    <!-- Copy sanoid default conf -->
+    <FILE Name="&pkgPath;/sanoid.defaults.conf">
+      <LOCAL>/src/usr/local/emhttp/plugins/buddybackup/deps/sanoid.defaults.conf</LOCAL>
     </FILE>
 
     <!--

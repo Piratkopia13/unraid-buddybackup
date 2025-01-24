@@ -1,9 +1,6 @@
 #!/bin/bash
 plugin="buddybackup"
 
-# Current prerequisites: Sanoid and Python has to be installed
-# The python requirement can be removed if restrict_zfs.py is rewritten in bash (I have started this, but got stuck since bash regex does not support zero-or-more expresssions "(?:)"" )
-
 # cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
 
 unraid_notify() {
@@ -57,7 +54,7 @@ enable_backups_from_buddy() {
     touch "/home/${receiving_user}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${receiving_user}/.ssh/authorized_keys"
     chown -R ${receiving_user}:${receiving_user} "/home/${receiving_user}/"
-    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/scripts/restrict_zfs.py\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
+    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
 
     zfs allow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
 
@@ -111,6 +108,14 @@ disable_syncoid_cron() {
 }
 
 update() {
+    # generate new ssh keys to access buddy if the keys don't already exist
+    if [ ! -f "${ssh_key_path}" ] || [ ! -f "${ssh_key_path}.pub" ]; then
+        echo "Generating new key pair.."
+        rm "${ssh_key_path}" >/dev/null 2>&1
+        rm "${ssh_key_path}.pub" >/dev/null 2>&1
+        ssh-keygen -q -t ed25519 -f "${ssh_key_path}" -N ''
+    fi
+
     if [[ "${BackupToBuddy}" == "enable" ]] then
         enable_backups_to_buddy
     else
@@ -127,11 +132,11 @@ update() {
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
-    syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w"
+    syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --compress='zstdmt-fast'"
     if [[ "${BackupRecursive}" == "yes" ]] then
         syncoid_flags+=" --recursive"
     fi
-    if result=$(syncoid ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
+    if result=$(${syncoid_bin} ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
         printf -v result "${result}\n\nSuccessfully synced backup to buddy!"
     else 
         printf -v result "Sending backup failed. Error code $?. Full output:\n\n${result}"
@@ -142,11 +147,18 @@ send_backup() {
     echo "${result}" # always echo to put result in the log file
 }
 
+restore_snapshot() {
+    snapshot=$1
+    destination_dataset=$2
+
+    echo "restoring ${snapshot} to local dataset ${destination_dataset}"
+}
+
 enable_sanoid_cron() {
     rm "${sanoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC /usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --take-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
-    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"/usr/local/sbin/sanoid --configdir=\"${plugin_path}\" --prune-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --take-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * { ${timestamp_cmd}; flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"${sanoid_bin} --configdir=\"${plugin_path}\" --prune-snapshots\"; } >> /var/log/buddybackup.log 2>&1" >> "${sanoid_cron_file}"
     echo -e "\n" >> "${sanoid_cron_file}"
     /usr/local/sbin/update_cron
 }
@@ -259,6 +271,8 @@ ssh_key_path="${plugin_path}/buddybackup_sender_key"
 sanoid_cron_file="${plugin_path}/sanoid.cron"
 syncoid_cron_file="${plugin_path}/syncoid.cron"
 sanoid_config_path="${plugin_path}/sanoid.conf"
+sanoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/sanoid"
+syncoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/syncoid"
 
 case "$1" in
 	('update')
@@ -279,9 +293,12 @@ case "$1" in
     ('get_buddy_snapshots')
         get_buddy_snapshots
     ;;
+    ('restore_snapshot')
+        restore_snapshot "$2" "$3"
+    ;;
     ('uninstall')
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|enable_sanoid_cron|disable_sanoid_cron|test_connection|uninstall"
+		echo "usage $0 update|send_backup|enable_sanoid_cron|disable_sanoid_cron|test_connection|get_buddy_snapshots|restore_snapshot|uninstall"
 esac
