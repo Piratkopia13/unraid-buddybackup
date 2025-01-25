@@ -1,11 +1,65 @@
 #!/bin/bash
+
+# set -e
+set -o pipefail
+
 plugin="buddybackup"
 
 # cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
 
+list_descendants() {
+  local children=$(ps -o pid= --ppid "$1")
+  for pid in $children; do
+    list_descendants "$pid"
+  done
+  echo "$children"
+}
+cleanup() {
+    # Kill child processes
+    kill $(list_descendants $$) >/dev/null 2>&1
+}
+trap cleanup EXIT
+
 unraid_notify() {
     # Call the Unraid notification script
     /usr/local/emhttp/webGui/scripts/notify -s "BuddyBackup" -d "$1" -i "$2"
+}
+
+# Default output is console, use optional parameter "nchan" to write to nchan instead
+write() {
+    local nchan="$1"  # Set to 1 if nchan should be used, otherwise default to console
+    shift  # Shift arguments to access messages
+
+    if [[ "$nchan" == "1" ]]; then
+        local url="http://localhost/pub/buddybackup-restore?buffer_length=1"
+        local socket="/var/run/nginx.socket"
+
+        for message in "$@"; do
+            curl -o /dev/null --unix-socket "${socket}" -X POST -d "${message}" "${url}"
+            write_result+="${message}"
+        done
+    else
+        for message in "$@"; do
+            echo "${message}"
+        done
+    fi
+}
+
+# Runs cmd and continously sends output to nchan if specified, otherwise runs cmd and echos result afterwards
+run_and_write_output() {
+    local nchan="$1"  # Set to 1 if nchan should be used, otherwise default to console
+    local cmd="$2"
+
+    if [[ "$nchan" == "1" ]]; then
+        local url="http://localhost/pub/buddybackup-restore?buffer_length=1"
+        local socket="/var/run/nginx.socket"
+
+        cmd+=" 2>&1 | stdbuf -oL tr '\r' '\n' | xargs -I % curl -o /dev/null --unix-socket \"${socket}\" -X POST --data-binary % \"${url}\""
+    fi
+    result=$(eval "$cmd")
+    local error_code=$?
+    write "${nchan}" "${result}"
+    return "${error_code}"
 }
 
 enable_backups_to_buddy() {
@@ -40,23 +94,23 @@ enable_backups_from_buddy() {
         return
     fi
 
-    # add buddybackup_receiver to "AllowUsers list" in /etc/ssh/sshd_config if AllowUsers exists (and restart sshd)
+    # add buddybackup to "AllowUsers list" in /etc/ssh/sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
     sed -i 's/^#\?AllowUsers .*/AllowUsers root/' /etc/ssh/sshd_config
-    sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${receiving_user}'/' /etc/ssh/sshd_config
+    sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' /etc/ssh/sshd_config
     /etc/rc.d/rc.sshd restart >/dev/null 2>&1
 
-    # make buddybackup_receiver user (with a homedir)
-    useradd -m -s /bin/bash "${receiving_user}" >/dev/null 2>&1
+    # make buddybackup user (with a homedir)
+    useradd -m -s /bin/bash "${username}" >/dev/null 2>&1
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
-    mkdir "/home/${receiving_user}/.ssh" >/dev/null 2>&1
-    chmod 700 "/home/${receiving_user}/.ssh"
-    touch "/home/${receiving_user}/.ssh/authorized_keys" >/dev/null 2>&1
-    chmod 644 "/home/${receiving_user}/.ssh/authorized_keys"
-    chown -R ${receiving_user}:${receiving_user} "/home/${receiving_user}/"
-    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${receiving_user}/.ssh/authorized_keys"
+    mkdir "/home/${username}/.ssh" >/dev/null 2>&1
+    chmod 700 "/home/${username}/.ssh"
+    touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
+    chmod 644 "/home/${username}/.ssh/authorized_keys"
+    chown -R ${username}:${username} "/home/${username}/"
+    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
 
-    zfs allow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}"
+    zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"
 
     # save retention to sanoid conf
     sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
@@ -74,18 +128,18 @@ enable_backups_from_buddy() {
 }
 
 disable_backups_from_buddy() {
-    # remove buddybackup_receiver from "AllowUsers list" in /etc/ssh/sshd_config (and restart sshd)
-    sed -i 's/ '${receiving_user}'//' /etc/ssh/sshd_config
+    # remove buddybackup from "AllowUsers list" in /etc/ssh/sshd_config (and restart sshd)
+    sed -i 's/ '${username}'//' /etc/ssh/sshd_config
     /etc/rc.d/rc.sshd restart >/dev/null 2>&1
 
-    rm -r "/home/${receiving_user}" >/dev/null 2>&1
+    rm -r "/home/${username}" >/dev/null 2>&1
 
     # todo: if $ReceiveDestinationDataset has changed since enable_backups_from_buddy() we don't know which dataset to zfs unallow. Fix that
     if [[ "${ReceiveDestinationDataset}" ]]; then
-        zfs unallow -u "${receiving_user}" create,mount,receive "${ReceiveDestinationDataset}" >/dev/null 2>&1
+        zfs unallow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}" >/dev/null 2>&1
     fi
 
-    userdel "${receiving_user}" >/dev/null 2>&1
+    userdel "${username}" >/dev/null 2>&1
 
     disable_sanoid_cron
 }
@@ -132,11 +186,10 @@ update() {
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
-    syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --compress='zstdmt-fast'"
     if [[ "${BackupRecursive}" == "yes" ]] then
         syncoid_flags+=" --recursive"
     fi
-    if result=$(${syncoid_bin} ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${receiving_user}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
+    if result=$(${syncoid_bin} ${syncoid_flags} --sshkey "${ssh_key_path}" "${SourceDataset}" "${username}@${DestinationHost}:${SendDestinationDataset}" 2>&1); then
         printf -v result "${result}\n\nSuccessfully synced backup to buddy!"
     else 
         printf -v result "Sending backup failed. Error code $?. Full output:\n\n${result}"
@@ -148,10 +201,50 @@ send_backup() {
 }
 
 restore_snapshot() {
-    snapshot=$1
-    destination_dataset=$2
+    mode=$1
+    snapshot=$2
+    source_dataset=$3
+    destination_dataset=$4
 
-    echo "restoring ${snapshot} to local dataset ${destination_dataset}"
+    # If last param is "nchan" we send output to nchan channel instead of echo
+    nchan=$5
+    if [[ "${nchan}" == "nchan" ]]; then
+        nchan=1
+    else
+        nchan=0
+    fi
+
+    logger "Restoring backup from buddy" -t"${plugin}"
+
+    case "$mode" in
+        ('selected')
+            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${DestinationHost}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            error_code=$?
+            if [ $error_code -eq 0 ]; then
+                printf -v result "${result}\n\nSuccessfully restored snapshot from buddy!"
+            else 
+                if [[ "${nchan}" ]]; then
+                    printf -v result "Restoring snapshot from backup failed. Error code ${error_code}. ${result}"
+                    unraid_notify "${result}" "alert"
+                else
+                    printf -v result "Restoring snapshot from backup failed. Error code ${error_code}. Full output:\n\n${result}"
+                fi
+            fi
+            write "${nchan}" "${result}"
+        ;;
+        ('selected_and_newer')
+            write "${nchan}" "Restore mode ${mode} is not implemented yet"
+        ;;
+        ('all')
+            write "${nchan}" "Restore mode ${mode} is not implemented yet"
+        ;;
+        (*)
+            write "${nchan}" "Invalid restore mode specified: (${mode})"
+    esac
+
+    if [[ "${nchan}" ]]; then
+        write "${nchan}" "[[rc.buddybackup finished]]"
+    fi
 }
 
 enable_sanoid_cron() {
@@ -174,7 +267,7 @@ test_connection() {
         host="${DestinationHost}"
     fi
     # test SSH connection to buddy
-    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${host}" echo ok 2>&1)
+    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" echo ok 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
         echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
     elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
@@ -204,10 +297,10 @@ test_connection_cmd() {
 
 get_buddy_snapshots() {
     cmd="zfs list -o name,origin -t filesystem,volume -Hr '${SendDestinationDataset}'"
-    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${DestinationHost}" "${cmd}" 2>&1)
+    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmd}" 2>&1)
     if [ $? -ne 0 ]; then
         ssh_result=$(echo "${ssh_result}" | sed 's/\r//g') # Remove ^M characters
-        printf '{"status": "failed", error: "%s"}' "${ssh_result}"
+        printf '{"status": "failed", "error": "%s"}' "${ssh_result}"
         return
     fi
     # ssh_result should now contain one line per dataset/child dataset
@@ -224,10 +317,10 @@ get_buddy_snapshots() {
     for ((i = 0; i < ${#cmds[@]}; i++))
     do
         json+="\"${datasets[$i]}\":{"
-        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${receiving_user}@${DestinationHost}" "${cmds[$i]}" 2>&1)
+        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmds[$i]}" 2>&1)
         if [ $? -ne 0 ]; then
             ssh_sub_result=$(echo "${ssh_sub_result}" | sed 's/\r//g') # Remove ^M characters
-            printf '{"status": "failed", error: "%s"}' "${ssh_sub_result}"
+            printf '{"status": "failed", "error": "%s"}' "${ssh_sub_result}"
             return
         fi
 
@@ -265,7 +358,7 @@ CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
 source $CONFIG
 timestamp_cmd="printf \"\\n%s: \\n\" \"\$(date \"+%F %T\")\""
 
-receiving_user="buddybackup_receiver"
+username="buddybackup"
 plugin_path="/boot/config/plugins/${plugin}"
 ssh_key_path="${plugin_path}/buddybackup_sender_key"
 sanoid_cron_file="${plugin_path}/sanoid.cron"
@@ -273,6 +366,7 @@ syncoid_cron_file="${plugin_path}/syncoid.cron"
 sanoid_config_path="${plugin_path}/sanoid.conf"
 sanoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/sanoid"
 syncoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/syncoid"
+syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
 
 case "$1" in
 	('update')
@@ -294,7 +388,7 @@ case "$1" in
         get_buddy_snapshots
     ;;
     ('restore_snapshot')
-        restore_snapshot "$2" "$3"
+        restore_snapshot "$2" "$3" "$4" "$5" "$6"
     ;;
     ('uninstall')
 		uninstall

@@ -6,28 +6,8 @@ Tag="buddybackup"
 ---
 <?php
     $plugin = "buddybackup";
-    $cfg_file  = "/boot/config/plugins/$plugin/$plugin.cfg";
-    $cfg = parse_plugin_cfg($plugin, true);
-    $rc_name = "rc.{$plugin}";
-    $rc_script = "/plugins/{$plugin}/scripts/{$rc_name}";
-
-    function datasets($selected, $only_encrypted = true) {
-        $datasets = mk_option($selected, "", "Select from list", "disabled");
-        $raw_datasets = array();
-        if (exec("zfs list -rH -o name,encryption", $raw_datasets)) {
-            foreach ($raw_datasets as $set) {
-                $parts = preg_split('/\s+/', $set);
-                if ($parts[1] != "off" || !$only_encrypted) {
-                    $datasets .= mk_option($selected, $parts[0], $parts[0]);
-                } else {
-                    $datasets .= mk_option($selected, $parts[0], "{$parts[0]} (not encrypted)", "disabled");
-                }
-            }
-        } else {
-            $datasets = mk_option(null, "", "failed to list datasets", "disabled");
-        }
-        return $datasets;
-    }
+    $docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+    require_once $docroot."/plugins/".$plugin."/common.php";
 
     $warnings = array();
     $disable_send = false;
@@ -68,16 +48,16 @@ Tag="buddybackup"
         // button = 0 : hide CLOSE button (default)
         // button = 1 : show CLOSE button
         swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"},function(close){
-        if ($('#submit_button').length > 0) $('#submit_button').remove();
+            if ($('#submit_button').length > 0) $('#submit_button').remove();
         });
         $('.sweet-alert').addClass('nchan');
         $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
         $('pre#swalbody').append(info+"<br><br>");
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2},function(data) {
-        $('pre#swalbody').append(data.replace(/\n/g, "<br>"));
-        if (callback) {
-            callback(data);
-        }
+            $('pre#swalbody').append(data.replace(/\n/g, "<br>"));
+            if (callback) {
+                callback(data);
+            }
         });
     }
 </script>

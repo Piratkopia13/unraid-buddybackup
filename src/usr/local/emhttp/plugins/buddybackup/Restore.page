@@ -4,6 +4,12 @@ Title="Restore from Buddy"
 <?php
 
 ?>
+<style>
+    #restore-snapshot optgroup {
+        color: #f2f2f2;
+        background-color: #1c1b1b;
+    }
+</style>
 <script>    
     function get_buddy_snapshots() {
         list = $('#restore-snapshot');
@@ -13,29 +19,49 @@ Title="Restore from Buddy"
             .done(function(data) {
                 list.html("<option selected disabled value=''>Select from list</option>");
 
-                json = JSON.parse(data);
+                try {
+                    json = JSON.parse(data);
+                } catch (error) {
+                    list.html("<option selected disabled value=''>Failed! "+error+"</option>");
+                    console.error("JSON parse error:", error, ". Data: ", data);
+                    return;
+                }
                 if (json.status != "ok") {
-                    list.html("<option selected disabled value=''>Failed! "+json.error+"</option>");    
+                    list.html("<option selected disabled value=''>Failed! "+json.error+"</option>");
                     return;
                 }
 
                 $.each(json.data, function(dataset_name, dataset_data) {
-                    list.append('<option disabled value="">'+dataset_name+'</option>'); 
+                    var group = '<optgroup label="'+dataset_name+'">';
                     $.each(dataset_data, function(snap_name, snap_data) {
-                        list.append('<option value="'+snap_name+'">'+snap_name+'</option>'); 
+                        group += '<option value="'+snap_name+'">'+snap_name+'</option>';
                     })
-                })
+                    group += '</optgroup>'; 
+                    list.append(group);
+                });
             })
             .fail(function(xhr, status, error) {
                 list.html("<option selected disabled value=''>Failed! "+error+"</option>");
-            }
-        );
+            });
     }
 
-    function restore_snapshot() {
-        var snap = $('#restore-snapshot').find(':selected').val();
+    function restore_snapshot(mode) {
+        var selected_option = $('#restore-snapshot').find(':selected');
+        var snap = selected_option.val();
+        var snap_dataset = selected_option.parent().attr("label");
         var destination_dataset = $('#restore-destination').find(':selected').val();
-        buddybackup_show_popup('<?=$rc_name?> restore_snapshot "'+snap+'" "'+destination_dataset+'"', '_(Restore snapshot)_', "Restoring snapshot '"+snap+"' to dataset '"+destination_dataset+"'.. Note: You won't see any output until action is finished.")
+        var csrf_token = $('input[name="csrf_token"]').val();
+        openBox('/plugins/<?=$plugin?>/restore_wizard.php?selected_snapshot='+snap+'&selected_snapshot_dataset='+snap_dataset+'&mode='+mode+'&csrf_token='+csrf_token, 'Restore snapshot wizard', 500, 600, false);
+    }
+
+    function restore_selected_snapshot() {
+        restore_snapshot('selected');
+    }
+    function restore_selected_and_newer_snapshot() {
+        restore_snapshot('selected_and_newer');
+    }
+    function restore_all_snapshots() {
+        restore_snapshot('all');
     }
 
     $(function() { 
@@ -52,6 +78,24 @@ Title="Restore from Buddy"
     })
 </script>
 Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>
+
+TODO: Restore options: 
+    - single remote snapshot to new local dataset
+        - (syncoid --include-snaps="wanted_snapshot")
+    - all remote snapshots to new local dataset (why would you want this?)
+        - (no extra params to syncoid needed)
+    - specified remote snapshot and all newer remote snapshots to new local dataset 
+        - (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...)")
+    - single remote snapshot to existing local dataset
+        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|common_parent_snapshot)")
+    - all remote snapshots to existing local dataset
+        - local dataset must have at least one common parent snapshot with target (no extra params to syncoid needed)
+    - specified remote snapshot and all newer remote snapshots to existing local dataset 
+        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...|common_parent_snapshot)")
+
+<input type="button" value="_(Restore selected snapshot)_" onclick="restore_selected_snapshot()">
+<input type="button" value="_(Restore selected and all newer snapshots)_" onclick="restore_selected_and_newer_snapshot()">
+<input type="button" value="_(Restore all snapshots)_" onclick="restore_all_snapshots()">
 
 <form id="restore-form" markdown="1">
 _(Snapshot to restore)_:
