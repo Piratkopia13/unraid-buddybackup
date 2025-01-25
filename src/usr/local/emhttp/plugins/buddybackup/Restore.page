@@ -1,8 +1,10 @@
 Menu="BuddyBackup:3"
 Title="Restore from Buddy"
 ---
-<?php
-
+<?php 
+    if ($cfg['DestinationHost'] == ""): 
+        echo "Set buddy's hostname to enable this section";
+    else:
 ?>
 <style>
     #restore-snapshot {
@@ -101,3 +103,4 @@ Your backed-up snapshots available at buddy's:
 <input type="button" value="_(Restore all snapshots in selected dataset)_" onclick="restore_all_snapshots()">
 
 </form>
+<?php endif; ?>
