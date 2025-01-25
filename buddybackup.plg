@@ -2,7 +2,7 @@
 
 <!DOCTYPE PLUGIN [
   <!ENTITY name         "buddybackup">
-  <!ENTITY displayName  "Buddy Backup">
+  <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
   <!ENTITY version      "2025.01.19b">
   <!ENTITY launch       "Settings/BuddyBackup">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "8342b6176fe2251828cf24caab9bd362">
+  <!ENTITY pkgMD5        "bfac4ea61006ef34161ddba798ec28ee">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -22,7 +22,7 @@
          version="&version;"
          pluginURL="&pluginURL;"
          launch="&launch;"
-         icon="&gitURL;/src/usr/local/emhttp/plugins/buddybackup/buddybackup.png"
+         icon="&gitURL;/src&emhttp;/buddybackup.png"
          min="6.12.0"
          >
     <CHANGES>
@@ -57,6 +57,9 @@
     
     <FILE Run="/bin/bash">
         <INLINE>
+            chmod +x &emhttp;/deps/sanoid
+            chmod +x &emhttp;/deps/syncoid
+            chmod +x &emhttp;/deps/restrict_zfs
             &emhttp;/scripts/rc.buddybackup update
 
             echo ""
@@ -71,7 +74,7 @@
 
     <!-- Copy sanoid default conf -->
     <FILE Name="&pkgPath;/sanoid.defaults.conf">
-      <LOCAL>/src/usr/local/emhttp/plugins/buddybackup/deps/sanoid.defaults.conf</LOCAL>
+      <LOCAL>&emhttp;/deps/sanoid.defaults.conf</LOCAL>
     </FILE>
 
     <!--

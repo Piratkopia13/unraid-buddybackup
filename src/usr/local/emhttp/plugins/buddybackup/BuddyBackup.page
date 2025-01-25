@@ -73,6 +73,7 @@ Tag="buddybackup"
 </div>
 <?endif;?>
 <span>
-BuddyBackup aims to simplify backing up to/from a buddy that is also running Unraid and using ZFS.<br>
-This plugin sets up authentication and syncs raw encrypted zfs snapshots meaning that your backup buddy will not have access to read any of your backed up data and can not access your server for anything other than receiving your data.
+BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.<br>
+This plugin sets up authentication and syncs raw encrypted ZFS snapshots. Your backup buddy will not have access to read any of your backed-up data, and can not access your server for anything other than receiving your data or sending back your data.<br>
+This plugin is fully open source, and I encourage you to review the source to ensure you understand how it operates and verify its security: <a href="https://github.com/Piratkopia13/unraid-buddybackup">github.com/Piratkopia13/unraid-buddybackup</a>
 </span>

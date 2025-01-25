@@ -5,9 +5,18 @@ Title="Restore from Buddy"
 
 ?>
 <style>
+    #restore-snapshot {
+        width: 50%;
+        max-width: 100%;
+        min-width: fit-content;
+    }
     #restore-snapshot optgroup {
         color: #f2f2f2;
         background-color: #1c1b1b;
+        padding: 10px 5px;
+    }
+    #restore-snapshot select option {
+        padding: 5px;
     }
 </style>
 <script>    
@@ -17,7 +26,7 @@ Title="Restore from Buddy"
 
         $.post(api_url, { cmd:"get_buddy_snapshots" })
             .done(function(data) {
-                list.html("<option selected disabled value=''>Select from list</option>");
+                list.html("");
 
                 try {
                     json = JSON.parse(data);
@@ -77,9 +86,9 @@ Title="Restore from Buddy"
         })});
     })
 </script>
-Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>
+Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>.
 
-TODO: Restore options: 
+<!-- Restore options: 
     - single remote snapshot to new local dataset
         - (syncoid --include-snaps="wanted_snapshot")
     - all remote snapshots to new local dataset (why would you want this?)
@@ -91,24 +100,26 @@ TODO: Restore options:
     - all remote snapshots to existing local dataset
         - local dataset must have at least one common parent snapshot with target (no extra params to syncoid needed)
     - specified remote snapshot and all newer remote snapshots to existing local dataset 
-        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...|common_parent_snapshot)")
+        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...|common_parent_snapshot)") -->
+
+<form id="restore-form" markdown="1">
+<input type="button" value="_(Update snapshots list)_" onclick="get_buddy_snapshots()">
+
+Your backed up snapshots available at Buddy's:
+
+<select id="restore-snapshot" name="RestoreSnapshot" class="align" size=10>
+    <option selected disabled>Fetching snapshots from buddy..</option>
+</select>
 
 <input type="button" value="_(Restore selected snapshot)_" onclick="restore_selected_snapshot()">
 <input type="button" value="_(Restore selected and all newer snapshots)_" onclick="restore_selected_and_newer_snapshot()">
 <input type="button" value="_(Restore all snapshots)_" onclick="restore_all_snapshots()">
 
-<form id="restore-form" markdown="1">
-_(Snapshot to restore)_:
-: <select id="restore-snapshot" name="RestoreSnapshot" class="align">
-  <option selected disabled>Fetching snapshots from buddy..</option>
-  </select>
-  <input type="button" value="_(Fetch snapshots)_" onclick="get_buddy_snapshots()">
-
-_(Destination dataset)_:
+<!-- _(Destination dataset)_:
 : <select id="restore-destination" name="RestoreReceiveDestinationDataset" class="align">
   <?=datasets("", false)?>
   </select>
 
 &nbsp;
-: <input id="restore-button" type="button" value="_(Restore snapshot)_" disabled onclick="restore_snapshot()">
+: <input id="restore-button" type="button" value="_(Restore snapshot)_" disabled onclick="restore_snapshot()"> -->
 </form>
