@@ -4,17 +4,17 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.01.19b">
+  <!ENTITY version      "2025.01.25">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
-  <!ENTITY pluginURL     "&gitRelURL;/&name;.plg">
+  <!ENTITY pluginURL    "https://github.com/Piratkopia13/unraid-&name;/releases/latest/download/&name;.plg">
 
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "8dfb7be101c504635c456bbeaeba5275">
+  <!ENTITY pkgMD5        "1b150842a4fef6e25763172371629656">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -27,6 +27,8 @@
          >
     <CHANGES>
     ##&name;
+###2025.01.25
+  Added restore functionality
 ###2025.01.19b
   Bug fixes
 ###2025.01.18 - BuddyBackup
@@ -39,7 +41,6 @@
     <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
       <URL>&gitRelURL;/&pkgName;</URL>
       <MD5>&pkgMD5;</MD5>
-      <!-- <LOCAL>/mnt/user/sonic/buddybackup_plugin/&pkgName;</LOCAL> -->
     </FILE>
 
     <!-- Create default buddybackup.cfg -->
