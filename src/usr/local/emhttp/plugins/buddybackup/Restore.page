@@ -15,7 +15,7 @@ Title="Restore from Buddy"
     #restore-snapshot optgroup {
         color: #f2f2f2;
         background-color: #1c1b1b;
-        padding: 10px 5px;
+        padding: 10px 0px;
     }
     #restore-snapshot select option {
         padding: 5px;
@@ -87,9 +87,11 @@ Title="Restore from Buddy"
         })});
     })
 </script>
+<span class="pad-left">
 Using dataset '<?=$cfg["SendDestinationDataset"]?>' on buddy's server @ <?=$cfg["DestinationHost"]?>.
+</span>
 
-<form id="restore-form" markdown="1">
+<form id="restore-form" markdown="1" class="pad-left">
 <input type="button" value="_(Update snapshots list)_" onclick="get_buddy_snapshots()">
 
 Your backed-up snapshots available at buddy's:
