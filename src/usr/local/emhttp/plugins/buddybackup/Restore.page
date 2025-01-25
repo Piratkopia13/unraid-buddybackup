@@ -77,49 +77,27 @@ Title="Restore from Buddy"
         get_buddy_snapshots();
         $('#restore-form').find('select').not('.lock').each(function() { $(this).on('input change', function() {
             var snap = $('#restore-snapshot').find(':selected').val();
-            var destination_dataset = $('#restore-destination').find(':selected').val();
-            if (snap.length === 0 || destination_dataset.length === 0) {
-                $('#restore-button').prop('disabled', true);
+            if (snap.length === 0) {
+                $('.buddybackup-restore-selected').prop('disabled', true);
             } else {
-                $('#restore-button').prop('disabled', false);
+                $('.buddybackup-restore-selected').prop('disabled', false);
             }
         })});
     })
 </script>
-Using dataset '<?=$cfg["SendDestinationDataset"]?>' on Buddy's server @ <?=$cfg["DestinationHost"]?>.
-
-<!-- Restore options: 
-    - single remote snapshot to new local dataset
-        - (syncoid --include-snaps="wanted_snapshot")
-    - all remote snapshots to new local dataset (why would you want this?)
-        - (no extra params to syncoid needed)
-    - specified remote snapshot and all newer remote snapshots to new local dataset 
-        - (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...)")
-    - single remote snapshot to existing local dataset
-        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|common_parent_snapshot)")
-    - all remote snapshots to existing local dataset
-        - local dataset must have at least one common parent snapshot with target (no extra params to syncoid needed)
-    - specified remote snapshot and all newer remote snapshots to existing local dataset 
-        - local dataset must have at least one common parent snapshot with target (syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...|common_parent_snapshot)") -->
+Using dataset '<?=$cfg["SendDestinationDataset"]?>' on buddy's server @ <?=$cfg["DestinationHost"]?>.
 
 <form id="restore-form" markdown="1">
 <input type="button" value="_(Update snapshots list)_" onclick="get_buddy_snapshots()">
 
-Your backed up snapshots available at Buddy's:
+Your backed-up snapshots available at buddy's:
 
 <select id="restore-snapshot" name="RestoreSnapshot" class="align" size=10>
     <option selected disabled>Fetching snapshots from buddy..</option>
 </select>
 
-<input type="button" value="_(Restore selected snapshot)_" onclick="restore_selected_snapshot()">
-<input type="button" value="_(Restore selected and all newer snapshots)_" onclick="restore_selected_and_newer_snapshot()">
-<input type="button" value="_(Restore all snapshots)_" onclick="restore_all_snapshots()">
+<input type="button" class="buddybackup-restore-selected" value="_(Restore selected snapshot)_" disabled onclick="restore_selected_snapshot()">
+<!-- <input type="button" class="buddybackup-restore-selected" value="_(Restore selected and all newer snapshots)_" disabled onclick="restore_selected_and_newer_snapshot()"> -->
+<input type="button" value="_(Restore all snapshots in selected dataset)_" onclick="restore_all_snapshots()">
 
-<!-- _(Destination dataset)_:
-: <select id="restore-destination" name="RestoreReceiveDestinationDataset" class="align">
-  <?=datasets("", false)?>
-  </select>
-
-&nbsp;
-: <input id="restore-button" type="button" value="_(Restore snapshot)_" disabled onclick="restore_snapshot()"> -->
 </form>

@@ -63,12 +63,15 @@
         var new_dataset_html = $('#buddybackup-restore-wizard-new-dataset').html();
         $('#buddybackup-restore-wizard').html(new_dataset_html);
     }
+    
     function start_restoring(new_local_dataset) {
         var wizard = $('#buddybackup-restore-wizard');
 
         var destination_dataset = null;
         if (new_local_dataset) {
-            destination_dataset = wizard.find('#dataset-name').val();
+            destination_dataset = wizard.find("#dataset-name").val();
+        } else {
+            destination_dataset = wizard.find("#existing-dataset-name").find(':selected').val();
         }
 
         if (destination_dataset) {
@@ -98,6 +101,32 @@
             wizard.html("Empty dataset name. Close this dialogue and try again.");
         }
     }
+
+    $(function() { 
+        var wizard = $('#buddybackup-restore-wizard');
+        var wizard_new_dataset = $('#buddybackup-restore-wizard-new-dataset');
+        var snap = '<?=$_GET['selected_snapshot']?>';
+        var source_dataset = '<?=$_GET['selected_snapshot_dataset']?>';
+        var mode = '<?=$_GET['mode']?>';
+
+        var header = "";
+        switch (mode) {
+            case "selected":
+                header = "<h3>Let's restore the single snapshot '"+source_dataset+"@"+snap+"'</h3>";
+                break;
+            case "selected_and":
+                header = "<h3>Let's restore '"+source_dataset+"@"+snap+"' and all newer snapshots</h3>";
+                break;
+            case "all":
+                header = "<h3>Let's restore all snapshots from '"+source_dataset+"'</h3>";
+                break;
+            default:
+                header = "Unknown restore mode selected";
+                break;
+        }
+        wizard.prepend(header);
+        wizard_new_dataset.prepend(header);
+    })
 </script>
 <style>
     #buddybackup-center {
@@ -116,18 +145,23 @@
 <body>
     <div id="buddybackup-center">
         <div id="buddybackup-restore-wizard">
-            <h2>Choose which local dataset to download to</h2>
-            <!-- <input type="button" value="Existing dataset" disabled onclick="asdf()"> (Needs to have at least one common snapshot with Buddy's dataset) -->
-            <!-- <br> -->
+            <h2>Choose which local dataset to restore to</h2>
             <input type="button" value="New dataset" onclick="new_dataset()">
+            <h3>or</h3>
+            <select id="existing-dataset-name">
+                <?=datasets("", false)?>
+            </select>
+            <input type="button" value="Restore to selected" onclick="start_restoring(false)">
+            <br>
+            (Needs to have at least one common snapshot with Buddy's dataset)
         </div>
     </div>
 
     <div id="buddybackup-restore-wizard-new-dataset" style="display:none;">
-        <h2>Choose which local dataset to download to</h2>
+        <h2>Choose which local dataset to restore to</h2>
         Name of new dataset:
         <br>
-        <input type="text" id="dataset-name" class="align">
+        <input type="text" id="dataset-name">
         <br>
         <input type="button" value="Start restoring" onclick="start_restoring(true)">
     </div>
@@ -140,6 +174,9 @@
             <button id="buddybackup-abort-restore" onclick="">
                 <i class='fa fa-bomb fa-fw'></i> Abort
             </button>
+            <br>
+            You may close this window. Restore will continue in the background and a notification is sent when it is finished.
+            <br>
         </span>
     </div>
 </body>

@@ -1,6 +1,4 @@
 #!/bin/bash
-
-# set -e
 set -o pipefail
 
 plugin="buddybackup"
@@ -216,31 +214,43 @@ restore_snapshot() {
 
     logger "Restoring backup from buddy" -t"${plugin}"
 
+    error_code=-1
+    result=""
     case "$mode" in
         ('selected')
             result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${DestinationHost}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
             error_code=$?
-            if [ $error_code -eq 0 ]; then
-                printf -v result "${result}\n\nSuccessfully restored snapshot from buddy!"
-            else 
-                if [[ "${nchan}" ]]; then
-                    printf -v result "Restoring snapshot from backup failed. Error code ${error_code}. ${result}"
-                    unraid_notify "${result}" "alert"
-                else
-                    printf -v result "Restoring snapshot from backup failed. Error code ${error_code}. Full output:\n\n${result}"
-                fi
-            fi
-            write "${nchan}" "${result}"
         ;;
         ('selected_and_newer')
-            write "${nchan}" "Restore mode ${mode} is not implemented yet"
+            # todo: this requires something like
+            # syncoid --include-snaps="(?:wanted_snapshot|newer_snap1|newer_snap2|...|common_parent_snapshot)
+            # but common_parent_snapshot has to be found which is the hard part
+            write "${nchan}" "Restore mode '${mode}' is not implemented yet"
+            return
         ;;
         ('all')
-            write "${nchan}" "Restore mode ${mode} is not implemented yet"
+            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${DestinationHost}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            error_code=$?
         ;;
         (*)
             write "${nchan}" "Invalid restore mode specified: (${mode})"
+            return
     esac
+
+    if [ $error_code -eq 0 ]; then
+        printf -v result "${result}\n\nSuccessfully restored from buddy!"
+        if [[ "${nchan}" ]]; then
+            unraid_notify "Restoring from buddy finished successfully!" "normal"
+        fi
+    else 
+        if [[ "${nchan}" ]]; then
+            printf -v result "Restoring from buddy failed. Error code ${error_code}. ${result}"
+            unraid_notify "${result}" "alert"
+        else
+            printf -v result "Restoring from buddy failed. Error code ${error_code}. Full output:\n\n${result}"
+        fi
+    fi
+    write "${nchan}" "${result}"
 
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"

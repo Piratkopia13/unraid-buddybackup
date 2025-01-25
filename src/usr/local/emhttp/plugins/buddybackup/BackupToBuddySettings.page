@@ -40,7 +40,7 @@ _(Enable)_:
   </select>
 
 :enable_backup_send_plug:
-    > Enable automatically scheduled ZFS snapshot syncs (using syncoid) to your buddy. Your buddy's retention settings decide when your backed up snapshots will be deleted.
+    > Enable automatically scheduled ZFS snapshot syncs (using syncoid) to your buddy. Your buddy's retention settings decide when your backed-up snapshots will be deleted.
 :end
 
 _(Buddy's hostname or IP adress)_:
