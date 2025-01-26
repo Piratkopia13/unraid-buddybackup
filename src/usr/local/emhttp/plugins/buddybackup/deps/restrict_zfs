@@ -39,7 +39,7 @@ my @ALLOWED_COMMANDS = (
 sub check_allowed {
     my ($command) = @_;
     foreach my $regex (@ALLOWED_COMMANDS) {
-        return 1 if $command =~ $regex;
+        return 1 if $command =~ /^$regex$/;
     }
     return 0;
 }
@@ -72,7 +72,7 @@ foreach my $command (split /;/, $original_command) {
         if ($verbose) {
             $log_text = "running command: $command";
         }
-        system($command) == 0 or warn "Failed to execute command: $!";
+        system('/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
     }
 
     if ($log_text) {
