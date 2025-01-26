@@ -41,7 +41,7 @@
         
         var output_log = $('#buddybackup-output-log');
         output_log.append(data+'\n');
-        output_log.animate({scrollTop:output_log.prop("scrollHeight") - output_log.height()}, 200)
+        output_log.animate({scrollTop:output_log.prop("scrollHeight") - output_log.height()}, 200);
 
         if (data.includes("[[rc.buddybackup finished]]")) {
             $("#buddybackup-restore-btn").html("");

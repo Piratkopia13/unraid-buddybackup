@@ -44,16 +44,24 @@ Tag="buddybackup"
         padding-left: 12px;
         display: block;
     }
+    .buddybackup-restore-output-log, .buddybackup-backup-output-log {
+        overflow: auto;
+        height: 90%;
+        width: 100%;
+        background-color: rgba(0, 0, 0, 0.1);
+        margin: 0px;
+    }
+    #buddybackup-restore-running h3, #buddybackup-backup-running h3 {
+        display: inline;
+    }
 </style>
 <script>
-    let api_url = "/plugins/<?=$plugin?>/api.php";
+    var api_url = "/plugins/<?=$plugin?>/api.php";
 
     function buddybackup_show_popup(cmd, title, info, button=0, callback=null) {
         // button = 0 : hide CLOSE button (default)
         // button = 1 : show CLOSE button
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"},function(close){
-            if ($('#submit_button').length > 0) $('#submit_button').remove();
-        });
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"});
         $('.sweet-alert').addClass('nchan');
         $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
         $('pre#swalbody').append(info+"<br><br>");
@@ -64,6 +72,74 @@ Tag="buddybackup"
             }
         });
     }
+
+    // Throw away messages first 100ms of page load since they are probably leftovers
+    var allow_nchan = false;
+    $(document).ready(function() {
+        setTimeout(function() { 
+            allow_nchan = true;
+        }, 100);
+    });
+
+    var in_progress_timeout_timer = 5000;
+
+    var restore_in_progress_timeout;
+    var backup_in_progress_timeout;
+    var restore_in_progress = false;
+    var backup_in_progress = false;
+
+    var nchan_buddybackup_restore = new NchanSubscriber('/sub/buddybackup-restore',{subscriber:'websocket'});
+    var nchan_buddybackup_backup = new NchanSubscriber('/sub/buddybackup-send',{subscriber:'websocket'});
+    nchan_buddybackup_restore.on('message', function(data) {
+        if (!allow_nchan) return;
+
+        restore_in_progress = true;
+        $('#buddybackup-not-running').hide();
+        $('#buddybackup-restore-running').show();
+        restore_in_progress_timeout = setTimeout(function() { 
+            restore_in_progress = false;
+            $('#buddybackup-restore-running').hide();
+            if (!backup_in_progress) {
+                $('#buddybackup-not-running').show();
+            }
+        }, in_progress_timeout_timer);
+
+        var output_log = $('.buddybackup-restore-output-log');
+        output_log.append(data+'\n');
+
+        var ta = $('.active-textarea');
+        ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+    });
+    nchan_buddybackup_backup.on('message', function(data) {
+        if (!allow_nchan) return;
+
+        backup_in_progress = true;
+        $('#buddybackup-not-running').hide();
+        $('#buddybackup-backup-running').show();
+        backup_in_progress_timeout = setTimeout(function() { 
+            backup_in_progress = false;
+            $('#buddybackup-backup-running').hide();
+            if (!restore_in_progress) {
+                $('#buddybackup-not-running').show();
+            }
+        }, in_progress_timeout_timer);
+        
+        var output_log = $('.buddybackup-backup-output-log');
+        output_log.append(data+'\n');
+
+        var ta = $('.active-textarea');
+        ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+    });
+    nchan_buddybackup_restore.start();
+    nchan_buddybackup_backup.start();
+
+    function show_in_progress_log(title, element_name, log_class) {
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"});
+        $('.sweet-alert').addClass('nchan');
+        $('pre#swalbody').html($(element_name).html());
+        $('pre#swalbody').find("textarea").addClass(log_class);
+    }
+
 </script>
 <?if (!empty($warnings)): ?>
 <div id="warning-box">
@@ -80,4 +156,14 @@ Tag="buddybackup"
 BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.<br>
 This plugin sets up authentication and syncs raw encrypted ZFS snapshots. Your backup buddy will not have access to read any of your backed-up data, and can not access your server for anything other than sending and receiving their backups.<br>
 This plugin is fully open source, and I encourage you to review the source to ensure you understand how it operates and verify its security: <a href="https://github.com/Piratkopia13/unraid-buddybackup">github.com/Piratkopia13/unraid-buddybackup</a>
+<br><hr>
+<span id="buddybackup-not-running">No backups or restores are currently running.</span>
+<div id="buddybackup-restore-running" style="display:none;">
+    <h3>A restore is in progress! </h3><input type="button" value="Show restore log" onclick="show_in_progress_log('Restore in progress', '#buddybackup-restore-log', 'active-textarea')">
+    <span id="buddybackup-restore-log" style="display:none;"><textarea readonly class="buddybackup-restore-output-log"></textarea></span>
+</div>
+<div id="buddybackup-backup-running" style="display:none;">
+    <h3>A backup is in progress! </h3><input type="button" value="Show backup log" onclick="show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea')">
+    <span id="buddybackup-backup-log" style="display:none;"><textarea readonly class="buddybackup-backup-output-log"></textarea></span>
+</div>
 </span>
