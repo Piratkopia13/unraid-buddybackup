@@ -181,8 +181,34 @@ update() {
     fi
 }
 
+dataset_exists() {
+    local dataset="$1"
+    [[ $(zfs get -Ho value type "${dataset}" 2>&1) != *"dataset does not exist" ]]
+}
+is_encrypted() {
+    local dataset="$1"
+    [[ $(zfs get -Ho value encryption "${dataset}" 2>&1) != "off" ]]
+}
+
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
+
+    error=""
+    if ! is_encrypted "${SourceDataset}"; then
+        error="Source dataset '${SourceDataset}' is not encrypted!"
+    fi
+    if ! dataset_exists "${SourceDataset}"; then
+        error="Source dataset '${SourceDataset}' does not exist!"
+    fi
+
+    if [ -n "${error}" ]; then
+        error="Aborting backup. ${error}"
+        echo "${error}"
+        if [[ ! "${1}" == "echo" ]]; then
+            unraid_notify "${error}" "alert"
+        fi
+        return
+    fi
 
     if [[ "${BackupRecursive}" == "yes" ]] then
         syncoid_flags+=" --recursive"
