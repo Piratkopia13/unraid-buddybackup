@@ -23,10 +23,13 @@ Title="Backup to Buddy"
 
   function test_connection(button) {
     ip = $(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val();
-    buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+".. Note: You won't see any output until action is finished.")
+    buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
   }
   function send_backup(button) {
-    buddybackup_show_popup('<?=$rc_name?> send_backup echo', '_(Send ZFS snapshots to buddy)_', "Sending.. Note: You won't see any output until sending is finished.")
+    var cmd = '<?=$rc_name?> send_backup echo';
+    $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
+    show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
+    $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
   }
 </script>
 <form markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">

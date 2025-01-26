@@ -47,12 +47,16 @@ Tag="buddybackup"
     .buddybackup-restore-output-log, .buddybackup-backup-output-log {
         overflow: auto;
         height: 90%;
-        width: 100%;
+        width: 90%;
         background-color: rgba(0, 0, 0, 0.1);
         margin: 0px;
+        padding: 20px;
     }
     #buddybackup-restore-running h3, #buddybackup-backup-running h3 {
         display: inline;
+    }
+    .buddybackup-center {
+        text-align: center !important;
     }
 </style>
 <script>
@@ -81,7 +85,7 @@ Tag="buddybackup"
         }, 100);
     });
 
-    var in_progress_timeout_timer = 5000;
+    var in_progress_timeout_timer = 30000;
 
     var restore_in_progress_timeout;
     var backup_in_progress_timeout;
@@ -135,8 +139,9 @@ Tag="buddybackup"
 
     function show_in_progress_log(title, element_name, log_class) {
         swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"});
-        $('.sweet-alert').addClass('nchan');
+        $('.sweet-alert').addClass("nchan");
         $('pre#swalbody').html($(element_name).html());
+        $('pre#swalbody').addClass("buddybackup-center");
         $('pre#swalbody').find("textarea").addClass(log_class);
     }
 

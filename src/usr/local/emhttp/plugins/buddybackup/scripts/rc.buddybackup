@@ -34,7 +34,6 @@ write() {
 
         for message in "$@"; do
             curl -o /dev/null --unix-socket "${socket}" -X POST -d "${message}" "${url}" >/dev/null 2>&1
-            write_result+="${message}"
         done
     fi
     
@@ -52,7 +51,7 @@ run_and_write_output() {
         local url="http://localhost/pub/buddybackup-${nchan}?buffer_length=10"
         local socket="/var/run/nginx.socket"
 
-        cmd+="2>&1 | tee >( stdbuf -oL tr '\r' '\n' | xargs -0I % curl -o /dev/null --unix-socket \"${socket}\" -X POST --data-binary % \"${url}\" >/dev/null 2>&1)"
+        cmd+=" | tee >( stdbuf -oL tr '\r' '\n' | xargs -I % curl -o /dev/null --unix-socket \"${socket}\" -X POST --data-binary \"%\" \"${url}\" >/dev/null 2>&1)"
     fi
 
     result=$(eval "$cmd")
@@ -212,11 +211,12 @@ send_backup() {
         return
     fi
 
+    local my_syncoid_flags="${syncoid_flags}"
     if [[ "${BackupRecursive}" == "yes" ]] then
-        syncoid_flags+=" --recursive"
+        my_syncoid_flags+=" --recursive"
     fi
-    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${SourceDataset}\" \"${username}@${DestinationHost}:${SendDestinationDataset}\" 2>&1"); then
-        printf -v result "${result}\n\nSuccessfully synced backup to buddy!"
+    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${SourceDataset}\" \"${username}@${DestinationHost}:${SendDestinationDataset}\" 2>&1"); then
+        printf -v result "\nSuccessfully synced backup to buddy!"
     else 
         local error_code=$?
         unraid_notify "Sending backup failed. Error code ${error_code}. Full output:\n\n${result}" "alert"
