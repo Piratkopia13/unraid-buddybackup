@@ -7,14 +7,14 @@
   <!ENTITY version      "2025.01.25">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
-  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/head/&branch;">
+  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
   <!ENTITY pluginURL    "https://github.com/Piratkopia13/unraid-&name;/releases/latest/download/&name;.plg">
 
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "1b150842a4fef6e25763172371629656">
+  <!ENTITY pkgMD5        "fddcb6e739ffaa73bc912558650306f5">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -55,6 +55,50 @@
         ReceiveDestinationRententionYearly=0
       </INLINE>
     </FILE>
+
+    <!-- Install dependencies -->
+    <FILE Run="/bin/bash">
+        <INLINE>
+            source /etc/unraid-version
+            major=${version:0:2}
+            minor=${version:2:2}
+            DEPS=( "perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
+                   "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz" )
+            if [[ $((${major/./}*1)) -lt 7 ]]; then
+              DEPS+=( "mbuffer-20240107-x86_64-1_SBo.tgz" )
+            fi
+
+            function install_dep() {
+              local dest="&pkgPath;/deps/${1}"
+              local src="&gitURL;/deps/${1}"
+
+              mkdir -p "&pkgPath;/deps"
+              if [ ! -f "${dest}" ]; then
+                echo "Downloading dependency '${1}'.."
+                curl --location --silent --fail "${src}" --output "${dest}"
+              fi
+              if [ ! -f "${dest}.md5" ]; then
+                curl --location --silent --fail "${src}.md5" --output "${dest}.md5"
+              fi
+
+              expected_md5=$(cat "${dest}.md5")
+              actual_md5=$(md5sum "${dest}" | sed 's/\s.*$//')
+
+              if [ "${actual_md5}" != "${expected_md5}" ]; then
+                echo "Mismatched md5 hash for dependency '${1}'. Aborting."
+                rm "${dest}"
+                exit 1
+              elif ! installpkg "$dest"; then
+                  echo "Failed to install dependency '${1}'"
+                  exit 1
+              fi 
+            }
+
+            for d in ${DEPS[@]}; do
+              install_dep "${d}"
+            done
+        </INLINE>
+    </FILE>
     
     <FILE Run="/bin/bash">
         <INLINE>
@@ -83,18 +127,18 @@
     -->
     <FILE Run="/bin/bash" Method="remove">
         <INLINE>
+            echo "-----------------------------------------------------------"
+            echo " Uninstalling &name;"
+            echo "-----------------------------------------------------------"
+            echo ""
+
             &emhttp;/scripts/rc.buddybackup uninstall
 
             removepkg &pkgPath;/&pkgName;
 
             echo ""
-            echo "-----------------------------------------------------------"
-            echo " &name; has been uninstalled."
-            echo " Version: &version;"
-            echo "-----------------------------------------------------------"
+            echo " &name; has been uninstalled. Dependencies will be gone after next reboot"
             echo ""
-
-            exit 0
         </INLINE>
     </FILE>
 
