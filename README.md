@@ -10,5 +10,11 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 ---
 
-[![All Releases](https://img.shields.io/github/downloads/Piratkopia13/unraid-buddybackup/total.svg)]()
-[![Latest release](https://img.shields.io/github/downloads/Piratkopia13/unraid-buddybackup/latest.svg)]()
+Total downloads
+
+![GitHub all releases](https://img.shields.io/github/downloads/Piratkopia13/unraid-buddybackup/total)
+
+Latest release
+
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/Piratkopia13/unraid-buddybackup)
+![GitHub release (latest by date)](https://img.shields.io/github/downloads/Piratkopia13/unraid-buddybackup/latest/total)
