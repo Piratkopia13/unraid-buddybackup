@@ -4,7 +4,7 @@ on:
     tags:
       - '20*.*.*' # Push events to matching i.e. 2025.01.18
 
-name: Create Release
+name: Create Release Draft
 
 jobs:
   publish:
@@ -21,7 +21,7 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: ${{ github.ref }}
-          draft: false
+          draft: true
           prerelease: false
       - name: Upload buddybackup.plg
         uses: actions/upload-release-asset@v1
@@ -32,61 +32,7 @@ jobs:
           asset_path: ./buddybackup.plg
           asset_name: buddybackup.plg
           asset_content_type: text/xml
-      - name: Upload mbuffer
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./mbuffer-20240107-x86_64-1_SBo.tgz
-          asset_name: mbuffer-20240107-x86_64-1_SBo.tgz
-          asset_content_type: application/octet-stream
-      - name: Upload mbuffer md5
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./mbuffer-20240107-x86_64-1_SBo.tgz.md5
-          asset_name: mbuffer-20240107-x86_64-1_SBo.tgz.md5
-          asset_content_type: text/plain
-      - name: Upload perl-Capture-Tiny
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./perl-Capture-Tiny-0.48-x86_64-1ponce.txz
-          asset_name: perl-Capture-Tiny-0.48-x86_64-1ponce.txz
-          asset_content_type: application/x-gtar
-      - name: Upload perl-Capture-Tiny md5
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./perl-Capture-Tiny-0.48-x86_64-1ponce.txz.md5
-          asset_name: perl-Capture-Tiny-0.48-x86_64-1ponce.txz.md5
-          asset_content_type: text/plain
-      - name: Upload perl-Config-IniFiles
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./perl-Config-IniFiles-2.82-x86_64-3_slonly.txz
-          asset_name: perl-Config-IniFiles-2.82-x86_64-3_slonly.txz
-          asset_content_type: application/x-gtar
-      - name: Upload perl-Config-IniFiles md5
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./perl-Config-IniFiles-2.82-x86_64-3_slonly.txz.md5
-          asset_name: perl-Config-IniFiles-2.82-x86_64-3_slonly.txz.md5
-          asset_content_type: text/plain
-      - name: Don't forget to manually makepkg and upload buddybackup.txz
+      - name: Don't forget to manually run makepkg, upload buddybackup.txz and set release live
         uses: mkungla/actions-set-text-output@v1.1.0
         with:
           text: "Don't forget to manually makepkg and upload buddybackup.txz"
