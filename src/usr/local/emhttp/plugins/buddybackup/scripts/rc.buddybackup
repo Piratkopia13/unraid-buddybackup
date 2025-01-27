@@ -219,7 +219,7 @@ send_backup() {
         printf -v result "\nSuccessfully synced backup to buddy!"
     else 
         local error_code=$?
-        unraid_notify "Sending backup failed. Error code ${error_code}. Full output:\n\n${result}" "alert"
+        unraid_notify "Sending backup failed. Error code ${error_code}. Full output: ${result}" "alert"
         printf -v result "Sending backup failed. Error code ${error_code}."
     fi
     write "${nchan}" "${result}"

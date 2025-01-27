@@ -65,7 +65,7 @@ Tag="buddybackup"
     function buddybackup_show_popup(cmd, title, info, button=0, callback=null) {
         // button = 0 : hide CLOSE button (default)
         // button = 1 : show CLOSE button
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"});
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"});
         $('.sweet-alert').addClass('nchan');
         $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
         $('pre#swalbody').append(info+"<br><br>");
@@ -138,7 +138,7 @@ Tag="buddybackup"
     nchan_buddybackup_backup.start();
 
     function show_in_progress_log(title, element_name, log_class) {
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"});
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"});
         $('.sweet-alert').addClass("nchan");
         $('pre#swalbody').html($(element_name).html());
         $('pre#swalbody').addClass("buddybackup-center");
