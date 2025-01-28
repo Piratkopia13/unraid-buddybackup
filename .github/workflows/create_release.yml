@@ -3,6 +3,7 @@ on:
     # Sequence of patterns matched against refs/tags
     tags:
       - '20*.*.*' # Push events to matching i.e. 2025.01.18
+  workflow_dispatch:
 
 name: Create Release Draft
 
