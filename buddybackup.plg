@@ -4,17 +4,17 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.01.28">
+  <!ENTITY version      "2025.01.29">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
-  <!ENTITY pluginURL    "https://github.com/Piratkopia13/unraid-&name;/releases/latest/download/&name;.plg">
+  <!ENTITY pluginURL    "&gitURL;/&name;.plg">
 
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "e042079ca746b590f85efa87c6ea7c71">
+  <!ENTITY pkgMD5        "081212f2fecfb8545f94a284df2c36a9">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -27,6 +27,8 @@
          >
     <CHANGES>
     ##&name;
+###2025.01.29
+  Added settings section for automatic snapshot creation and pruning
 ###2025.01.25
   Added restore functionality
 ###2025.01.19b

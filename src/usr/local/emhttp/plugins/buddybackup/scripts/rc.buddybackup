@@ -289,8 +289,10 @@ restore_snapshot() {
 enable_sanoid_cron() {
     rm "${sanoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --take-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
-    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"${sanoid_bin} --configdir=\"${plugin_path}\" --prune-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
+    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --cron\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
+    # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
+    # echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --take-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
+    # echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"${sanoid_bin} --configdir=\"${plugin_path}\" --prune-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
     echo -e "\n" >> "${sanoid_cron_file}"
     /usr/local/sbin/update_cron
 }
