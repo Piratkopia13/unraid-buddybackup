@@ -398,21 +398,27 @@ update_sanoid_conf() {
     recursive = yes\n")
     
     # save manual entries from "snapshot creation and pruning" section in settings
-    . $read_ini_script
-    read_ini "${extra_sanoid_config_path}"
-    for section in $INI__ALL_SECTIONS; do 
-        local dataset=$(declare | grep "^INI__${section}__dataset" | cut -d "=" -f 2)
-        printf -v sanoid_conf "${sanoid_conf}\n\n[${dataset}]\n"
-        for var in $(declare | grep "^INI__${section}__"); do
-            local key_val=$(echo ${var} | cut -d "_" -f 5)
-            local key=$(echo ${key_val} | cut -d "=" -f 1)
-            local val=$(echo ${key_val} | cut -d "=" -f 2)
-            if [[ "${key}" == "dataset" ]]; then
+    if [ -f "${extra_sanoid_config_path}" ]; then
+        . $read_ini_script
+        read_ini "${extra_sanoid_config_path}"
+        for section in $INI__ALL_SECTIONS; do 
+            local dataset=$(declare | grep "^INI__${section}__dataset" | cut -d "=" -f 2)
+            if [[ "${dataset}" == "${ReceiveDestinationDataset}"* ]]; then
+                echo "Error: Buddy's destination dataset '${dataset}' also specified in 'Snapshot creation and pruning' section. Remove it from there!" | ${log_script}
                 continue
             fi
-            printf -v sanoid_conf "${sanoid_conf}    ${key} = ${val}\n"
+            printf -v sanoid_conf "${sanoid_conf}\n\n[${dataset}]\n"
+            for var in $(declare | grep "^INI__${section}__"); do
+                local key_val=$(echo ${var} | cut -d "_" -f 5)
+                local key=$(echo ${key_val} | cut -d "=" -f 1)
+                local val=$(echo ${key_val} | cut -d "=" -f 2)
+                if [[ "${key}" == "dataset" ]]; then
+                    continue
+                fi
+                printf -v sanoid_conf "${sanoid_conf}    ${key} = ${val}\n"
+            done
         done
-    done
+    fi
     echo "${sanoid_conf}" > "${sanoid_config_path}"
 }
 
