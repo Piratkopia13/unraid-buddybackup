@@ -1,9 +1,14 @@
 <?php
     $plugin = "buddybackup";
-    $cfg_file  = "/boot/config/plugins/$plugin/$plugin.cfg";
+    $docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+    require_once $docroot."/plugins/dynamix/include/Helpers.php";
+
     $cfg = parse_plugin_cfg($plugin, true);
     $rc_name = "rc.{$plugin}";
     $rc_script = "/plugins/{$plugin}/scripts/{$rc_name}";
+
+    $snapshot_cfg_file = "/boot/config/plugins/$plugin/snapshots.cfg";
+    $snapshot_cfg = my_parse_ini_file($snapshot_cfg_file, true);
 
     function datasets($selected, $only_encrypted = true) {
         $datasets = mk_option($selected, "", "Select from list", "disabled");

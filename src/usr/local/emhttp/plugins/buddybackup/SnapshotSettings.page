@@ -1,0 +1,137 @@
+Menu="BuddyBackup:2"
+Title="Snapshot creation and pruning"
+---
+<style>
+    .buddybackup-snapshot-dataset {
+        border: 1px solid gray;
+        padding-top: 5px;
+    }
+    .buddy-right {
+        position: absolute;
+        left: 715px;
+    }
+</style>
+<script>
+    function uid() {
+        return 'xxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    function snapshot_input_changed() {
+        var form = $(this).parentsUntil('form').parent();
+        if (!form.find("select[name='dataset']").val()) {
+            return;
+        }
+        form.find("input[name='#apply']").not('.lock').prop('disabled', false);
+    }
+    $(function() { 
+        $('form.buddybackup-snapshot-dataset')
+            .find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
+            .not('.lock').each(function(){$(this).on('input change', snapshot_input_changed)});
+    })
+
+    function add_dataset_for_snapshot_creation() {
+        var template = $("#buddybackup-snapshot-creation-dataset-template");
+        var list = $("#buddybackup-snapshot-creation-list");
+        var new_uid = uid();
+        var new_dataset = $("<div/>").attr("id", new_uid).html(template.html());
+        var new_form = new_dataset.find("form.buddybackup-snapshot-dataset")
+        new_form.attr("method", "POST").attr("action", "/update.php").attr("target", "progressFrame");
+        new_form.find("input[name='#section']").val(new_uid);
+
+        new_form.find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
+            .not('.lock').each(function(){$(this).on('input change', snapshot_input_changed)});
+
+        list.append(new_dataset);
+    }
+    function remove_dataset_from_snapshot_creation(btn) {
+        var form = $(btn).closest("form.buddybackup-snapshot-dataset");
+        var the_uid = form.find("input[name='#section']").val();
+        var saved = form.find("input[name='#saved']").val();
+        if (saved != "true") {
+            form.remove();
+            return;
+        }
+        $.post(api_url,{cmd:'remove_sanoid_section', 'section':the_uid},function(data) {
+            if (data == '') {
+                form.remove();
+            } else {
+                alert(data);
+            }
+        });
+    }
+    
+</script>
+<span class="pad-left">
+Set up automatic snapshot creation and pruning on your datasets. You do not need to use this section, but it's snapshots that are synced to your buddy and this is an easy way of managing them.
+</span>
+<div id="buddybackup-snapshot-creation-list">
+<?php
+    function snapshot_creation_dataset_entry($uid, $data) {
+        global $plugin;
+        global $rc_script;
+        ?>
+        <div id="buddybackup-entry-<?=$uid?>">
+        <form markdown="1" class="buddybackup-snapshot-dataset" method="POST" action="/update.php" target="progressFrame">
+        <input type="hidden" name="#file" value="<?=$plugin?>/snapshots.cfg">
+        <input type="hidden" name="#section" value="<?=$uid?>">
+        <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
+        <input type="hidden" name="#command" value="<?=$rc_script?>">
+        <input type="hidden" name="#arg[1]" value="update_sanoid_conf">
+
+        _(Dataset)_:
+        : <select name="dataset" class="align">
+        <?=datasets($data["dataset"], false)?>
+        </select>
+
+        _(Recursive)_:
+        : <select name="recursive" class="align">
+            <?=mk_option($data["recursive"]?:"no", "no", "_(No)_");?>
+            <?=mk_option($data["recursive"], "yes", "_(Yes)_");?>
+        </select>
+
+        _(Create snapshots automatically)_:
+        : <select name="autosnap" class="align">
+            <?=mk_option($data["autosnap"]?:"no", "no", "_(No)_");?>
+            <?=mk_option($data["autosnap"], "yes", "_(Yes)_");?>
+        </select>
+
+        _(Prune snapshots automatically)_:
+        : <select name="autoprune" class="align">
+            <?=mk_option($data["autoprune"]?:"no", "no", "_(No)_");?>
+            <?=mk_option($data["autoprune"], "yes", "_(Yes)_");?>
+        </select>
+
+        _(Snapshot retention)_:
+        : <input type="number" name="hourly" value="<?=$data["hourly"]?:0;?>" class="narrow"> Hourly
+        <span class="buddy-right"><input type="number" name="monthly" value="<?=$data["monthly"]?:0;?>" class="narrow"> Monthly</span>
+
+        &nbsp;
+        : <input type="number" name="daily" value="<?=$data["daily"]?:0;?>" class="narrow"> Daily
+        <span class="buddy-right"><input type="number" name="yearly" value="<?=$data["yearly"]?:0;?>" class="narrow"> Yearly</span>
+
+        &nbsp;
+        : <input type="number" name="weekly" value="<?=$data["weekly"]?:0;?>" class="narrow"> Weekly
+
+        &nbsp;
+        : <input type="submit" name="#apply" value="<?=_('Apply')?>">
+        <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_dataset_from_snapshot_creation(this)">
+
+        </form>
+        </div>
+    <?
+    }
+    foreach ($snapshot_cfg as $uid => $data) {
+        snapshot_creation_dataset_entry($uid, $data);
+    }
+?>
+</div>
+<div id="buddybackup-snapshot-creation-dataset-template" style="display:none;">
+    <?php
+        snapshot_creation_dataset_entry("", null);
+    ?>
+</div>
+
+<span class="pad-left"><input type="button" value="_(Add)_" onclick="add_dataset_for_snapshot_creation()"></span>

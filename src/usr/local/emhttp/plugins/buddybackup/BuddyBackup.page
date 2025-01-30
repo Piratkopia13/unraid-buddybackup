@@ -58,6 +58,9 @@ Tag="buddybackup"
     .buddybackup-center {
         text-align: center !important;
     }
+    .narrow {
+        width: 20px !important;
+    }
 </style>
 <script>
     var api_url = "/plugins/<?=$plugin?>/api.php";

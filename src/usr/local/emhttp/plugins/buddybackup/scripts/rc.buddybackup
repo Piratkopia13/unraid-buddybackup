@@ -106,21 +106,11 @@ enable_backups_from_buddy() {
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${username}/.ssh/authorized_keys"
     chown -R ${username}:${username} "/home/${username}/"
-    echo "restrict,command=\"/usr/local/emhttp/plugins/buddybackup/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
+    echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
 
     zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"
 
-    # save retention to sanoid conf
-    sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
-    hourly = ${ReceiveDestinationRententionHourly}\n\
-    daily = ${ReceiveDestinationRententionDaily}\n\
-    weekly = ${ReceiveDestinationRententionWeekly}\n\
-    monthly = ${ReceiveDestinationRententionMonthly}\n\
-    yearly = ${ReceiveDestinationRententionYearly}\n\
-    autosnap = no\n\
-    autoprune = yes\n\
-    recursive = yes\n")
-    echo "${sanoid_conf}" > "${sanoid_config_path}"
+    update_sanoid_conf
 
     enable_sanoid_cron
 }
@@ -147,7 +137,7 @@ enable_syncoid_cron() {
 
     rm "${syncoid_cron_file}" >/dev/null 2>&1
     echo "# Generated cron settings for plugin buddybackup" > "${syncoid_cron_file}"
-    echo "${BackupCron} flock -n /var/lock/buddybackup-syncoid -c \"/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup send_backup\" 2>&1 | ${log_script}" >> "${syncoid_cron_file}"
+    echo "${BackupCron} flock -n /var/lock/buddybackup-syncoid -c \"${empath}/scripts/rc.buddybackup send_backup\" 2>&1 | ${log_script}" >> "${syncoid_cron_file}"
     echo -e "\n" >> "${syncoid_cron_file}"
     /usr/local/sbin/update_cron
 }
@@ -395,6 +385,37 @@ get_buddy_snapshots() {
     echo "${json}"
 }
 
+update_sanoid_conf() {
+    # save retention for buddy's backups to sanoid conf
+    sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
+    hourly = ${ReceiveDestinationRententionHourly}\n\
+    daily = ${ReceiveDestinationRententionDaily}\n\
+    weekly = ${ReceiveDestinationRententionWeekly}\n\
+    monthly = ${ReceiveDestinationRententionMonthly}\n\
+    yearly = ${ReceiveDestinationRententionYearly}\n\
+    autosnap = no\n\
+    autoprune = yes\n\
+    recursive = yes\n")
+    
+    # save manual entries from "snapshot creation and pruning" section in settings
+    . $read_ini_script
+    read_ini "${extra_sanoid_config_path}"
+    for section in $INI__ALL_SECTIONS; do 
+        local dataset=$(declare | grep "^INI__${section}__dataset" | cut -d "=" -f 2)
+        printf -v sanoid_conf "${sanoid_conf}\n\n[${dataset}]\n"
+        for var in $(declare | grep "^INI__${section}__"); do
+            local key_val=$(echo ${var} | cut -d "_" -f 5)
+            local key=$(echo ${key_val} | cut -d "=" -f 1)
+            local val=$(echo ${key_val} | cut -d "=" -f 2)
+            if [[ "${key}" == "dataset" ]]; then
+                continue
+            fi
+            printf -v sanoid_conf "${sanoid_conf}    ${key} = ${val}\n"
+        done
+    done
+    echo "${sanoid_conf}" > "${sanoid_config_path}"
+}
+
 uninstall() {
     disable_backups_to_buddy
     disable_backups_from_buddy
@@ -412,10 +433,13 @@ ssh_key_path="${plugin_path}/buddybackup_sender_key"
 sanoid_cron_file="${plugin_path}/sanoid.cron"
 syncoid_cron_file="${plugin_path}/syncoid.cron"
 sanoid_config_path="${plugin_path}/sanoid.conf"
-sanoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/sanoid"
-syncoid_bin="/usr/local/emhttp/plugins/buddybackup/deps/syncoid"
-log_script="/usr/local/emhttp/plugins/buddybackup/scripts/log.sh"
+empath="/usr/local/emhttp/plugins/buddybackup"
+sanoid_bin="${empath}/deps/sanoid"
+syncoid_bin="${empath}/deps/syncoid"
+log_script="${empath}/scripts/log.sh"
+read_ini_script="${empath}/scripts/read_ini.sh"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
+extra_sanoid_config_path="${plugin_path}/snapshots.cfg"
 
 case "$1" in
 	('update')
@@ -438,6 +462,9 @@ case "$1" in
     ;;
     ('restore_snapshot')
         restore_snapshot "$2" "$3" "$4" "$5" "$6"
+    ;;
+    ('update_sanoid_conf')
+        update_sanoid_conf
     ;;
     ('uninstall')
 		uninstall
