@@ -63,10 +63,19 @@ run_and_write_output() {
 enable_backups_to_buddy() {
     logger "Enabling BuddyBackup" -t"${plugin}"
 
+    # remove old entries to known_host
+    stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' ~/.ssh/known_hosts | sed -n '/^# buddybackup /d;p')
+    echo "${stripped}" > ~/.ssh/known_hosts
+
+    # append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
+    echo "# buddybackup start" >> ~/.ssh/known_hosts
+    ssh-keyscan -H "${DestinationHost}" >> ~/.ssh/known_hosts
+    echo "# buddybackup end" >> ~/.ssh/known_hosts
+
     # test SSH connection to buddy
-    eval $(test_connection "${host}")
+    eval $(test_connection "${DestinationHost}")
     if [[ "${connection_status}" == "ok" ]]; then
-        logger "auth ok, do something" -t"${plugin}"
+        logger "buddy auth ok" -t"${plugin}"
     else
         logger "failed to connect to buddy: ${connection_result}" -t"${plugin}"
         return
@@ -344,6 +353,10 @@ get_buddy_snapshots() {
         printf '{"status": "failed", "error": "%s"}' "${ssh_result}"
         return
     fi
+    ## Enable for debugging
+    # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${DestinationHost}\" \"${cmd}\" 2>&1"
+    # echo "ssh_result: ${ssh_result}"
+
     # ssh_result should now contain one line per dataset/child dataset
 
     cmds=()
