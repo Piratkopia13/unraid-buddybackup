@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Containers>
+<PluginURL>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/buddybackup.plg</PluginURL>
+<PluginAuthor>Alexander Wester</PluginAuthor>
+<Beta>True</Beta>
+<Category>Backup: Tools:</Category>
+<Name>ZFS Buddy Backup</Name>
+<Description>BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.</Description>
+<Project>https://github.com/Piratkopia13/unraid-buddybackup</Project>
+<DonateText>Be like open-source — freely give... to me!</DonateText>
+<DonateLink>https://www.paypal.com/paypalme/piratdev</DonateLink>
+<!-- <Support>todo</Support> -->
+<Icon>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/buddybackup.png</Icon>
+</Containers>
