@@ -6,9 +6,9 @@ Title="Snapshot creation and pruning"
         border: 1px solid gray;
         padding-top: 5px;
     }
-    .buddy-right {
-        position: absolute;
-        left: 715px;
+    .buddy-left {
+        display: inline-block;
+        width: 180px;
     }
 </style>
 <script>
@@ -105,15 +105,15 @@ Set up automatic snapshot creation and pruning on your datasets. You do not need
         </select>
 
         _(Snapshot retention)_:
-        : <input type="number" name="hourly" value="<?=$data["hourly"]?:0;?>" class="narrow"> Hourly
-        <span class="buddy-right"><input type="number" name="monthly" value="<?=$data["monthly"]?:0;?>" class="narrow"> Monthly</span>
+        : <span class="buddy-left"><input type="number" name="hourly" value="<?=$data["hourly"]?:0;?>" class="narrow"> Hourly</span>
+        <input type="number" name="monthly" value="<?=$data["monthly"]?:0;?>" class="narrow"> Monthly
 
         &nbsp;
-        : <input type="number" name="daily" value="<?=$data["daily"]?:0;?>" class="narrow"> Daily
-        <span class="buddy-right"><input type="number" name="yearly" value="<?=$data["yearly"]?:0;?>" class="narrow"> Yearly</span>
+        : <span class="buddy-left"><input type="number" name="daily" value="<?=$data["daily"]?:0;?>" class="narrow"> Daily</span>
+        <input type="number" name="yearly" value="<?=$data["yearly"]?:0;?>" class="narrow"> Yearly
 
         &nbsp;
-        : <input type="number" name="weekly" value="<?=$data["weekly"]?:0;?>" class="narrow"> Weekly
+        : <span class="buddy-left"><input type="number" name="weekly" value="<?=$data["weekly"]?:0;?>" class="narrow"> Weekly</span>
 
         &nbsp;
         : <input type="submit" name="#apply" value="<?=_('Apply')?>">

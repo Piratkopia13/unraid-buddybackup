@@ -27,15 +27,15 @@ _(Destination parent dataset (must match buddy's setting))_:
   </select>
 
 _(Snapshot retention)_:
-: <input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly
-<span class="buddy-right"><input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> Monthly</span>
+: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly</span>
+<input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> Monthly
 
 &nbsp;
-: <input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> Daily
-<span class="buddy-right"><input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> Yearly</span>
+: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> Daily</span>
+<input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> Yearly
 
 &nbsp;
-: <input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> Weekly
+: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> Weekly</span>
 
 :retention_plug:
     > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.
