@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "6bee1289eee2c40cb0cb78df469c6632">
+  <!ENTITY pkgMD5        "ae15b844e03c0fb7a14778f623cef769">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -65,7 +65,8 @@
             major=${version:0:2}
             minor=${version:2:2}
             DEPS=( "perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
-                   "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz" )
+                   "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
+                   "perl-List-MoreUtils-0.425-x86_64-2_slonly.txz" )
             if [[ $((${major/./}*1)) -lt 7 ]]; then
               DEPS+=( "mbuffer-20240107-x86_64-1_SBo.tgz" )
             fi
