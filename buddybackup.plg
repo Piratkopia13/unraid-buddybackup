@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.01.29">
+  <!ENTITY version      "2025.01.31">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -27,6 +27,8 @@
          >
     <CHANGES>
     ##&name;
+###2025.01.31
+  Bug fixes
 ###2025.01.29
   Added settings section for automatic snapshot creation and pruning
 ###2025.01.25
