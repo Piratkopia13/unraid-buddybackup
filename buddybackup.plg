@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.01.31">
+  <!ENTITY version      "2025.01.31a">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -67,6 +67,7 @@
             major=${version:0:2}
             minor=${version:2:2}
             DEPS=( "perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
+                   "perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
                    "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
                    "perl-List-MoreUtils-0.425-x86_64-2_slonly.txz" )
             if [[ $((${major/./}*1)) -lt 7 ]]; then
