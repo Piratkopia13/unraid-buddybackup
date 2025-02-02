@@ -46,7 +46,7 @@ _(Enable)_:
     > Enable automatically scheduled ZFS snapshot syncs (using syncoid) to your buddy. Your buddy's retention settings decide when your backed-up snapshots will be deleted.
 :end
 
-_(Buddy's hostname or IP adress)_:
+_(Buddy's hostname or IP address)_:
 : <input type="text" name="DestinationHost" class="align" value="<?=$cfg['DestinationHost'];?>" <?=$disabled?>>
 <input type="button" value="_(Test connection)_" onclick="test_connection(this)" <?=$disabled?>>
 
