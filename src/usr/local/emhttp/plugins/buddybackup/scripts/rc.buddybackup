@@ -63,15 +63,6 @@ run_and_write_output() {
 enable_backups_to_buddy() {
     logger "Enabling BuddyBackup" -t"${plugin}"
 
-    # remove old entries to known_host
-    stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' ~/.ssh/known_hosts | sed -n '/^# buddybackup /d;p')
-    echo "${stripped}" > ~/.ssh/known_hosts
-
-    # append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
-    echo "# buddybackup start" >> ~/.ssh/known_hosts
-    ssh-keyscan -H "${DestinationHost}" >> ~/.ssh/known_hosts
-    echo "# buddybackup end" >> ~/.ssh/known_hosts
-
     # test SSH connection to buddy
     eval $(test_connection "${DestinationHost}")
     if [[ "${connection_status}" == "ok" ]]; then
@@ -170,6 +161,17 @@ update() {
     # Make sure deps are executable
     chmod +x "${sanoid_bin}"
     chmod +x "${syncoid_bin}"
+
+    # remove old entries to known_host
+    stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' ~/.ssh/known_hosts | sed -n '/^# buddybackup /d;p')
+    echo "${stripped}" > ~/.ssh/known_hosts
+    if [[ -n "${DestinationHost}" ]]; then
+        # append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
+        # This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
+        echo "# buddybackup start" >> ~/.ssh/known_hosts
+        ssh-keyscan -H "${DestinationHost}" >> ~/.ssh/known_hosts
+        echo "# buddybackup end" >> ~/.ssh/known_hosts
+    fi
 
     if [[ "${BackupToBuddy}" == "enable" ]] then
         enable_backups_to_buddy
@@ -349,7 +351,7 @@ get_buddy_snapshots() {
     cmd="zfs list -o name,origin -t filesystem,volume -Hr '${SendDestinationDataset}'"
     ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmd}" 2>&1)
     if [ $? -ne 0 ]; then
-        ssh_result=$(echo "${ssh_result}" | sed 's/\r//g') # Remove ^M characters
+        ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
         printf '{"status": "failed", "error": "%s"}' "${ssh_result}"
         return
     fi
@@ -362,6 +364,13 @@ get_buddy_snapshots() {
     cmds=()
     datasets=()
     while IFS= read -r line; do
+        # Basic error checking, ensure line begins with dataset name
+        if [[ "${line}" != "${SendDestinationDataset}"* ]]; then
+            ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid line: ${ssh_result}"
+            return
+        fi
+
         dataset=$(echo "${line}" | sed 's/\s.*$//')
         cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation '${dataset}'" )
         datasets+=( "${dataset}" )
@@ -373,7 +382,7 @@ get_buddy_snapshots() {
         json+="\"${datasets[$i]}\":{"
         ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmds[$i]}" 2>&1)
         if [ $? -ne 0 ]; then
-            ssh_sub_result=$(echo "${ssh_sub_result}" | sed 's/\r//g') # Remove ^M characters
+            ssh_sub_result=$(echo "${ssh_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
             printf '{"status": "failed", "error": "%s"}' "${ssh_sub_result}"
             return
         fi
