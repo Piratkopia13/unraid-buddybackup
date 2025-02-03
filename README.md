@@ -6,6 +6,8 @@ This plugin sets up authentication and syncs raw encrypted ZFS snapshots. Your b
 
 This plugin is fully open source, and I encourage you to review the source to ensure you understand how it operates and verify its security.
 
+### [User guide here](https://forums.unraid.net/topic/186256-beta-zfs-buddybackup-plugin-guide/)
+
 ![Logo](src/usr/local/emhttp/plugins/buddybackup/buddybackup.png)
 
 ---

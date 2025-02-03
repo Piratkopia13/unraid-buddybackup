@@ -9,6 +9,6 @@
 <Project>https://github.com/Piratkopia13/unraid-buddybackup</Project>
 <DonateText>Be like open-source — freely give... to me!</DonateText>
 <DonateLink>https://www.paypal.com/paypalme/piratdev</DonateLink>
-<!-- <Support>todo</Support> -->
+<Support>https://forums.unraid.net/topic/186256-beta-zfs-buddybackup-plugin-guide/</Support>
 <Icon>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/buddybackup.png</Icon>
 </Containers>
