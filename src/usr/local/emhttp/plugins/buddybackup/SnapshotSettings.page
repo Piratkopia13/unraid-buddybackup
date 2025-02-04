@@ -2,23 +2,12 @@ Menu="BuddyBackup:2"
 Title="Snapshot creation and pruning"
 ---
 <style>
-    .buddybackup-snapshot-dataset {
-        border: 1px solid gray;
-        padding-top: 5px;
-    }
     .buddy-left {
         display: inline-block;
         width: 180px;
     }
 </style>
 <script>
-    function uid() {
-        return 'xxxxxxxx'.replace(/[xy]/g, function(c) {
-            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
-    }
-
     function snapshot_input_changed() {
         var form = $(this).parentsUntil('form').parent();
         if (!form.find("select[name='dataset']").val()) {
@@ -47,20 +36,22 @@ Title="Snapshot creation and pruning"
         list.append(new_dataset);
     }
     function remove_dataset_from_snapshot_creation(btn) {
-        var form = $(btn).closest("form.buddybackup-snapshot-dataset");
-        var the_uid = form.find("input[name='#section']").val();
-        var saved = form.find("input[name='#saved']").val();
-        if (saved != "true") {
-            form.remove();
-            return;
-        }
-        $.post(api_url,{cmd:'remove_sanoid_section', 'section':the_uid},function(data) {
-            if (data == '') {
+        swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+            var form = $(btn).closest("form.buddybackup-snapshot-dataset");
+            var the_uid = form.find("input[name='#section']").val();
+            var saved = form.find("input[name='#saved']").val();
+            if (saved != "true") {
                 form.remove();
-            } else {
-                alert(data);
+                return;
             }
-        });
+            $.post(api_url,{cmd:'remove_sanoid_section', 'section':the_uid},function(data) {
+                if (data == '') {
+                    form.remove();
+                } else {
+                    alert(data);
+                }
+            });
+        }});
     }
     
 </script>
@@ -74,7 +65,7 @@ Set up automatic snapshot creation and pruning on your datasets. You do not need
         global $rc_script;
         ?>
         <div id="buddybackup-entry-<?=$uid?>">
-        <form markdown="1" class="buddybackup-snapshot-dataset" method="POST" action="/update.php" target="progressFrame">
+        <form markdown="1" class="buddybackup-snapshot-dataset buddybackup-list-entry" method="POST" action="/update.php" target="progressFrame">
         <input type="hidden" name="#file" value="<?=$plugin?>/snapshots.cfg">
         <input type="hidden" name="#section" value="<?=$uid?>">
         <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">

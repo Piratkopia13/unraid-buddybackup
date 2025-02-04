@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "874784184da46de7dd436e286305dda7">
+  <!ENTITY pkgMD5        "7d946d2a3a069ee8cf748fb74593caee">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -50,7 +50,7 @@
     </FILE>
 
     <!-- Create default buddybackup.cfg -->
-    <FILE Name="&pkgPath;/&name;.cfg">
+    <!-- <FILE Name="&pkgPath;/&name;.cfg">
       <INLINE>
         BackupToBuddy=disable
         ReceiveBackups=disable
@@ -60,7 +60,7 @@
         ReceiveDestinationRententionMonthly=3
         ReceiveDestinationRententionYearly=0
       </INLINE>
-    </FILE>
+    </FILE> -->
 
     <!-- Install dependencies -->
     <FILE Run="/bin/bash">

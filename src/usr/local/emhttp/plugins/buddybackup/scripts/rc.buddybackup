@@ -454,8 +454,9 @@ uninstall() {
 }
 
 # read our configuration.
-CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
-source $CONFIG
+# todo: change to ini parsing
+# CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
+# source $CONFIG
 
 username="buddybackup"
 plugin_path="/boot/config/plugins/${plugin}"

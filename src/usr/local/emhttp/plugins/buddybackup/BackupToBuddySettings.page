@@ -4,78 +4,169 @@ Title="Backup to Buddy"
 <?php
     $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
     if (file_exists($public_ssh_key_path)) {
-      $public_ssh_key	= file_get_contents($public_ssh_key_path);
+        $public_ssh_key	= file_get_contents($public_ssh_key_path);
     } else {
-      $public_ssh_key	= "";
+        $public_ssh_key	= "";
     }
 
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
-  $(function() { 
-    $('form').find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea').not('.lock').each(function(){$(this).on('input change',function() {
-      var form = $(this).parentsUntil('form').parent();
-      form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
-          return this.value + ' (apply changes to do this)';
-      });
-    })})
-  })
+    $(function() { 
+        $('form').find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea').not('.lock').each(function(){$(this).on('input change',function() {
+            var form = $(this).parentsUntil('form').parent();
+            form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
+                return this.value + ' (apply changes to do this)';
+            });
+        })})
+    })
 
-  function test_connection(button) {
-    ip = $(document.backup_to_buddy_form).find('input[name="DestinationHost"]').val();
-    buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
-  }
-  function send_backup(button) {
-    var cmd = '<?=$rc_name?> send_backup echo';
-    $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
-    show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
-    $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
-  }
+    function test_connection(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        ip = form.find('input[name="destination_host"]').val();
+        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+    }
+    function send_backup(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var the_uid = form.find("input[name='#section']").val();
+        var cmd = '<?=$rc_name?> send_backup '+uid;
+        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
+        show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
+        $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
+    }
+
+    function backup_input_changed() {
+        var form = $(this).parentsUntil('form').parent();
+        form.find("input[name='#apply']").not('.lock').prop('disabled', false);
+    }
+    $(function() { 
+        $('form.buddybackup-backup-entry')
+            .find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
+            .not('.lock').each(function(){$(this).on('input change', backup_input_changed)});
+    })
+    function add_backup() {
+        var template = $("#buddybackup-backup-entry-template");
+        var list = $("#buddybackup-backup-list");
+        var new_uid = uid();
+        var new_dataset = $("<div/>").attr("id", new_uid).html(template.html());
+        var new_form = new_dataset.find("form.buddybackup-backup-entry")
+        new_form.attr("method", "POST").attr("action", "/update.php").attr("target", "progressFrame");
+        new_form.find("input[name='#section']").val(new_uid);
+
+        new_form.find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
+            .not('.lock').each(function(){$(this).on('input change', backup_input_changed)});
+
+        list.append(new_dataset);
+    }
+    function remove_backup(btn) {
+        swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+            var form = $(btn).closest("form.buddybackup-backup-entry");
+            var the_uid = form.find("input[name='#section']").val();
+            var saved = form.find("input[name='#saved']").val();
+            if (saved != "true") {
+                form.remove();
+                return;
+            }
+            $.post(api_url,{cmd:'remove_backup_section', 'section':the_uid},function(data) {
+                if (data == '') {
+                    form.remove();
+                } else {
+                    alert(data);
+                }
+            });
+        }});
+    }
 </script>
-<form markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
-<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
-<input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
-<input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
-_(Enable)_:
-: <select name="BackupToBuddy" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['BackupToBuddy'], "disable", "_(No)_");?>
-    <?=mk_option($cfg['BackupToBuddy'], "enable", "_(Yes)_");?>
-  </select>
-
-:enable_backup_send_plug:
-    > Enable automatically scheduled ZFS snapshot syncs (using syncoid) to your buddy. Your buddy's retention settings decide when your backed-up snapshots will be deleted.
-:end
-
-_(Buddy's hostname or IP address)_:
-: <input type="text" name="DestinationHost" class="align" value="<?=$cfg['DestinationHost'];?>" <?=$disabled?>>
-<input type="button" value="_(Test connection)_" onclick="test_connection(this)" <?=$disabled?>>
+<style>
+    .buddybackup-backup-entry table{
+        background-color: inherit;
+    }
+</style>
 
 _(Your SSH public key (send this to you buddy))_:
 : <input disabled type="text" class="align" value="<?=$public_ssh_key;?>" <?=$disabled?>>
 
-_(ZFS dataset to backup)_:
-: <select name="SourceDataset" class="align" <?=$disabled?>>
-  <?=datasets($cfg["SourceDataset"])?>
-  </select>
+<div id="buddybackup-backup-list">
+<?php
+    function backup_entry($uid, $data) {
+        global $plugin;
+        global $rc_script;
+        global $disabled;
+        ?>
+        <form class="buddybackup-backup-entry buddybackup-list-entry" markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
+        <input type="hidden" name="#file" value="<?=$plugin?>/backups.cfg" <?=$disabled?>>
+        <input type="hidden" name="#section" value="<?=$uid?>">
+        <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
+        <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
+        <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 
-_(Backup child datasets)_:
-: <select name="BackupRecursive" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['BackupRecursive'], "no", "_(No)_");?>
-    <?=mk_option($cfg['BackupRecursive'], "yes", "_(Yes)_");?>
-  </select>
+        _(Enable)_:
+        : <select name="enable" class="align" <?=$disabled?>>
+                <?=mk_option($data['enable'], "no", "_(No)_");?>
+                <?=mk_option($data['enable'], "yes", "_(Yes)_");?>
+            </select>
 
-:backup_child_datasets_plug:
-    > Enable to recursively backup all child datasets under the chosen source dataset above.
-:end
+        <table>
+        <tr>
+            <th scope="col">Source</th>
+            <th scope="col">Destination</th>
+        </tr>
+        <tr><td>
+        <dl>
+            <dt>_(ZFS dataset to backup)_:</dt>
+            <dd>
+                <select name="source_dataset" class="align" <?=$disabled?>>
+                <?=datasets($data["source_dataset"])?>
+                </select>
+            </dd>
+        </dl>
+        <dl>
+            <dt>_(Backup child datasets)_:</dt>
+            <dd>
+                <select name="recursive" class="align" <?=$disabled?>>
+                    <?=mk_option($data['recursive'], "no", "_(No)_");?>
+                    <?=mk_option($data['recursive'], "yes", "_(Yes)_");?>
+                </select>
+            </dd>
+        </dl>
+        <dl>
+            <dt>_(Cron schedule)_:</dt>
+            <dd><input type="text" name="backup_cron" class="align" value="<?=$data['backup_cron'];?>" <?=$disabled?>></dd>
+        </dl>
+        </td><td>
+        <dl>
+            <dt>_(Buddy's hostname or IP address)_:</dt>
+            <dd>
+                <input type="text" name="destination_host" class="align" value="<?=$data['destination_host'];?>" <?=$disabled?>>
+                <input type="button" value="_(Test connection)_" onclick="test_connection(this)" style="margin:0px;" <?=$disabled?>>
+            </dd>
+        </dl>
+        <dl>
+            <dt>_(Destination parent dataset)_:</dt>
+            <dd>
+                <input type="text" name="destination_dataset" class="align" value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
+                (must match buddy's setting in "Buddy's backup" section)
+            </dd>
+        </dl>
+        </td>
+        </tr></table>
 
-_(Cron schedule)_:
-: <input type="text" name="BackupCron" class="align" value="<?=$cfg['BackupCron'];?>" <?=$disabled?>>
+        &nbsp;
+        : <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+        <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+        <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
 
-_(Destination parent dataset (must match buddy's setting in section below))_:
-: <input type="text" name="SendDestinationDataset" class="align" value="<?=$cfg['SendDestinationDataset'];?>" <?=$disabled?>>
-
-&nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-<input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
-
-</form>
+        </form>
+    <?
+    }
+    foreach ($backup_cfg as $uid => $data) {
+        backup_entry($uid, $data);
+    }
+?>
+</div>
+<div id="buddybackup-backup-entry-template" style="display:none;">
+    <?php
+        backup_entry("", null);
+    ?>
+</div>
+<span class="pad-left"><input type="button" value="_(Add)_" onclick="add_backup()"></span>

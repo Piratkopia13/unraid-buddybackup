@@ -24,6 +24,8 @@ Tag="buddybackup"
     }
     
 ?>
+<link type="text/css" rel="stylesheet" href="/webGui/styles/jquery.switchbutton.css">
+<script src="/webGui/javascript/jquery.switchbutton.js"></script></p>
 <style>
     select.align {
         min-width:300px;
@@ -61,6 +63,10 @@ Tag="buddybackup"
     .narrow {
         width: 20px !important;
     }
+    .buddybackup-list-entry {
+        border: 1px solid gray;
+        padding-top: 5px;
+    }
 </style>
 <script>
     var api_url = "/plugins/<?=$plugin?>/api.php";
@@ -77,6 +83,12 @@ Tag="buddybackup"
             if (callback) {
                 callback(data);
             }
+        });
+    }
+    function uid() {
+        return 'xxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
         });
     }
 
