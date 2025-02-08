@@ -74,8 +74,10 @@ enable_backups_from_buddy() {
     sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' /etc/ssh/sshd_config
     /etc/rc.d/rc.sshd restart >/dev/null 2>&1
 
-    # make buddybackup user (with a homedir)
-    useradd -m -s /bin/bash "${username}" >/dev/null 2>&1
+    # make buddybackup user (with a homedir) if it doesnt already exist
+    if ! id "${username}" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "${username}" >/dev/null 2>&1
+    fi
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
     mkdir "/home/${username}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${username}/.ssh"
