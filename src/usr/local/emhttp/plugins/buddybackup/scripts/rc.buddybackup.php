@@ -1,5 +1,6 @@
 #!/usr/bin/php
 <?php
+$verbose = false; // Enable to get more info printed to syslog
 
 $plugin = "buddybackup";
 $plugin_path = "/boot/config/plugins/$plugin";
@@ -13,7 +14,6 @@ $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
 $rc = $empath."/scripts/rc.buddybackup";
-$verbose = true;
 
 function BB_LOG($msg) {
     global $plugin;
@@ -155,9 +155,12 @@ function update_backups_from_config() {
             file_put_contents($known_hosts_path, $key, FILE_APPEND);
         }
 
+        $is_local = $cfg['type'] == "local";
         $any_empty = false;
         foreach ($cfg as $key => $value) {
             if (empty($value)) {
+                if ($is_local && $key == "destination_host") continue;
+
                 $any_empty = true;
                 BB_VERBOSE("Skipped backup uid $uid because of empty field $key");
                 break;
@@ -228,8 +231,13 @@ function send_backup($uid) {
         return;
     }
     $cfg = $backup_cfg[$uid];
-    $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';;
-    passthru($cmd);
+    if ($cfg['type'] == "local") {
+        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'"';;
+        passthru($cmd);
+    } else {
+        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';;
+        passthru($cmd);
+    }
 }
 
 switch ($argv[1]) {

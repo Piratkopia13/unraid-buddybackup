@@ -180,6 +180,44 @@ send_backup() {
     fi
 }
 
+send_local_backup() {
+    logger "Running local backup" -t"${plugin}"
+
+    local source_dataset="${1}"
+    local recursive="${2}"
+    local destination_dataset="${3}"
+
+    local nchan="send"
+    error=""
+    if ! dataset_exists "${source_dataset}"; then
+        error="Source dataset '${source_dataset}' does not exist!"
+    fi
+
+    if [ -n "${error}" ]; then
+        error="Aborting backup. ${error}"
+        write "${nchan}" "${error}"
+        unraid_notify "${error}" "alert"
+        return
+    fi
+
+    local my_syncoid_flags="${syncoid_flags_local}"
+    if [[ "${recursive}" == "yes" ]] then
+        my_syncoid_flags+=" --recursive"
+    fi
+    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
+        printf -v result "\nSuccessfully synced local backup!"
+    else 
+        local error_code=$?
+        unraid_notify "Local backup failed. Error code ${error_code}. Full output: ${result}" "alert"
+        printf -v result "Local backup failed. Error code ${error_code}."
+    fi
+    write "${nchan}" "${result}"
+
+    if [[ "${nchan}" ]]; then
+        write "${nchan}" "[[rc.buddybackup finished]]"
+    fi
+}
+
 restore_snapshot() {
     local destination_host="${1}"
     local mode="${2}"
@@ -354,6 +392,7 @@ empath="/usr/local/emhttp/plugins/buddybackup"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
+syncoid_flags_local="--no-sync-snap --pv-options='-pterbf' --compress=none" # flags when backup destination is on local machine
 
 case "$1" in
 	('update')
@@ -361,6 +400,9 @@ case "$1" in
 	;;
     ('send_backup')
 		send_backup "$2" "$3" "$4" "$5"
+	;;
+    ('send_local_backup')
+		send_local_backup "$2" "$3" "$4"
 	;;
     ('test_connection')
 		test_connection_cmd "$2"
@@ -384,5 +426,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|test_connection|get_buddy_snapshots|restore_snapshot|clear_known_hosts|uninstall"
+		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_buddy_snapshots|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac

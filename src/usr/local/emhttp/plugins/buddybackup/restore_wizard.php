@@ -170,7 +170,6 @@
         wizard.html("");
 
         var cmd = '<?=$rc_name?> restore_snapshot "'+the_uid+'" "'+selected_mode+'" "'+selected_snap+'" "'+selected_snap_dataset+'" "'+destination_dataset+'"';
-        console.warn(cmd);
         function isNumeric(str) {
             if (typeof str != "string") return false;
             return !isNaN(str) && !isNaN(parseFloat(str));

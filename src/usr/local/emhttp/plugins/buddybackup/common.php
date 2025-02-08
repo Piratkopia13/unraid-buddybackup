@@ -37,6 +37,7 @@
         $backup["destination_dataset"] = $cfg["SendDestinationDataset"]; unset($cfg["SendDestinationDataset"]);
         $backup["backup_cron"] = $cfg["BackupCron"]; unset($cfg["BackupCron"]);
         $backup["recursive"] = $cfg["BackupRecursive"]; unset($cfg["BackupRecursive"]);
+        $backup["type"] = "remote";
 
         // Update ini files
         add_to_ini($backup, "1ml3g4cy", $backup_cfg_file);
@@ -52,10 +53,14 @@
         if (exec("zfs list -rH -o name,encryption", $raw_datasets)) {
             foreach ($raw_datasets as $set) {
                 $parts = preg_split('/\s+/', $set);
-                if ($parts[1] != "off" || !$only_encrypted) {
+                if ($parts[1] != "off") {
                     $datasets .= mk_option($selected, $parts[0], $parts[0]);
                 } else {
-                    $datasets .= mk_option($selected, $parts[0], "$parts[0] (not encrypted)", "disabled");
+                    if ($only_encrypted) {
+                        $datasets .= mk_option($selected, $parts[0], "$parts[0] (not encrypted)", "disabled");
+                    } else {
+                        $datasets .= mk_option($selected, $parts[0], "$parts[0] (not encrypted)");
+                    }
                 }
             }
         } else {
@@ -64,12 +69,3 @@
         return $datasets;
     }
 ?>
-
-<!-- ReceiveBackups="enable" -->
-<!-- ReceiveDestinationRententionHourly="0" -->
-<!-- ReceiveDestinationRententionDaily="7" -->
-<!-- ReceiveDestinationRententionWeekly="4" -->
-<!-- ReceiveDestinationRententionMonthly="3" -->
-<!-- ReceiveDestinationRententionYearly="0" -->
-<!-- DestinationPubSSHKey="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRHUnG8/Qp4b0zJiWjR1tezUkDVLzsc21EUguCcEQRk root@Prism " -->
-<!-- ReceiveDestinationDataset="disk1/prism_offsite_backup" -->
