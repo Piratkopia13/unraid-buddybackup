@@ -96,10 +96,11 @@ disable_backups_from_buddy() {
 
     rm -r "/home/${username}" >/dev/null 2>&1
 
-    # todo: if $ReceiveDestinationDataset has changed since enable_backups_from_buddy() we don't know which dataset to zfs unallow. Fix that
-    if [[ "${ReceiveDestinationDataset}" ]]; then
-        zfs unallow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}" >/dev/null 2>&1
-    fi
+    for dataset in $(zfs list -H -o name); do 
+        if zfs allow "${dataset}" | grep -q "${username}"; then
+            zfs unallow -u "${username}" "${dataset}" >/dev/null 2>&1
+        fi
+    done
 
     userdel "${username}" >/dev/null 2>&1
 }
