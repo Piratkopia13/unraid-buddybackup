@@ -68,4 +68,14 @@
         }
         return $datasets;
     }
+
+    function backups($selected) {
+        global $backup_cfg;
+        $backups = "";
+        foreach ($backup_cfg as $uid => $backup) {
+            $destination = ($backup["type"] == "local") ? "localhost" : $backup["destination_host"];
+            $backups .= mk_option($selected, $uid, $backup["source_dataset"]." -> ".$destination."@".$backup["destination_dataset"]);
+        }
+        return $backups;
+    }
 ?>

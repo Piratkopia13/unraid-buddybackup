@@ -65,6 +65,8 @@ function update_sanoid_conf() {
     global $plugin_config_path;
     global $sanoid_config_path;
     global $extra_sanoid_config_path;
+    global $empath;
+    global $log_script;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
     
     // save retention for buddy's backups to sanoid conf
@@ -90,6 +92,13 @@ function update_sanoid_conf() {
             $sanoid_conf_content .= "\n[$dataset]\n";
             foreach ($section as $key => $value) {
                 if ($key == "dataset") continue;
+                if ($key == "trigger") {
+                    if (empty($value) || $value == "no") continue;
+                    $cmd = "$empath/scripts/rc.buddybackup.php send_backup \"$value\" 2>&1 | $log_script";
+                    $sanoid_conf_content .= "    post_snapshot_script = $cmd\n";
+                    continue;
+                }
+
                 $sanoid_conf_content .= "    $key = $value\n";
             }
         }

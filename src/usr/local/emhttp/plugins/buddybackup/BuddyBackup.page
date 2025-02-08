@@ -135,7 +135,7 @@ Tag="buddybackup"
     nchan_buddybackup_backup.start();
 
     function show_in_progress_log(title, element_name, log_class) {
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"});
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"}, function(){$('.sweet-alert').removeClass('nchan');});
         $('.sweet-alert').addClass("nchan");
         $('pre#swalbody').html($(element_name).html());
         $('pre#swalbody').addClass("buddybackup-center");
