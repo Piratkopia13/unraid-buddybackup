@@ -60,30 +60,6 @@ run_and_write_output() {
     return "${error_code}"
 }
 
-enable_backups_to_buddy() {
-    logger "Enabling BuddyBackup" -t"${plugin}"
-
-    # test SSH connection to buddy
-    eval $(test_connection "${DestinationHost}")
-    if [[ "${connection_status}" == "ok" ]]; then
-        logger "buddy auth ok" -t"${plugin}"
-    else
-        logger "failed to connect to buddy: ${connection_result}" -t"${plugin}"
-        return
-    fi
-
-    if [[ ! -z "${BackupCron}" ]] then
-        enable_syncoid_cron
-    else
-        disable_syncoid_cron
-    fi
-}
-
-disable_backups_to_buddy() {
-    logger "Disabling BuddyBackup" -t"${plugin}"
-    disable_syncoid_cron
-}
-
 enable_backups_from_buddy() {
     if [[ -z "${ReceiveDestinationDataset}" ]]; then
         err="Can not enable backups from buddy, no recieve destination dataset set."
@@ -109,10 +85,6 @@ enable_backups_from_buddy() {
     echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
 
     zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"
-
-    update_sanoid_conf
-
-    enable_sanoid_cron
 }
 
 disable_backups_from_buddy() {
@@ -128,24 +100,12 @@ disable_backups_from_buddy() {
     fi
 
     userdel "${username}" >/dev/null 2>&1
-
-    disable_sanoid_cron
 }
 
-enable_syncoid_cron() {
-    logger "Enabling syncoid cron" -t"${plugin}"
+remove_cron_files() {
+    logger "Removing cron files" -t"${plugin}"
 
-    rm "${syncoid_cron_file}" >/dev/null 2>&1
-    echo "# Generated cron settings for plugin buddybackup" > "${syncoid_cron_file}"
-    echo "${BackupCron} flock -n /var/lock/buddybackup-syncoid -c \"${empath}/scripts/rc.buddybackup send_backup\" 2>&1 | ${log_script}" >> "${syncoid_cron_file}"
-    echo -e "\n" >> "${syncoid_cron_file}"
-    /usr/local/sbin/update_cron
-}
-
-disable_syncoid_cron() {
-    logger "Disabling syncoid cron" -t"${plugin}"
-
-    rm "${syncoid_cron_file}" >/dev/null 2>&1
+    rm "${plugin_path}/*.cron" >/dev/null 2>&1
     /usr/local/sbin/update_cron
 }
 
@@ -172,18 +132,6 @@ update() {
         ssh-keyscan -H "${DestinationHost}" >> ~/.ssh/known_hosts
         echo "# buddybackup end" >> ~/.ssh/known_hosts
     fi
-
-    if [[ "${BackupToBuddy}" == "enable" ]] then
-        enable_backups_to_buddy
-    else
-        disable_backups_to_buddy
-    fi
-
-    if [[ "${ReceiveBackups}" == "enable" ]] then
-        enable_backups_from_buddy
-    else
-        disable_backups_from_buddy
-    fi
 }
 
 dataset_exists() {
@@ -198,29 +146,32 @@ is_encrypted() {
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
+    local source_dataset="${1}"
+    local recursive="${2}"
+    local destination_host="${3}"
+    local destination_dataset="${4}"
+
     local nchan="send"
     error=""
-    if ! is_encrypted "${SourceDataset}"; then
-        error="Source dataset '${SourceDataset}' is not encrypted!"
+    if ! is_encrypted "${source_dataset}"; then
+        error="Source dataset '${source_dataset}' is not encrypted!"
     fi
-    if ! dataset_exists "${SourceDataset}"; then
-        error="Source dataset '${SourceDataset}' does not exist!"
+    if ! dataset_exists "${source_dataset}"; then
+        error="Source dataset '${source_dataset}' does not exist!"
     fi
 
     if [ -n "${error}" ]; then
         error="Aborting backup. ${error}"
         write "${nchan}" "${error}"
-        if [[ ! "${1}" == "echo" ]]; then
-            unraid_notify "${error}" "alert"
-        fi
+        unraid_notify "${error}" "alert"
         return
     fi
 
     local my_syncoid_flags="${syncoid_flags}"
-    if [[ "${BackupRecursive}" == "yes" ]] then
+    if [[ "${recursive}" == "yes" ]] then
         my_syncoid_flags+=" --recursive"
     fi
-    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${SourceDataset}\" \"${username}@${DestinationHost}:${SendDestinationDataset}\" 2>&1"); then
+    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced backup to buddy!"
     else 
         local error_code=$?
@@ -295,22 +246,6 @@ restore_snapshot() {
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"
     fi
-}
-
-enable_sanoid_cron() {
-    rm "${sanoid_cron_file}" >/dev/null 2>&1
-    echo "# Generated cron settings for plugin buddybackup" > "${sanoid_cron_file}"
-    echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --cron\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
-    # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
-    # echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC ${sanoid_bin} --configdir=\"${plugin_path}\" --take-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
-    # echo "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"${sanoid_bin} --configdir=\"${plugin_path}\" --prune-snapshots\" 2>&1 | ${log_script}" >> "${sanoid_cron_file}"
-    echo -e "\n" >> "${sanoid_cron_file}"
-    /usr/local/sbin/update_cron
-}
-
-disable_sanoid_cron() {
-    rm "${sanoid_cron_file}" >/dev/null 2>&1
-    /usr/local/sbin/update_cron
 }
 
 test_connection() {
@@ -409,81 +344,29 @@ get_buddy_snapshots() {
     echo "${json}"
 }
 
-update_sanoid_conf() {
-    # save retention for buddy's backups to sanoid conf
-    sanoid_conf=$(printf "[${ReceiveDestinationDataset}]\n\
-    hourly = ${ReceiveDestinationRententionHourly}\n\
-    daily = ${ReceiveDestinationRententionDaily}\n\
-    weekly = ${ReceiveDestinationRententionWeekly}\n\
-    monthly = ${ReceiveDestinationRententionMonthly}\n\
-    yearly = ${ReceiveDestinationRententionYearly}\n\
-    autosnap = no\n\
-    autoprune = yes\n\
-    recursive = yes\n")
-    
-    # save manual entries from "snapshot creation and pruning" section in settings
-    if [ -f "${extra_sanoid_config_path}" ]; then
-        . $read_ini_script
-        read_ini "${extra_sanoid_config_path}"
-        for section in $INI__ALL_SECTIONS; do 
-            local dataset=$(declare | grep "^INI__${section}__dataset" | cut -d "=" -f 2)
-            if [[ "${dataset}" == "${ReceiveDestinationDataset}"* ]]; then
-                echo "Error: Buddy's destination dataset '${dataset}' also specified in 'Snapshot creation and pruning' section. Remove it from there!" | ${log_script}
-                continue
-            fi
-            printf -v sanoid_conf "${sanoid_conf}\n\n[${dataset}]\n"
-            for var in $(declare | grep "^INI__${section}__"); do
-                local key_val=$(echo ${var} | cut -d "_" -f 5)
-                local key=$(echo ${key_val} | cut -d "=" -f 1)
-                local val=$(echo ${key_val} | cut -d "=" -f 2)
-                if [[ "${key}" == "dataset" ]]; then
-                    continue
-                fi
-                printf -v sanoid_conf "${sanoid_conf}    ${key} = ${val}\n"
-            done
-        done
-    fi
-    echo "${sanoid_conf}" > "${sanoid_config_path}"
-}
-
 uninstall() {
-    disable_backups_to_buddy
     disable_backups_from_buddy
-    disable_sanoid_cron
-    disable_syncoid_cron
+    remove_cron_files
 }
 
 # read our configuration.
-# todo: change to ini parsing
-# CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
-# source $CONFIG
+CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
+source $CONFIG
 
 username="buddybackup"
 plugin_path="/boot/config/plugins/${plugin}"
 ssh_key_path="${plugin_path}/buddybackup_sender_key"
-sanoid_cron_file="${plugin_path}/sanoid.cron"
-syncoid_cron_file="${plugin_path}/syncoid.cron"
-sanoid_config_path="${plugin_path}/sanoid.conf"
 empath="/usr/local/emhttp/plugins/buddybackup"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
-log_script="${empath}/scripts/log.sh"
-read_ini_script="${empath}/scripts/read_ini.sh"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
-extra_sanoid_config_path="${plugin_path}/snapshots.cfg"
 
 case "$1" in
 	('update')
 		update
 	;;
     ('send_backup')
-		send_backup "$2"
-	;;
-    ('enable_sanoid_cron')
-		enable_sanoid_cron
-	;;
-    ('disable_sanoid_cron')
-		disable_sanoid_cron
+		send_backup "$2" "$3" "$4" "$5"
 	;;
     ('test_connection')
 		test_connection_cmd "$2"
@@ -494,12 +377,15 @@ case "$1" in
     ('restore_snapshot')
         restore_snapshot "$2" "$3" "$4" "$5" "$6"
     ;;
-    ('update_sanoid_conf')
-        update_sanoid_conf
+    ('enable_backups_from_buddy')
+        enable_backups_from_buddy
+    ;;
+    ('disable_backups_from_buddy')
+        disable_backups_from_buddy
     ;;
     ('uninstall')
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|enable_sanoid_cron|disable_sanoid_cron|test_connection|get_buddy_snapshots|restore_snapshot|uninstall"
+		echo "usage $0 update|send_backup|test_connection|get_buddy_snapshots|restore_snapshot|uninstall"
 esac

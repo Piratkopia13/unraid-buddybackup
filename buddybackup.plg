@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "7d946d2a3a069ee8cf748fb74593caee">
+  <!ENTITY pkgMD5        "e75fc6c4a485d87e15b64181d841c6e3">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -115,7 +115,7 @@
             chmod +x &emhttp;/deps/sanoid
             chmod +x &emhttp;/deps/syncoid
             chmod +x &emhttp;/deps/restrict_zfs
-            &emhttp;/scripts/rc.buddybackup update
+            &emhttp;/scripts/rc.buddybackup.php update
 
             echo ""
             echo "-----------------------------------------------------------"
@@ -142,7 +142,7 @@
             echo "-----------------------------------------------------------"
             echo ""
 
-            &emhttp;/scripts/rc.buddybackup uninstall
+            &emhttp;/scripts/rc.buddybackup.php uninstall
 
             removepkg &pkgPath;/&pkgName;
 

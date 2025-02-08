@@ -74,7 +74,7 @@ Tag="buddybackup"
     function buddybackup_show_popup(cmd, title, info, button=0, callback=null) {
         // button = 0 : hide CLOSE button (default)
         // button = 1 : show CLOSE button
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"});
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:button!=0,confirmButtonText:"<?=_('Close')?>"}, function(){$('.sweet-alert').removeClass('nchan');});
         $('.sweet-alert').addClass('nchan');
         $('button.confirm').text("<?=_('Done')?>").prop('disabled',false).show();
         $('pre#swalbody').append(info+"<br><br>");

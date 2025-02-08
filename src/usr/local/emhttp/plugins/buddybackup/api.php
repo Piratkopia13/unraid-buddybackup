@@ -4,7 +4,7 @@
     require_once $docroot."/plugins/".$plugin."/common.php";
     
     function get_buddy_snapshots() {
-        if ($json = shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup get_buddy_snapshots")) {
+        if ($json = shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php get_buddy_snapshots")) {
             echo $json;
         } else {
             echo '{"status": "failed", "error": "Failed to retrieve buddy\'s snapshots"}';
@@ -27,13 +27,13 @@
         global $snapshot_cfg;
         global $snapshot_cfg_file;
         remove_ini_section($snapshot_cfg, $section, $snapshot_cfg_file);
-        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup update_sanoid_conf");
+        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update_sanoid_conf");
     }
     function remove_backup_section($section) {
         global $backup_cfg;
         global $backup_cfg_file;
         remove_ini_section($backup_cfg, $section, $backup_cfg_file);
-        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup update_backup_conf");
+        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update_backup_conf");
     }
 
     switch ($_POST["cmd"]) {

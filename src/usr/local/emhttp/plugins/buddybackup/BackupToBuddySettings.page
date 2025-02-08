@@ -29,7 +29,7 @@ Title="Backup to Buddy"
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
         var the_uid = form.find("input[name='#section']").val();
-        var cmd = '<?=$rc_name?> send_backup '+uid;
+        var cmd = '<?=$rc_php_name?> send_backup '+uid;
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
         show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
         $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
@@ -151,10 +151,12 @@ _(Your SSH public key (send this to you buddy))_:
         </td>
         </tr></table>
 
-        &nbsp;
-        : <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-        <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
-        <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
+        <div style="text-align:center;">
+            <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+            <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+            <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
+            <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
+        </div>
 
         </form>
     <?

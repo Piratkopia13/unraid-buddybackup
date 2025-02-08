@@ -1,0 +1,202 @@
+#!/usr/bin/php
+<?php
+
+$plugin = "buddybackup";
+$plugin_path = "/boot/config/plugins/$plugin";
+$plugin_config_path = "/boot/config/plugins/$plugin/$plugin.cfg";
+$backups_config_path = "$plugin_path/backups.cfg";
+$sanoid_config_path = "$plugin_path/sanoid.conf";
+$extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
+$sanoid_cron_path = "$plugin_path/sanoid.cron";
+$sanoid_bin = "$empath/deps/sanoid";
+
+$empath = "/usr/local/emhttp/plugins/buddybackup";
+$log_script = "$empath/scripts/log.sh";
+$rc = $empath."/scripts/rc.buddybackup";
+$verbose = true;
+
+function BB_LOG($msg) {
+    global $plugin;
+    syslog(LOG_INFO, "$plugin: $msg");
+}
+function BB_ERR($msg) {
+    global $plugin;
+    global $log_script;
+    syslog(LOG_ERR, "$plugin: ERROR: $msg");
+    exec('echo "'.$msg.'" | '.$log_script);
+}
+function BB_VERBOSE($msg) {
+    global $verbose;
+    if ($verbose) BB_LOG($msg);
+}
+function ENSURE_SUCCESS($b) {
+    if (!$b) {
+        debug_print_backtrace();
+        die("Error!");
+    }
+}
+
+function update() {
+    global $rc;
+    global $plugin_config_path;
+    $plugin_cfg = parse_ini_file($plugin_config_path, false);
+    update_backups_from_config();
+    passthru($rc.' update');
+
+    if ($plugin_cfg["ReceiveBackups"] == "enable") {
+        passthru($rc.' enable_backups_from_buddy');
+        update_sanoid_conf();
+        enable_sanoid_cron();
+    } else {
+        passthru($rc.' disable_backups_from_buddy');
+        disable_sanoid_cron();
+    }
+}
+
+function disable_sanoid_cron() {
+    global $sanoid_cron_path;
+    if (file_exists($sanoid_cron_path)) {
+        ENSURE_SUCCESS(unlink($sanoid_cron_path));
+    }
+    passthru("/usr/local/sbin/update_cron");
+}
+
+function update_sanoid_conf() {
+    global $plugin_config_path;
+    global $sanoid_config_path;
+    global $extra_sanoid_config_path;
+    $plugin_cfg = parse_ini_file($plugin_config_path, false);
+    
+    // save retention for buddy's backups to sanoid conf
+    $sanoid_conf_content = "[".$plugin_cfg["ReceiveDestinationDataset"]."]\n";
+    $sanoid_conf_content .= "    hourly = ".$plugin_cfg["ReceiveDestinationRententionHourly"]."\n";
+    $sanoid_conf_content .= "    daily = ".$plugin_cfg["ReceiveDestinationRententionDaily"]."\n";
+    $sanoid_conf_content .= "    weekly = ".$plugin_cfg["ReceiveDestinationRententionWeekly"]."\n";
+    $sanoid_conf_content .= "    monthly = ".$plugin_cfg["ReceiveDestinationRententionMonthly"]."\n";
+    $sanoid_conf_content .= "    yearly = ".$plugin_cfg["ReceiveDestinationRententionYearly"]."\n";
+    $sanoid_conf_content .= "    autosnap = no\n";
+    $sanoid_conf_content .= "    autoprune = yes\n";
+    $sanoid_conf_content .= "    recursive = yes\n";
+    
+    // save manual entries from "snapshot creation and pruning" section in settings
+    if (file_exists($extra_sanoid_config_path)) {
+        $extra_sanoid_cfg = parse_ini_file($extra_sanoid_config_path, true);
+        foreach ($extra_sanoid_cfg as $uid => $section) {
+            $dataset = $section["dataset"];
+            if (str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
+                BB_ERR("Buddy's destination dataset '$dataset' also specified in 'Snapshot creation and pruning' section. Remove it from there!");
+                continue;
+            }
+            $sanoid_conf_content .= "\n[$dataset]\n";
+            foreach ($section as $key => $value) {
+                if ($key == "dataset") continue;
+                $sanoid_conf_content .= "    $key = $value\n";
+            }
+        }
+    }
+
+    ENSURE_SUCCESS(file_put_contents($sanoid_config_path, $sanoid_conf_content));
+}
+
+function enable_sanoid_cron() {
+    global $sanoid_cron_path;
+    global $sanoid_bin;
+    global $plugin_path;
+    global $log_script;
+    if (file_exists($sanoid_cron_path)) {
+        ENSURE_SUCCESS(unlink($sanoid_cron_path));
+    }
+    $cron_content = "# Generated cron settings for plugin buddybackup\n";
+    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"TZ=UTC $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
+    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC $sanoid_bin --configdir=\"$plugin_path\" --take-snapshots\" 2>&1 | $log_script\n";
+    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"$sanoid_bin --configdir=\"$plugin_path\" --prune-snapshots\" 2>&1 | $log_script\n";
+    ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content));
+    BB_VERBOSE("Created $sanoid_cron_path");
+    passthru("/usr/local/sbin/update_cron");
+}
+
+function add_backup_cron_file($uid, $cfg) {
+    global $plugin_path;
+    global $empath;
+    global $log_script;
+
+    $cron_content = "# Generated cron settings for plugin buddybackup\n";
+    $cron_content .= $cfg["cron"] . " flock -n /var/lock/buddybackup-$uid -c \"$empath/scripts/rc.buddybackup.php send_backup $uid\" 2>&1 | $log_script\n";
+    ENSURE_SUCCESS(file_put_contents("$plugin_path/backup-$uid.cron", $cron_content));
+    BB_VERBOSE("Created $plugin_path/backup-$uid.cron");
+}
+
+function update_backups_from_config() {
+    BB_LOG("Updating backup cronjobs");
+    global $plugin_path;
+    global $backups_config_path;
+    $backup_cfg = parse_ini_file($backups_config_path, true);
+
+    // Remove all backup cron files from $plugin_path
+    $files = scandir($plugin_path);
+    foreach($files as $file) {
+        if(preg_match("/^backup-\w{8}.cron$/", $file) && !is_dir("$plugin_path/$file")) {
+            ENSURE_SUCCESS(unlink("$plugin_path/$file"));
+            BB_VERBOSE("Deleted $plugin_path/$file");
+        }
+    }
+
+    foreach ($backup_cfg as $uid => $cfg) {
+        $any_empty = false;
+        foreach ($cfg as $key => $value) {
+            if (empty($value)) {
+                $any_empty = true;
+                BB_VERBOSE("Skipped backup uid $uid because of empty field $key");
+                break;
+            }
+        }
+        if ($cfg["enable"] != "yes" || $any_empty) {
+            BB_VERBOSE("Skipped backup uid $uid");
+            continue;
+        }
+
+        add_backup_cron_file($uid, $cfg);
+    }
+    passthru("/usr/local/sbin/update_cron");
+}
+
+function send_backup($uid) {
+    BB_LOG("Sending backup $uid");
+    global $rc;
+    global $plugin_path;
+    global $backups_config_path;
+    $backup_cfg = parse_ini_file($backups_config_path, true);
+    if (!array_key_exists($uid, $backup_cfg)) {
+        BB_ERR("Could not startup backup with uid '$uid' since it does not exist");
+        return;
+    }
+    $cfg = $backup_cfg[$uid];
+    passthru($rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
+}
+
+switch ($argv[1]) {
+    case 'update':
+        update();
+        break;
+    case 'update_backups_from_config':
+        update_backups_from_config();
+        break;
+    case 'update_sanoid_conf':
+        update_sanoid_conf();
+        break;
+    case 'send_backup':
+        send_backup($argv[2]);
+        break;
+    case 'test_connection':
+        passthru($rc.' '.$argv[1].' '.$argv[2]);
+        break;
+    case 'uninstall':
+        passthru($rc.' uninstall');
+        break;
+    
+    default:
+        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup";
+        break;
+}
+?>
