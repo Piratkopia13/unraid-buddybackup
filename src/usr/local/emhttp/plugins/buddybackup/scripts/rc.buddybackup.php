@@ -122,7 +122,7 @@ function add_backup_cron_file($uid, $cfg) {
     global $log_script;
 
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= $cfg["cron"] . " flock -n /var/lock/buddybackup-$uid -c \"$empath/scripts/rc.buddybackup.php send_backup $uid\" 2>&1 | $log_script\n";
+    $cron_content .= $cfg["backup_cron"] . " flock -n \"/var/lock/buddybackup-$uid\" -c \"$empath/scripts/rc.buddybackup.php send_backup $uid\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents("$plugin_path/backup-$uid.cron", $cron_content));
     BB_VERBOSE("Created $plugin_path/backup-$uid.cron");
 }
