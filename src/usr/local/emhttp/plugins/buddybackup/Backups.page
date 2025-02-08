@@ -1,5 +1,5 @@
 Menu="BuddyBackup:1"
-Title="Backup to Buddy"
+Title="Backup and restore"
 ---
 <?php
     $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
@@ -29,7 +29,8 @@ Title="Backup to Buddy"
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
         var the_uid = form.find("input[name='#section']").val();
-        var cmd = '<?=$rc_php_name?> send_backup '+uid;
+        var cmd = '<?=$rc_name?> send_backup '+the_uid;
+        console.warn(cmd);
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
         show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
         $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
@@ -75,6 +76,18 @@ Title="Backup to Buddy"
                 }
             });
         }});
+    }
+    function restore_from_destination(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var the_uid = form.find("input[name='#section']").val();
+        var saved = form.find("input[name='#saved']").val();
+        if (saved != "true") {
+            swal({title:"_(Nope)_", text:"Backup entry not saved. Hit 'apply' before running a restore.", type:'warning', html:true, showCancelButton:false, confirmButtonText:"_(Ok)_"});
+            return;
+        }
+
+        var csrf_token = $('input[name="csrf_token"]').val();
+        openBox('/plugins/<?=$plugin?>/restore_wizard.php?uid='+the_uid+'&csrf_token='+csrf_token, 'Restore snapshot wizard', 500, 600, false);
     }
 </script>
 <style>

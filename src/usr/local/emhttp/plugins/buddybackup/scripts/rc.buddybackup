@@ -121,17 +121,12 @@ update() {
     # Make sure deps are executable
     chmod +x "${sanoid_bin}"
     chmod +x "${syncoid_bin}"
+}
 
+clear_known_hosts() {
     # remove old entries to known_host
     stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' ~/.ssh/known_hosts | sed -n '/^# buddybackup /d;p')
     echo "${stripped}" > ~/.ssh/known_hosts
-    if [[ -n "${DestinationHost}" ]]; then
-        # append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
-        # This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
-        echo "# buddybackup start" >> ~/.ssh/known_hosts
-        ssh-keyscan -H "${DestinationHost}" >> ~/.ssh/known_hosts
-        echo "# buddybackup end" >> ~/.ssh/known_hosts
-    fi
 }
 
 dataset_exists() {
@@ -186,13 +181,14 @@ send_backup() {
 }
 
 restore_snapshot() {
-    mode=$1
-    snapshot=$2
-    source_dataset=$3
-    destination_dataset=$4
+    local destination_host="${1}"
+    local mode="${2}"
+    local snapshot="${3}"
+    local source_dataset="${4}"
+    local destination_dataset="${5}"
 
     # If last param is "nchan" we send output to nchan channel "restore" instead of echo
-    nchan=$5
+    local nchan="${6}"
     if [[ "${nchan}" == "nchan" ]]; then
         nchan="restore"
     else
@@ -205,7 +201,7 @@ restore_snapshot() {
     result=""
     case "$mode" in
         ('selected')
-            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${DestinationHost}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
             error_code=$?
         ;;
         ('selected_and_newer')
@@ -216,7 +212,7 @@ restore_snapshot() {
             return
         ;;
         ('all')
-            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${DestinationHost}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
             error_code=$?
         ;;
         (*)
@@ -249,10 +245,7 @@ restore_snapshot() {
 }
 
 test_connection() {
-    host=$1
-    if [[ -z "${host}" ]] then
-        host="${DestinationHost}"
-    fi
+    local host=$1
     # test SSH connection to buddy
     ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" echo ok 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
@@ -265,10 +258,7 @@ test_connection() {
 }
 
 test_connection_cmd() {
-    host=$1
-    if [[ -z "${host}" ]] then
-        host="${DestinationHost}"
-    fi
+    local host=$1
     echo "<h2>Trying to connect to ${host} over SSH..<br>"
 
     eval $(test_connection "${host}")
@@ -283,15 +273,18 @@ test_connection_cmd() {
 }
 
 get_buddy_snapshots() {
-    cmd="zfs list -o name,origin -t filesystem,volume -Hr '${SendDestinationDataset}'"
-    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmd}" 2>&1)
+    local destination_host="${1}"
+    local destination_dataset="${2}"
+
+    cmd="zfs list -o name,origin -t filesystem,volume -Hr '${destination_dataset}'"
+    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
     if [ $? -ne 0 ]; then
         ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
         printf '{"status": "failed", "error": "%s"}' "${ssh_result}"
         return
     fi
     ## Enable for debugging
-    # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${DestinationHost}\" \"${cmd}\" 2>&1"
+    # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${destination_host}\" \"${cmd}\" 2>&1"
     # echo "ssh_result: ${ssh_result}"
 
     # ssh_result should now contain one line per dataset/child dataset
@@ -300,7 +293,7 @@ get_buddy_snapshots() {
     datasets=()
     while IFS= read -r line; do
         # Basic error checking, ensure line begins with dataset name
-        if [[ "${line}" != "${SendDestinationDataset}"* ]]; then
+        if [[ "${line}" != "${destination_dataset}"* ]]; then
             ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
             printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid line: ${ssh_result}"
             return
@@ -315,7 +308,7 @@ get_buddy_snapshots() {
     for ((i = 0; i < ${#cmds[@]}; i++))
     do
         json+="\"${datasets[$i]}\":{"
-        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${DestinationHost}" "${cmds[$i]}" 2>&1)
+        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmds[$i]}" 2>&1)
         if [ $? -ne 0 ]; then
             ssh_sub_result=$(echo "${ssh_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
             printf '{"status": "failed", "error": "%s"}' "${ssh_sub_result}"
@@ -347,6 +340,7 @@ get_buddy_snapshots() {
 uninstall() {
     disable_backups_from_buddy
     remove_cron_files
+    clear_known_hosts
 }
 
 # read our configuration.
@@ -372,10 +366,10 @@ case "$1" in
 		test_connection_cmd "$2"
 	;;
     ('get_buddy_snapshots')
-        get_buddy_snapshots
+        get_buddy_snapshots "$2" "$3" 
     ;;
     ('restore_snapshot')
-        restore_snapshot "$2" "$3" "$4" "$5" "$6"
+        restore_snapshot "$2" "$3" "$4" "$5" "$6" "$7"
     ;;
     ('enable_backups_from_buddy')
         enable_backups_from_buddy
@@ -383,9 +377,12 @@ case "$1" in
     ('disable_backups_from_buddy')
         disable_backups_from_buddy
     ;;
+    ('clear_known_hosts')
+        clear_known_hosts
+    ;;
     ('uninstall')
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|test_connection|get_buddy_snapshots|restore_snapshot|uninstall"
+		echo "usage $0 update|send_backup|test_connection|get_buddy_snapshots|restore_snapshot|clear_known_hosts|uninstall"
 esac

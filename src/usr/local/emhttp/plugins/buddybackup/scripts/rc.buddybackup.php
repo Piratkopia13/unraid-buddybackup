@@ -8,9 +8,9 @@ $backups_config_path = "$plugin_path/backups.cfg";
 $sanoid_config_path = "$plugin_path/sanoid.conf";
 $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
-$sanoid_bin = "$empath/deps/sanoid";
 
 $empath = "/usr/local/emhttp/plugins/buddybackup";
+$sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
 $rc = $empath."/scripts/rc.buddybackup";
 $verbose = true;
@@ -40,8 +40,8 @@ function update() {
     global $rc;
     global $plugin_config_path;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
+    passthru($rc.' update');    
     update_backups_from_config();
-    passthru($rc.' update');
 
     if ($plugin_cfg["ReceiveBackups"] == "enable") {
         passthru($rc.' enable_backups_from_buddy');
@@ -131,6 +131,7 @@ function update_backups_from_config() {
     BB_LOG("Updating backup cronjobs");
     global $plugin_path;
     global $backups_config_path;
+    global $rc;
     $backup_cfg = parse_ini_file($backups_config_path, true);
 
     // Remove all backup cron files from $plugin_path
@@ -142,7 +143,18 @@ function update_backups_from_config() {
         }
     }
 
+    // Remove all buddybackup entries in known_hosts file
+    passthru($rc.' clear_known_hosts');
+    $known_hosts_path = "/root/.ssh/known_hosts";
+    file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND);
+
     foreach ($backup_cfg as $uid => $cfg) {
+        // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
+        // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
+        if ($key = shell_exec("ssh-keyscan -H \"".$cfg["destination_host"]."\"")) {
+            file_put_contents($known_hosts_path, $key, FILE_APPEND);
+        }
+
         $any_empty = false;
         foreach ($cfg as $key => $value) {
             if (empty($value)) {
@@ -158,7 +170,51 @@ function update_backups_from_config() {
 
         add_backup_cron_file($uid, $cfg);
     }
+    file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND);
+
     passthru("/usr/local/sbin/update_cron");
+}
+
+function start_long_running_task_echo_pid($cmd) {
+    $descriptorspec = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w']
+    ];
+    $proc = proc_open($cmd, $descriptorspec, $pipes);
+    $proc_details = proc_get_status($proc);
+    $pid = $proc_details['pid'];
+    echo $pid;
+}
+
+function restore_snapshot($argv) {
+    // uid is passed as first argument. Convert it to destination hostname, otherwise passthrough all other args to rc.buddybackup
+    global $rc;
+    global $plugin_path;
+    global $backups_config_path;
+    $backup_cfg = parse_ini_file($backups_config_path, true);
+    $uid = $argv[2];
+    if (!array_key_exists($uid, $backup_cfg)) {
+        echo "UID '$uid' does not exist";
+        return;
+    }
+    $cfg = $backup_cfg[$uid];
+
+    $cmd = $rc.' restore_snapshot '.$cfg["destination_host"].' '.$argv[3].' '.$argv[4].' '.$argv[5].' '.$argv[6].' '.$argv[7];
+    start_long_running_task_echo_pid($cmd);
+}
+
+function get_buddy_snapshots($uid) {
+    global $rc;
+    global $plugin_path;
+    global $backups_config_path;
+    $backup_cfg = parse_ini_file($backups_config_path, true);
+    if (!array_key_exists($uid, $backup_cfg)) {
+        echo "UID '$uid' does not exist";
+        return;
+    }
+    $cfg = $backup_cfg[$uid];
+    passthru($rc.' get_buddy_snapshots "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
 }
 
 function send_backup($uid) {
@@ -172,7 +228,8 @@ function send_backup($uid) {
         return;
     }
     $cfg = $backup_cfg[$uid];
-    passthru($rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
+    $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';;
+    passthru($cmd);
 }
 
 switch ($argv[1]) {
@@ -191,12 +248,18 @@ switch ($argv[1]) {
     case 'test_connection':
         passthru($rc.' '.$argv[1].' '.$argv[2]);
         break;
+    case 'get_buddy_snapshots':
+        get_buddy_snapshots($argv[2]);
+        break;
+    case 'restore_snapshot':
+        restore_snapshot($argv);
+        break;
     case 'uninstall':
         passthru($rc.' uninstall');
         break;
     
     default:
-        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup";
+        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup|get_buddy_snapshots|restore_snapshot";
         break;
 }
 ?>
