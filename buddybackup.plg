@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.02.02">
+  <!ENTITY version      "2025.02.09">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "874784184da46de7dd436e286305dda7">
+  <!ENTITY pkgMD5        "9b35509786c7c13c075b65fdb8a4ed45">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -27,8 +27,13 @@
          >
     <CHANGES>
     ##&name;
+###2025.02.09
+  Multiple backups can now be specified
+  Added support for local datasets as backup destination
+  Add option to trigger backup after snapshot creation
+  Restoring backups is now done from a button in the backup section instead of restore having its own section
 ###2025.02.02
-  Improve error handling when getting list of snapshots from buddy.
+  Improve error handling when getting list of snapshots from buddy
 ###2025.01.31
   Bug fixes
 ###2025.01.29
@@ -52,7 +57,6 @@
     <!-- Create default buddybackup.cfg -->
     <FILE Name="&pkgPath;/&name;.cfg">
       <INLINE>
-        BackupToBuddy=disable
         ReceiveBackups=disable
         ReceiveDestinationRententionHourly=0
         ReceiveDestinationRententionDaily=7
@@ -115,7 +119,7 @@
             chmod +x &emhttp;/deps/sanoid
             chmod +x &emhttp;/deps/syncoid
             chmod +x &emhttp;/deps/restrict_zfs
-            &emhttp;/scripts/rc.buddybackup update
+            &emhttp;/scripts/rc.buddybackup.php update
 
             echo ""
             echo "-----------------------------------------------------------"
@@ -142,7 +146,7 @@
             echo "-----------------------------------------------------------"
             echo ""
 
-            &emhttp;/scripts/rc.buddybackup uninstall
+            &emhttp;/scripts/rc.buddybackup.php uninstall
 
             removepkg &pkgPath;/&pkgName;
 
