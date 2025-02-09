@@ -70,9 +70,13 @@ enable_backups_from_buddy() {
 
     # add buddybackup to "AllowUsers list" in /etc/ssh/sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
-    sed -i 's/^#\?AllowUsers .*/AllowUsers root/' /etc/ssh/sshd_config
-    sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' /etc/ssh/sshd_config
-    /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+    grepped=$(grep "buddybackup" /etc/ssh/sshd_config)
+    trimmed=$(echo "${grepped}" | sed 's/^[ \t]*//')
+    if [[ ! $grepped ]] || [[ $trimmed == "#"* ]]; then
+        sed -i 's/^#\?AllowUsers .*/AllowUsers root/' /etc/ssh/sshd_config
+        sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' /etc/ssh/sshd_config
+        /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+    fi
 
     # make buddybackup user (with a homedir) if it doesnt already exist
     if ! id "${username}" >/dev/null 2>&1; then
@@ -86,16 +90,20 @@ enable_backups_from_buddy() {
     chown -R ${username}:${username} "/home/${username}/"
     echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
 
+    # note: this spins up disk
     zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"
 }
 
 disable_backups_from_buddy() {
     # remove buddybackup from "AllowUsers list" in /etc/ssh/sshd_config (and restart sshd)
-    sed -i 's/ '${username}'//' /etc/ssh/sshd_config
-    /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+    if grep -q "buddybackup" /etc/ssh/sshd_config; then
+        sed -i 's/ '${username}'//' /etc/ssh/sshd_config
+        /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+    fi
 
     rm -r "/home/${username}" >/dev/null 2>&1
 
+    # note: this spins up disk
     for dataset in $(zfs list -H -o name); do 
         if zfs allow "${dataset}" | grep -q "${username}"; then
             zfs unallow -u "${username}" "${dataset}" >/dev/null 2>&1

@@ -106,7 +106,7 @@ Set up automatic snapshot creation and pruning on your datasets. You do not need
         &nbsp;
         : <span class="buddy-left"><input type="number" name="weekly" value="<?=$data["weekly"]?:0;?>" class="narrow"> Weekly</span>
 
-        _(Trigger backup after snapshot)_:
+        _(Trigger backup after snapshot creation)_:
         : <select name="trigger" class="align">
             <?=mk_option($data["trigger"]?:"no", "no", "_(No)_");?>
             <?=backups($data["trigger"]);?>
