@@ -55,9 +55,8 @@
     </FILE>
 
     <!-- Create default buddybackup.cfg -->
-    <!-- <FILE Name="&pkgPath;/&name;.cfg">
+    <FILE Name="&pkgPath;/&name;.cfg">
       <INLINE>
-        BackupToBuddy=disable
         ReceiveBackups=disable
         ReceiveDestinationRententionHourly=0
         ReceiveDestinationRententionDaily=7
@@ -65,7 +64,7 @@
         ReceiveDestinationRententionMonthly=3
         ReceiveDestinationRententionYearly=0
       </INLINE>
-    </FILE> -->
+    </FILE>
 
     <!-- Install dependencies -->
     <FILE Run="/bin/bash">
