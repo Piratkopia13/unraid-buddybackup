@@ -85,7 +85,7 @@ function update_sanoid_conf() {
         $extra_sanoid_cfg = parse_ini_file($extra_sanoid_config_path, true);
         foreach ($extra_sanoid_cfg as $uid => $section) {
             $dataset = $section["dataset"];
-            if (str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
+            if (!empty($plugin_cfg["ReceiveDestinationDataset"]) && str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
                 BB_ERR("Buddy's destination dataset '$dataset' also specified in 'Snapshot creation and pruning' section. Remove it from there!");
                 continue;
             }
