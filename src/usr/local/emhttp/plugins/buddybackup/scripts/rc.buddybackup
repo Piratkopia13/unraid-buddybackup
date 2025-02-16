@@ -3,8 +3,6 @@ set -o pipefail
 
 plugin="buddybackup"
 
-# cd /mnt/user/sonic/buddybackup_plugin && ./makepkg.sh && upgradepkg --install-new --reinstall buddybackup.txz
-
 list_descendants() {
   local children=$(ps -o pid= --ppid "$1")
   for pid in $children; do
@@ -128,10 +126,6 @@ update() {
         rm "${ssh_key_path}.pub" >/dev/null 2>&1
         ssh-keygen -q -t ed25519 -f "${ssh_key_path}" -N ''
     fi
-
-    # Make sure deps are executable
-    chmod +x "${sanoid_bin}"
-    chmod +x "${syncoid_bin}"
 }
 
 clear_known_hosts() {

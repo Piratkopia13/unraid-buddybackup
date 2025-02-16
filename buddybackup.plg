@@ -118,9 +118,6 @@
     
     <FILE Run="/bin/bash">
         <INLINE>
-            chmod +x &emhttp;/deps/sanoid
-            chmod +x &emhttp;/deps/syncoid
-            chmod +x &emhttp;/deps/restrict_zfs
             &emhttp;/scripts/rc.buddybackup.php update
 
             echo ""
