@@ -25,7 +25,7 @@ my @ALLOWED_COMMANDS = (
     qr/command -v (?:zstd|zstdmt|mbuffer)/,
     qr/zpool get -o value -H feature\@extensible_dataset $POOL/,
     qr/ps -Ao args=/,
-    qr/zfs get -H (?:name|receive_resume_token|-p used|syncoid:sync) $DATASET$REDIRS/,
+    qr/zfs get -H (?:name|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
     qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,

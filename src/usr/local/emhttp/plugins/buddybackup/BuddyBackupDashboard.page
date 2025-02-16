@@ -1,0 +1,110 @@
+Menu="Dashboard:0"
+Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0','>')"
+---
+<style>
+  span.w30{min-width:30%;max-width:30%;float:left;overflow:hidden;text-overflow:ellipsis}
+  span.w29{min-width:29%;max-width:29%;float:left;overflow:hidden;text-overflow:ellipsis}
+  span.w12{min-width:12%;max-width:12%;float:left;overflow:hidden;text-overflow:ellipsis}
+</style>
+<?php
+$pluginname = "buddybackup";
+
+// Backups that are run from cron, or from a snapshot creation trigger count as enabled
+$bb_enabled_backups = array();
+$bb_num_autosnap = 0;
+$bb_num_autoprune = 0;
+
+$bb_snapshot_cfg_file = "/boot/config/plugins/$pluginname/snapshots.cfg";
+$bb_snapshot_cfg = my_parse_ini_file($bb_snapshot_cfg_file, true);
+foreach ($bb_snapshot_cfg as $uid => $cfg) {
+  if ($cfg["autosnap"] == "yes") { $bb_num_autosnap++; }
+  if ($cfg["autoprune"] == "yes") { $bb_num_autoprune++; }
+  if ($cfg["autosnap"] == "yes" && !empty($cfg["trigger"]) && $cfg["trigger"] != "no") {
+    $bb_enabled_backups[$cfg["trigger"]] = array();
+  }
+}
+$bb_backup_cfg_file = "/boot/config/plugins/$pluginname/backups.cfg";
+$bb_backup_cfg = my_parse_ini_file($bb_backup_cfg_file, true);
+foreach ($bb_backup_cfg as $uid => $cfg) {
+  if ($cfg["enable"] == "yes" || array_key_exists($uid, $bb_enabled_backups)) {
+    $bb_enabled_backups[$uid] = $cfg;
+  }
+}
+$bb_cfg_file = "/boot/config/plugins/$pluginname/$pluginname.cfg";
+$bb_cfg = my_parse_ini_file($bb_cfg_file, false);
+$bb_buddys_backup = ($bb_cfg["ReceiveBackups"] == "enable") ? ", Buddy's backup" : "";
+
+$bb_enabled_backups = array_filter($bb_enabled_backups);
+$bb_num_enabled_backups = count($bb_enabled_backups);
+
+function bb_info($file) {
+  $ret = array();
+  $ret["last_ran"] = "-";
+  $ret["dest_size"] = "-";
+  if (file_exists($file)) {
+    $info = parse_ini_file($file);
+    if (!empty($info["last_ran"])) {
+      $ret["last_ran"] = my_time((int)$info["last_ran"]);
+    }
+    if (!empty($info["dest_size"])) {
+      $ret["dest_size"] = $info["dest_size"];
+    }
+  }
+  return $ret;
+}
+
+$bb_backups_table_content = "";
+foreach ($bb_enabled_backups as $uid => $cfg) {
+  $source = $cfg["source_dataset"];
+  $dest = ($cfg["type"] == "local") ? $cfg["destination_dataset"] : $cfg["destination_host"];
+  $info = bb_info("/tmp/buddybackup-$uid");
+  $last_ran = $info["last_ran"];
+  $dest_size = $info["dest_size"];
+  $bb_backups_table_content .=
+  <<<EOT
+    <tr><td>
+    <span class="w29">$source</span>
+    <span class="w29">$dest</span>
+    <span class="w30">$last_ran</span>
+    <span class="w12">$dest_size<span>
+  </td></tr>
+  EOT;
+}
+
+$bb_buddys_backup_table_content = "";
+if (!empty($bb_buddys_backup)) {
+  $dest = $bb_cfg["ReceiveDestinationDataset"];
+  $info = bb_info("/tmp/buddybackup-buddy");
+  $last_ran = $info["last_ran"];
+  $dest_size = $info["dest_size"];
+  $bb_buddys_backup_table_content =
+  <<<EOT
+    <tr><td><hr></td></tr>
+    <tr><td>
+      <span class="w29">Buddy</span>
+      <span class="w29">$dest</span>
+      <span class="w30">$last_ran</span>
+      <span class="w12">$dest_size<span>
+    </td></tr>
+  EOT;
+}
+
+$mytiles[$pluginname]['column3'] =
+<<<EOT
+<tbody title="_(BuddyBackup info)_">
+<tr><td><img style="margin-right: 8px; width: 32px; height: 32px" src="/plugins/buddybackup/buddybackup.png" alt="BuddyBackup">
+<div class='section'>ZFS Buddy Backup<span><br>
+Enabled: $bb_num_enabled_backups backup(s), autosnap $bb_num_autosnap dataset(s), autoprune $bb_num_autoprune dataset(s)$bb_buddys_backup
+</span><br></div>
+<a href="/Settings/BuddyBackup" title="_(Go to BuddyBackup settings)_"><i class="fa fa-fw fa-cog control"></i></a></td></tr></td></tr>
+<tr class="header"><td>
+  <span class="w29">Source</span>
+  <span class="w29">Dest</span>
+  <span class="w30">Last ran</span>
+  <span class="w12">Dest size<span>
+</td></tr>
+$bb_backups_table_content
+$bb_buddys_backup_table_content
+</tbody>
+EOT;
+?>

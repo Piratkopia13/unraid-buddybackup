@@ -171,10 +171,11 @@ send_backup() {
     if [[ "${recursive}" == "yes" ]] then
         my_syncoid_flags+=" --recursive"
     fi
+    local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced backup to buddy!"
     else 
-        local error_code=$?
+        error_code=$?
         unraid_notify "Sending backup failed. Error code ${error_code}. Full output: ${result}" "alert"
         printf -v result "Sending backup failed. Error code ${error_code}."
     fi
@@ -183,6 +184,7 @@ send_backup() {
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"
     fi
+    exit $error_code
 }
 
 send_local_backup() {
@@ -209,10 +211,11 @@ send_local_backup() {
     if [[ "${recursive}" == "yes" ]] then
         my_syncoid_flags+=" --recursive"
     fi
+    local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced local backup!"
     else 
-        local error_code=$?
+        error_code=$?
         unraid_notify "Local backup failed. Error code ${error_code}. Full output: ${result}" "alert"
         printf -v result "Local backup failed. Error code ${error_code}."
     fi
@@ -221,6 +224,7 @@ send_local_backup() {
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"
     fi
+    exit $error_code
 }
 
 restore_snapshot() {
@@ -380,6 +384,21 @@ get_buddy_snapshots() {
     echo "${json}"
 }
 
+get_buddy_used_size() {
+    local destination_host="${1}"
+    local destination_dataset="${2}"
+
+    local cmd="zfs get -H -o value used '${destination_dataset}'"
+    local ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+    local error_code=$?
+    if [[ $error_code -eq 0 ]] && [[ -z "${ssh_result}" ]]; then
+        ssh_result="empty response"
+        error_code=1
+    fi
+    echo "${ssh_result}";
+    exit $error_code
+}
+
 uninstall() {
     disable_backups_from_buddy
     remove_cron_files
@@ -404,19 +423,21 @@ case "$1" in
 		update
 	;;
     ('send_backup')
-		send_backup "$2" "$3" "$4" "$5"
+		send_backup "${2}" "${3}" "${4}" "${5}"
 	;;
     ('send_local_backup')
-		send_local_backup "$2" "$3" "$4"
+		send_local_backup "${2}" "${3}" "${4}"
 	;;
     ('test_connection')
-		test_connection_cmd "$2"
+		test_connection_cmd "${2}"
 	;;
     ('get_buddy_snapshots')
-        get_buddy_snapshots "$2" "$3" 
+        get_buddy_snapshots "${2}" "${3}" 
     ;;
+    ('get_buddy_used_size')
+        get_buddy_used_size "${2}" "${3}"
     ('restore_snapshot')
-        restore_snapshot "$2" "$3" "$4" "$5" "$6" "$7"
+        restore_snapshot "${2}" "${3}" "${4}" "${5}" "${6}" "${7}"
     ;;
     ('enable_backups_from_buddy')
         enable_backups_from_buddy
@@ -431,5 +452,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_buddy_snapshots|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_buddy_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac

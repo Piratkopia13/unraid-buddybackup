@@ -25,6 +25,12 @@ function BB_ERR($msg) {
     syslog(LOG_ERR, "$plugin: ERROR: $msg");
     exec('echo "'.$msg.'" | '.$log_script);
 }
+function BB_WARN($msg) {
+    global $plugin;
+    global $log_script;
+    syslog(LOG_WARNING, "$plugin: WARN: $msg");
+    exec('echo "'.$msg.'" | '.$log_script);
+}
 function BB_VERBOSE($msg) {
     global $verbose;
     if ($verbose) BB_LOG($msg);
@@ -240,12 +246,34 @@ function send_backup($uid) {
         return;
     }
     $cfg = $backup_cfg[$uid];
+    $result_code = null;
     if ($cfg['type'] == "local") {
-        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'"';;
-        passthru($cmd);
+        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'"';
+        passthru($cmd, $result_code);
     } else {
-        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';;
-        passthru($cmd);
+        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';
+        passthru($cmd, $result_code);
+    }
+    BB_VERBOSE("backup result: $result_code");
+    if ($result_code == 0) {
+        // Backup succeeded! Store info to tmp file read by plugin dashboard panel
+        $dest_size = "";
+        if ($cfg['type'] == "local") {
+            $dest_size = exec("zfs get -H -o value used ".$cfg["destination_dataset"]);
+        } else {
+            $cmd = $rc.' get_buddy_used_size "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';
+            $out = array();
+            $result = exec($cmd, $out, $result_code);
+            if ($result_code == 0) {
+                $dest_size = $result;
+            } else {
+                BB_WARN("Failed to get used size from buddy: $result");
+            }
+        }
+
+        $file = "/tmp/buddybackup-$uid";
+        $info = "last_ran=".time()."\ndest_size=$dest_size";
+        file_put_contents($file, $info);
     }
 }
 
