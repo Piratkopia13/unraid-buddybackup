@@ -40,11 +40,23 @@ $bb_num_enabled_backups = count($bb_enabled_backups);
 function bb_info($file) {
   $ret = array();
   $ret["last_ran"] = "-";
+  $ret["last_ran_style"] = "";
   $ret["dest_size"] = "-";
   if (file_exists($file)) {
     $info = parse_ini_file($file);
     if (!empty($info["last_ran"])) {
-      $ret["last_ran"] = my_time((int)$info["last_ran"]);
+      $last_ran = (int)$info["last_ran"];
+      $current_time = time();
+
+      // TODO: expose time periods for yellow and red text
+      $one_week_in_seconds = 7 * 24 * 60 * 60;
+      $one_month_in_seconds = 30 * 24 * 60 * 60;
+      $ret["last_ran"] = my_time($last_ran);
+      if (($current_time - $last_ran) > $one_month_in_seconds) {
+        $ret["last_ran_style"] = "color: red;";
+      } else if (($current_time - $last_ran) > $one_week_in_seconds) {
+        $ret["last_ran_style"] = "color: yellow;";
+      }
     }
     if (!empty($info["dest_size"])) {
       $ret["dest_size"] = $info["dest_size"];
@@ -59,13 +71,14 @@ foreach ($bb_enabled_backups as $uid => $cfg) {
   $dest = ($cfg["type"] == "local") ? $cfg["destination_dataset"] : $cfg["destination_host"];
   $info = bb_info("/tmp/buddybackup-$uid");
   $last_ran = $info["last_ran"];
+  $last_ran_style = $info["last_ran_style"];
   $dest_size = $info["dest_size"];
   $bb_backups_table_content .=
   <<<EOT
     <tr><td>
     <span class="w29">$source</span>
     <span class="w29">$dest</span>
-    <span class="w30">$last_ran</span>
+    <span class="w30" style="$last_ran_style">$last_ran</span>
     <span class="w12">$dest_size<span>
   </td></tr>
   EOT;
@@ -76,6 +89,7 @@ if (!empty($bb_buddys_backup)) {
   $dest = $bb_cfg["ReceiveDestinationDataset"];
   $info = bb_info("/tmp/buddybackup-buddy");
   $last_ran = $info["last_ran"];
+  $last_ran_style = $info["last_ran_style"];
   $dest_size = $info["dest_size"];
   $bb_buddys_backup_table_content =
   <<<EOT
@@ -83,7 +97,7 @@ if (!empty($bb_buddys_backup)) {
     <tr><td>
       <span class="w29">Buddy</span>
       <span class="w29">$dest</span>
-      <span class="w30">$last_ran</span>
+      <span class="w30" style="$last_ran_style">$last_ran</span>
       <span class="w12">$dest_size<span>
     </td></tr>
   EOT;
