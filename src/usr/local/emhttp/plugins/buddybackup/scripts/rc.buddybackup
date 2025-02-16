@@ -143,6 +143,17 @@ is_encrypted() {
     [[ $(zfs get -Ho value encryption "${dataset}" 2>&1) != "off" ]]
 }
 
+send_mark_received_backup() {
+    local destination_host="${1}"
+    
+    local cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup"
+    local ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+    local error_code=$?
+    if [[ $error_code -ne 0 ]]; then
+        write "" "Failed to send mark_received_backup to buddy"
+    fi
+}
+
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
@@ -174,6 +185,7 @@ send_backup() {
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced backup to buddy!"
+        send_mark_received_backup "${destination_host}"
     else 
         error_code=$?
         unraid_notify "Sending backup failed. Error code ${error_code}. Full output: ${result}" "alert"

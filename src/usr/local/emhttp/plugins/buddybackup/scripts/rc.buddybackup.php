@@ -235,6 +235,16 @@ function get_buddy_snapshots($uid) {
     passthru($rc.' get_buddy_snapshots "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
 }
 
+// Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
+function mark_received_backup() {
+    global $plugin_config_path;
+    $plugin_cfg = parse_ini_file($plugin_config_path, false);
+    $dest_size = exec("zfs get -H -o value used ".$plugin_cfg["ReceiveDestinationDataset"]);
+    $file = "/tmp/buddybackup-buddy";
+    $info = "last_ran=".time()."\ndest_size=$dest_size";
+    file_put_contents($file, $info);
+}
+
 function send_backup($uid) {
     BB_LOG("Sending backup $uid");
     global $rc;
@@ -296,6 +306,9 @@ switch ($argv[1]) {
     case 'get_buddy_snapshots':
         get_buddy_snapshots($argv[2]);
         break;
+    case 'mark_received_backup':
+        mark_received_backup();
+        break;
     case 'restore_snapshot':
         restore_snapshot($argv);
         break;
@@ -304,7 +317,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup|get_buddy_snapshots|restore_snapshot";
+        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup|get_buddy_snapshots|mark_received_backup|restore_snapshot";
         break;
 }
 ?>
