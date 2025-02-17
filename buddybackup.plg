@@ -7,7 +7,7 @@
   <!ENTITY version      "2025.02.10">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
-  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
+  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
   <!ENTITY pluginURL    "&gitURL;/&name;.plg">
 
@@ -22,7 +22,6 @@
          version="&version;"
          pluginURL="&pluginURL;"
          launch="&launch;"
-         icon="buddybackup.png"
          min="6.12.0"
          >
     <CHANGES>
