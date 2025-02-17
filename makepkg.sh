@@ -1,6 +1,8 @@
 #!/bin/bash
 
-SRC_DIR="/mnt/user/sonic/buddybackup_plugin/src"
+DST_DIR="/mnt/user/sonic/buddybackup_plugin"
+SRC_DIR="${DST_DIR}/src"
+
 TMP_DIR="/tmp/buddybackup_${RANDOM}"
 
 cp -r "${SRC_DIR}" "${TMP_DIR}"
@@ -8,8 +10,8 @@ cd "${TMP_DIR}"
 chown -R root:root ./
 chmod -R 755 ./
 
-rm "${SRC_DIR}/../buddybackup.txz"
-makepkg -l y -c y "${SRC_DIR}/../buddybackup.txz"
+rm "${DST_DIR}/buddybackup.txz"
+makepkg -l y -c y "${DST_DIR}/buddybackup.txz"
 ec=$?
 cd "${SRC_DIR}"
 echo "Removing ${TMP_DIR}"
@@ -19,12 +21,12 @@ if [[ "${ec}" -ne 0 ]]; then
 fi
 
 # Update md5 in plg file
-md5=$(md5sum "${SRC_DIR}/../buddybackup.txz" | sed 's/\s.*$//')
-sed -i "/<!ENTITY pkgMD5/c\  <!ENTITY pkgMD5        \"${md5}\">" "${SRC_DIR}/../buddybackup.plg"
+md5=$(md5sum "${DST_DIR}/buddybackup.txz" | sed 's/\s.*$//')
+sed -i "/<!ENTITY pkgMD5/c\  <!ENTITY pkgMD5        \"${md5}\">" "${DST_DIR}/buddybackup.plg"
 
 if [[ "${1}" == "reinstall" ]]; then
     echo "reinstalling.."
-    upgradepkg --install-new --reinstall "${SRC_DIR}/../buddybackup.txz"
+    upgradepkg --install-new --reinstall "${DST_DIR}/buddybackup.txz"
     shift
 fi
 if [[ "${1}" == "update" ]]; then
