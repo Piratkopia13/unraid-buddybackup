@@ -106,7 +106,7 @@ if (!empty($bb_buddys_backup)) {
 $mytiles[$pluginname]['column3'] =
 <<<EOT
 <tbody title="_(BuddyBackup info)_">
-<tr><td><img style="margin-right: 8px; width: 32px; height: 32px" src="/plugins/buddybackup/buddybackup.png" alt="BuddyBackup">
+<tr><td><img style="margin-right: 8px; width: 32px; height: 32px" src="/plugins/buddybackup/images/buddybackup.png" alt="BuddyBackup">
 <div class='section'>ZFS Buddy Backup<span><br>
 Enabled: $bb_num_enabled_backups backup(s), autosnap $bb_num_autosnap dataset(s), autoprune $bb_num_autoprune dataset(s)$bb_buddys_backup
 </span><br></div>

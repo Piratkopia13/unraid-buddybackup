@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "414b1b44840dc707c0efba0c7761c178">
+  <!ENTITY pkgMD5        "061dd287fc804415fec158b7a6843b69">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -22,7 +22,7 @@
          version="&version;"
          pluginURL="&pluginURL;"
          launch="&launch;"
-         icon="&gitURL;/src&emhttp;/buddybackup.png"
+         icon="buddybackup.png"
          min="6.12.0"
          >
     <CHANGES>

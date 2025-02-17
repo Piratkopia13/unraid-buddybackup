@@ -1,7 +1,7 @@
 Menu="Utilities"
 Title="ZFS Buddy Backup"
 Type="xmenu"
-Icon="buddybackup.png"
+Icon="images/buddybackup.png"
 Tag="buddybackup"
 ---
 <?php
