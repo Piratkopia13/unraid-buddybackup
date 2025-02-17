@@ -1,6 +1,17 @@
 Menu="BuddyBackup:3"
 Title="Buddy's Backups"
 ---
+<script>
+function update_example() {
+  var val = $('form').find('select[name=ReceiveDestinationDataset]').val();
+  $('#buddybackup-destination-example').text("Example for what buddy can use as destination dataset: "+val+"/my-stuff");
+}
+$(function() { 
+  $('form').find('select[name=ReceiveDestinationDataset]').each(function(){$(this).on('input change', update_example)});
+  update_example();
+})
+
+</script>
 <?php
   $disabled = ($disable_receive) ? "disabled" : "";
 ?>
@@ -21,10 +32,14 @@ _(Enable)_:
 _(Buddy's SSH public key (get this from your buddy))_:
 : <input type="text" name="DestinationPubSSHKey" class="align" value="<?=$cfg['DestinationPubSSHKey'];?>" <?=$disabled?>>
 
-_(Destination parent dataset (must match buddy's setting))_:
+_(Destination parent dataset)_:
 : <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
   <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
   </select>
+<div class="buddybackup-center" style="color:gray;">Buddy should prefix their destination dataset with this, but always end with a child dataset.
+Buddy can use any child dataset following this as destination, but not this dataset directly.<br>
+<span id="buddybackup-destination-example"></span></div>
+<br>
 
 _(Snapshot retention)_:
 : <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly</span>
