@@ -4,17 +4,17 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.02.10">
+  <!ENTITY version      "2025.02.17">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
-  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
+  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
   <!ENTITY pluginURL    "&gitURL;/&name;.plg">
 
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "414b1b44840dc707c0efba0c7761c178">
+  <!ENTITY pkgMD5        "2ea5b5b05fc72a3f96dd8da6802cbdbc">
 ]>
 
 <PLUGIN  name="&displayName;"
@@ -22,11 +22,13 @@
          version="&version;"
          pluginURL="&pluginURL;"
          launch="&launch;"
-         icon="&gitURL;/src&emhttp;/buddybackup.png"
          min="6.12.0"
          >
     <CHANGES>
     ##&name;
+###2025.02.17
+  Add panel to Unraid Dashboard with info about last backup and destination size
+  Clarified remote destination dataset names in settings
 ###2025.02.10
   Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset
 ###2025.02.09
@@ -118,9 +120,6 @@
     
     <FILE Run="/bin/bash">
         <INLINE>
-            chmod +x &emhttp;/deps/sanoid
-            chmod +x &emhttp;/deps/syncoid
-            chmod +x &emhttp;/deps/restrict_zfs
             &emhttp;/scripts/rc.buddybackup.php update
 
             echo ""

@@ -1,7 +1,7 @@
 Menu="Utilities"
 Title="ZFS Buddy Backup"
 Type="xmenu"
-Icon="buddybackup.png"
+Icon="images/buddybackup.png"
 Tag="buddybackup"
 ---
 <?php
@@ -161,11 +161,11 @@ This plugin is fully open source, and I encourage you to review the source to en
 <br><hr>
 <span id="buddybackup-not-running">No backups or restores are currently running.</span>
 <div id="buddybackup-restore-running" style="display:none;">
-    <h3>A restore is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show restore log" onclick="show_in_progress_log('Restore in progress', '#buddybackup-restore-log', 'active-textarea')">
+    <h3>A restore is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show restore log" onclick="show_in_progress_log('Restore log', '#buddybackup-restore-log', 'active-textarea')">
     <span id="buddybackup-restore-log" style="display:none;"><textarea readonly class="buddybackup-restore-output-log"></textarea></span>
 </div>
 <div id="buddybackup-backup-running" style="display:none;">
-    <h3>A backup is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show backup log" onclick="show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea')">
+    <h3>A backup is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show backup log" onclick="show_in_progress_log('Backup log', '#buddybackup-backup-log', 'active-textarea')">
     <span id="buddybackup-backup-log" style="display:none;"><textarea readonly class="buddybackup-backup-output-log"></textarea></span>
 </div>
 </span>

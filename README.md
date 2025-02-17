@@ -8,7 +8,7 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 ### [User guide here](https://forums.unraid.net/topic/186256-beta-zfs-buddybackup-plugin-guide/)
 
-![Logo](src/usr/local/emhttp/plugins/buddybackup/buddybackup.png)
+![Logo](src/usr/local/emhttp/plugins/buddybackup/images/buddybackup.png)
 
 ---
 
