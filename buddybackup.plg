@@ -17,7 +17,7 @@
   <!ENTITY pkgMD5        "2ea5b5b05fc72a3f96dd8da6802cbdbc">
 ]>
 
-<PLUGIN  name="&displayName;"
+<PLUGIN  name="&name;"
          author="&author;"
          version="&version;"
          pluginURL="&pluginURL;"
