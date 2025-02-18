@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.02.17">
+  <!ENTITY version      "2025.02.18">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "2ea5b5b05fc72a3f96dd8da6802cbdbc">
+  <!ENTITY pkgMD5        "ecd8bb0e60b5df113c9bca4384c703de">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,8 @@
          >
     <CHANGES>
     ##&name;
+###2025.02.18
+    Expose advanced settings for utc timezone, and dashboard panel coloring
 ###2025.02.17
   Add panel to Unraid Dashboard with info about last backup and destination size
   Clarified remote destination dataset names in settings

@@ -42,10 +42,38 @@ function ENSURE_SUCCESS($b) {
     }
 }
 
+function write_ini($file, $data) {
+    $content = "";
+    foreach ($data as $key => $value) {
+        $content .= "$key=\"$value\"\n";
+    }
+    ENSURE_SUCCESS(file_put_contents($file, $content));
+}
+
+// update() runs on system boot, on plugin install/update, and when backup settings are changed.
 function update() {
     global $rc;
     global $plugin_config_path;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
+    // Set config defaults
+    {
+        $any_changed = false;
+        $set_default = function($key, $default) use (&$any_changed, &$plugin_cfg) {
+            if (empty($plugin_cfg[$key])) {
+                $plugin_cfg[$key] = $default;
+                $any_changed = true;
+                BB_VERBOSE("Added key '$key' with default value '$default' to cfg.");
+            }
+        };
+        $set_default("BackupDaysAgoWarning", "7");
+        $set_default("BackupDaysAgoCritical", "30");
+        $set_default("UtcTimezone", "no");
+
+        if ($any_changed) {
+            write_ini($plugin_config_path, $plugin_cfg);
+        }
+    }
+
     passthru($rc.' update');    
     update_backups_from_config();
 
@@ -118,13 +146,16 @@ function enable_sanoid_cron() {
     global $sanoid_bin;
     global $plugin_path;
     global $log_script;
+    global $plugin_config_path;
+    $plugin_cfg = parse_ini_file($plugin_config_path, false);
     if (file_exists($sanoid_cron_path)) {
         ENSURE_SUCCESS(unlink($sanoid_cron_path));
     }
+    $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"TZ=UTC $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
     # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
-    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"TZ=UTC $sanoid_bin --configdir=\"$plugin_path\" --take-snapshots\" 2>&1 | $log_script\n";
+    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --take-snapshots\" 2>&1 | $log_script\n";
     # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"$sanoid_bin --configdir=\"$plugin_path\" --prune-snapshots\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content));
     BB_VERBOSE("Created $sanoid_cron_path");
@@ -161,13 +192,13 @@ function update_backups_from_config() {
     // Remove all buddybackup entries in known_hosts file
     passthru($rc.' clear_known_hosts');
     $known_hosts_path = "/root/.ssh/known_hosts";
-    file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND);
+    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND));
 
     foreach ($backup_cfg as $uid => $cfg) {
         // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
         // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
         if ($key = shell_exec("ssh-keyscan -H \"".$cfg["destination_host"]."\"")) {
-            file_put_contents($known_hosts_path, $key, FILE_APPEND);
+            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND));
         }
 
         $is_local = $cfg['type'] == "local";
@@ -188,7 +219,7 @@ function update_backups_from_config() {
 
         add_backup_cron_file($uid, $cfg);
     }
-    file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND);
+    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND));
 
     passthru("/usr/local/sbin/update_cron");
 }
