@@ -38,6 +38,7 @@ $bb_enabled_backups = array_filter($bb_enabled_backups);
 $bb_num_enabled_backups = count($bb_enabled_backups);
 
 function bb_info($file) {
+  global $bb_cfg;
   $ret = array();
   $ret["last_ran"] = "-";
   $ret["last_ran_style"] = "";
@@ -48,9 +49,8 @@ function bb_info($file) {
       $last_ran = (int)$info["last_ran"];
       $current_time = time();
 
-      // TODO: expose time periods for yellow and red text
-      $one_week_in_seconds = 7 * 24 * 60 * 60;
-      $one_month_in_seconds = 30 * 24 * 60 * 60;
+      $one_week_in_seconds = (int)$bb_cfg["BackupDaysAgoWarning"] * 24 * 60 * 60;
+      $one_month_in_seconds = (int)$bb_cfg["BackupDaysAgoCritical"] * 24 * 60 * 60;
       $ret["last_ran"] = my_time($last_ran);
       if (($current_time - $last_ran) > $one_month_in_seconds) {
         $ret["last_ran_style"] = "color: red;";
