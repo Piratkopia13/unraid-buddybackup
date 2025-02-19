@@ -47,13 +47,18 @@ function write_ini($file, $data) {
     foreach ($data as $key => $value) {
         $content .= "$key=\"$value\"\n";
     }
-    ENSURE_SUCCESS(file_put_contents($file, $content));
+    ENSURE_SUCCESS(file_put_contents($file, $content)!==false);
+}
+
+function file_exists_and_not_empty($file) {
+    return file_exists($file) && filesize($file) > 1;
 }
 
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
 function update() {
     global $rc;
     global $plugin_config_path;
+    global $extra_sanoid_config_path;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
     // Set config defaults
     {
@@ -77,13 +82,18 @@ function update() {
     passthru($rc.' update');    
     update_backups_from_config();
 
-    if ($plugin_cfg["ReceiveBackups"] == "enable") {
-        passthru($rc.' enable_backups_from_buddy');
-        update_sanoid_conf();
+    update_sanoid_conf();
+    $receive_backups_enabled = $plugin_cfg["ReceiveBackups"] == "enable";
+    if ($receive_backups_enabled || file_exists_and_not_empty($extra_sanoid_config_path)) {
         enable_sanoid_cron();
     } else {
-        passthru($rc.' disable_backups_from_buddy');
         disable_sanoid_cron();
+    }
+
+    if ($receive_backups_enabled) {
+        passthru($rc.' enable_backups_from_buddy');
+    } else {
+        passthru($rc.' disable_backups_from_buddy');
     }
 }
 
@@ -102,28 +112,33 @@ function update_sanoid_conf() {
     global $empath;
     global $log_script;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
-    
-    // save retention for buddy's backups to sanoid conf
-    $sanoid_conf_content = "[".$plugin_cfg["ReceiveDestinationDataset"]."]\n";
-    $sanoid_conf_content .= "    hourly = ".$plugin_cfg["ReceiveDestinationRententionHourly"]."\n";
-    $sanoid_conf_content .= "    daily = ".$plugin_cfg["ReceiveDestinationRententionDaily"]."\n";
-    $sanoid_conf_content .= "    weekly = ".$plugin_cfg["ReceiveDestinationRententionWeekly"]."\n";
-    $sanoid_conf_content .= "    monthly = ".$plugin_cfg["ReceiveDestinationRententionMonthly"]."\n";
-    $sanoid_conf_content .= "    yearly = ".$plugin_cfg["ReceiveDestinationRententionYearly"]."\n";
-    $sanoid_conf_content .= "    autosnap = no\n";
-    $sanoid_conf_content .= "    autoprune = yes\n";
-    $sanoid_conf_content .= "    recursive = yes\n";
+    $receive_backups_enabled = $plugin_cfg["ReceiveBackups"] == "enable";
+
+    $sanoid_conf_content = "";
+    if ($receive_backups_enabled) {
+        // save retention for buddy's backups to sanoid conf
+        $sanoid_conf_content .= "[".$plugin_cfg["ReceiveDestinationDataset"]."]\n";
+        $sanoid_conf_content .= "    hourly = ".$plugin_cfg["ReceiveDestinationRententionHourly"]."\n";
+        $sanoid_conf_content .= "    daily = ".$plugin_cfg["ReceiveDestinationRententionDaily"]."\n";
+        $sanoid_conf_content .= "    weekly = ".$plugin_cfg["ReceiveDestinationRententionWeekly"]."\n";
+        $sanoid_conf_content .= "    monthly = ".$plugin_cfg["ReceiveDestinationRententionMonthly"]."\n";
+        $sanoid_conf_content .= "    yearly = ".$plugin_cfg["ReceiveDestinationRententionYearly"]."\n";
+        $sanoid_conf_content .= "    autosnap = no\n";
+        $sanoid_conf_content .= "    autoprune = yes\n";
+        $sanoid_conf_content .= "    recursive = yes\n";
+    }
     
     // save manual entries from "snapshot creation and pruning" section in settings
-    if (file_exists($extra_sanoid_config_path)) {
+    if (file_exists_and_not_empty($extra_sanoid_config_path)) {
         $extra_sanoid_cfg = parse_ini_file($extra_sanoid_config_path, true);
+
         foreach ($extra_sanoid_cfg as $uid => $section) {
             $dataset = $section["dataset"];
-            if (!empty($plugin_cfg["ReceiveDestinationDataset"]) && str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
+            if ($receive_backups_enabled && !empty($plugin_cfg["ReceiveDestinationDataset"]) && str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
                 BB_ERR("Buddy's destination dataset '$dataset' also specified in 'Snapshot creation and pruning' section. Remove it from there!");
                 continue;
             }
-            $sanoid_conf_content .= "\n[$dataset]\n";
+            $sanoid_conf_content .= "[$dataset]\n";
             foreach ($section as $key => $value) {
                 if ($key == "dataset") continue;
                 if ($key == "trigger") {
@@ -138,7 +153,7 @@ function update_sanoid_conf() {
         }
     }
 
-    ENSURE_SUCCESS(file_put_contents($sanoid_config_path, $sanoid_conf_content));
+    ENSURE_SUCCESS(file_put_contents($sanoid_config_path, $sanoid_conf_content)!==false);
 }
 
 function enable_sanoid_cron() {
@@ -157,7 +172,7 @@ function enable_sanoid_cron() {
     # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
     # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --take-snapshots\" 2>&1 | $log_script\n";
     # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"$sanoid_bin --configdir=\"$plugin_path\" --prune-snapshots\" 2>&1 | $log_script\n";
-    ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content));
+    ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
 }
@@ -169,7 +184,7 @@ function add_backup_cron_file($uid, $cfg) {
 
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
     $cron_content .= $cfg["backup_cron"] . " flock -n \"/var/lock/buddybackup-$uid\" -c \"$empath/scripts/rc.buddybackup.php send_backup $uid\" 2>&1 | $log_script\n";
-    ENSURE_SUCCESS(file_put_contents("$plugin_path/backup-$uid.cron", $cron_content));
+    ENSURE_SUCCESS(file_put_contents("$plugin_path/backup-$uid.cron", $cron_content)!==false);
     BB_VERBOSE("Created $plugin_path/backup-$uid.cron");
 }
 
@@ -192,13 +207,13 @@ function update_backups_from_config() {
     // Remove all buddybackup entries in known_hosts file
     passthru($rc.' clear_known_hosts');
     $known_hosts_path = "/root/.ssh/known_hosts";
-    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND));
+    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND)!==false);
 
     foreach ($backup_cfg as $uid => $cfg) {
         // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
         // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
         if ($key = shell_exec("ssh-keyscan -H \"".$cfg["destination_host"]."\"")) {
-            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND));
+            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND)!==false);
         }
 
         $is_local = $cfg['type'] == "local";
@@ -219,7 +234,7 @@ function update_backups_from_config() {
 
         add_backup_cron_file($uid, $cfg);
     }
-    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND));
+    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND)!==false);
 
     passthru("/usr/local/sbin/update_cron");
 }
