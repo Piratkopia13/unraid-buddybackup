@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Containers>
-<PluginURL>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/main/buddybackup.plg</PluginURL>
+<PluginURL>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/buddybackup.plg</PluginURL>
 <PluginAuthor>Alexander Wester</PluginAuthor>
 <Beta>True</Beta>
 <Category>Backup: Tools:</Category>

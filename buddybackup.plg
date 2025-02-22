@@ -7,7 +7,7 @@
   <!ENTITY version      "2025.02.19">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
-  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/&branch;">
+  <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
   <!ENTITY gitRelURL    "https://github.com/Piratkopia13/unraid-&name;/releases/download/&version;">
   <!ENTITY pluginURL    "&gitURL;/&name;.plg">
 
