@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.02.19">
+  <!ENTITY version      "2025.02.23">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "1324d81afd11e6ea1bc8056ec59170d4">
+  <!ENTITY pkgMD5        "24c93e62fc95da891ae9d59d49885278">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,8 +26,10 @@
          >
     <CHANGES>
     ##&name;
+###2025.02.23
+  Fix permission issue when getting dataset size for buddy's backup shown in dashboard panel
 ###2025.02.19
-  Fix bug requiring buddys backups to be enable for snapshot creation/pruning to work. Thanks to @adamzetpl for finding this bug
+  Fix bug requiring buddys backups to be enable for snapshot creation/pruning to work. Thanks to @adamzetpl for reporting this bug
   Fix bug causing snapshot creation/pruning entries to break after removing any entry.
 ###2025.02.18
    Expose advanced settings for utc timezone, and dashboard panel coloring
@@ -35,7 +37,7 @@
   Add panel to Unraid Dashboard with info about last backup and destination size
   Clarified remote destination dataset names in settings
 ###2025.02.10
-  Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset. Thanks to @MowMdown for finding this bug
+  Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset. Thanks to @MowMdown for reporting this bug
 ###2025.02.09
   Multiple backups can now be specified
   Added support for local datasets as backup destination
