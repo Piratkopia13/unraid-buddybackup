@@ -9,6 +9,7 @@ $backups_config_path = "$plugin_path/backups.cfg";
 $sanoid_config_path = "$plugin_path/sanoid.conf";
 $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
+$tmp_recv_dataset_path = "/tmp/buddybackup-recv-dest";
 
 $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
@@ -59,6 +60,7 @@ function update() {
     global $rc;
     global $plugin_config_path;
     global $extra_sanoid_config_path;
+    global $tmp_recv_dataset_path;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
     // Set config defaults
     {
@@ -81,6 +83,10 @@ function update() {
 
     passthru($rc.' update');    
     update_backups_from_config();
+
+    // Write buddy's receive destination dataset to tmp file 
+    // so it can be accessed by user buddybackup executing mark_received_backup
+    file_put_contents($tmp_recv_dataset_path, $plugin_cfg["ReceiveDestinationDataset"]);
 
     update_sanoid_conf();
     $receive_backups_enabled = $plugin_cfg["ReceiveBackups"] == "enable";
@@ -283,9 +289,9 @@ function get_buddy_snapshots($uid) {
 
 // Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
 function mark_received_backup() {
-    global $plugin_config_path;
-    $plugin_cfg = parse_ini_file($plugin_config_path, false);
-    $dest_size = exec("zfs get -H -o value used ".$plugin_cfg["ReceiveDestinationDataset"]);
+    global $tmp_recv_dataset_path;
+    $dataset = file_get_contents($tmp_recv_dataset_path);
+    $dest_size = exec("zfs get -H -o value used \"".$dataset."\"");
     $file = "/tmp/buddybackup-buddy";
     $info = "last_ran=".time()."\ndest_size=$dest_size";
     file_put_contents($file, $info);
