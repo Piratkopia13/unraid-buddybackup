@@ -66,7 +66,7 @@ function update() {
     {
         $any_changed = false;
         $set_default = function($key, $default) use (&$any_changed, &$plugin_cfg) {
-            if (empty($plugin_cfg[$key])) {
+            if (!array_key_exists($key, $plugin_cfg)) {
                 $plugin_cfg[$key] = $default;
                 $any_changed = true;
                 BB_VERBOSE("Added key '$key' with default value '$default' to cfg.");
@@ -74,6 +74,8 @@ function update() {
         };
         $set_default("BackupDaysAgoWarning", "7");
         $set_default("BackupDaysAgoCritical", "30");
+        $set_default("BuddysBackupDaysAgoWarning", "7");
+        $set_default("BuddysBackupDaysAgoCritical", "30");
         $set_default("UtcTimezone", "no");
 
         if ($any_changed) {

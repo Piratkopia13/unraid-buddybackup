@@ -11,6 +11,9 @@ Title="Advanced Settings"
 <input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
+_(**General**)_
+: &nbsp;
+
 _(Use UTC timezone)_:
 : <select name="UtcTimezone" class="align" <?=$disabled?>>
     <?=mk_option($cfg['UtcTimezone'], "no", "_(No)_");?>
@@ -21,7 +24,10 @@ _(Use UTC timezone)_:
   > Use UTC timestamp when performing snapshot creation/pruning and backup triggers. Useful to correlate timestamps between servers in different timezones.
 :end
 
-_(Dashboard panel)_
+_(**Dashboard panel**)_
+: &nbsp;
+
+_(*Set to empty or 0 to disable.*)_
 : &nbsp;
 
 _(Mark backup as yellow if it last ran more than this many days ago)_:
@@ -29,6 +35,12 @@ _(Mark backup as yellow if it last ran more than this many days ago)_:
 
 _(Mark backup as red if it last ran more than this many days ago)_:
 : <input type="text" name="BackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BackupDaysAgoCritical'];?>" <?=$disabled?>>
+
+_(Mark **buddy's** backup as yellow if it last ran more than this many days ago)_:
+: <input type="text" name="BuddysBackupDaysAgoWarning" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoWarning'];?>" <?=$disabled?>>
+
+_(Mark **buddy's** backup as red if it last ran more than this many days ago)_:
+: <input type="text" name="BuddysBackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoCritical'];?>" <?=$disabled?>>
 
 &nbsp;
 : <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>

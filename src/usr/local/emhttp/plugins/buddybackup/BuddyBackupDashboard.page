@@ -37,7 +37,7 @@ $bb_buddys_backup = ($bb_cfg["ReceiveBackups"] == "enable") ? ", Buddy's backup"
 $bb_enabled_backups = array_filter($bb_enabled_backups);
 $bb_num_enabled_backups = count($bb_enabled_backups);
 
-function bb_info($file) {
+function bb_info($file, $buddy = false) {
   global $bb_cfg;
   $ret = array();
   $ret["last_ran"] = "-";
@@ -47,14 +47,17 @@ function bb_info($file) {
     $info = parse_ini_file($file);
     if (!empty($info["last_ran"])) {
       $last_ran = (int)$info["last_ran"];
+      $ret["last_ran"] = my_time($last_ran);
       $current_time = time();
 
-      $one_week_in_seconds = (int)$bb_cfg["BackupDaysAgoWarning"] * 24 * 60 * 60;
-      $one_month_in_seconds = (int)$bb_cfg["BackupDaysAgoCritical"] * 24 * 60 * 60;
-      $ret["last_ran"] = my_time($last_ran);
-      if (($current_time - $last_ran) > $one_month_in_seconds) {
+      $warn = ($buddy) ? $bb_cfg["BuddysBackupDaysAgoWarning"] : $bb_cfg["BackupDaysAgoWarning"];
+      $crit = ($buddy) ? $bb_cfg["BuddysBackupDaysAgoCritical"] : $bb_cfg["BackupDaysAgoCritical"];
+
+      $one_week_in_seconds = (int)$warn * 24 * 60 * 60;
+      $one_month_in_seconds = (int)$crit * 24 * 60 * 60;
+      if ((!empty($crit) && $crit != "0") && ($current_time - $last_ran) > $one_month_in_seconds) {
         $ret["last_ran_style"] = "color: red;";
-      } else if (($current_time - $last_ran) > $one_week_in_seconds) {
+      } else if ((!empty($warn) && $warn != "0") && ($current_time - $last_ran) > $one_week_in_seconds) {
         $ret["last_ran_style"] = "color: yellow;";
       }
     }
@@ -87,7 +90,7 @@ foreach ($bb_enabled_backups as $uid => $cfg) {
 $bb_buddys_backup_table_content = "";
 if (!empty($bb_buddys_backup)) {
   $dest = $bb_cfg["ReceiveDestinationDataset"];
-  $info = bb_info("/tmp/buddybackup-buddy");
+  $info = bb_info("/tmp/buddybackup-buddy", true);
   $last_ran = $info["last_ran"];
   $last_ran_style = $info["last_ran_style"];
   $dest_size = $info["dest_size"];
