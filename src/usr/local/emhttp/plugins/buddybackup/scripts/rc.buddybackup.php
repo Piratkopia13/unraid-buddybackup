@@ -345,12 +345,6 @@ switch ($argv[1]) {
     case 'update':
         update();
         break;
-    case 'update_backups_from_config':
-        update_backups_from_config();
-        break;
-    case 'update_sanoid_conf':
-        update_sanoid_conf();
-        break;
     case 'send_backup':
         send_backup($argv[2]);
         break;
@@ -371,7 +365,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|update_sanoid_conf|update_backups_from_config|send_backup|get_buddy_snapshots|mark_received_backup|restore_snapshot";
+        echo "usage ".$argv[0]." update|send_backup|get_buddy_snapshots|mark_received_backup|restore_snapshot";
         break;
 }
 ?>

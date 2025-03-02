@@ -19,13 +19,13 @@
         global $snapshot_cfg;
         global $snapshot_cfg_file;
         remove_ini_section($snapshot_cfg, $section, $snapshot_cfg_file);
-        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update_sanoid_conf");
+        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update");
     }
     function remove_backup_section($section) {
         global $backup_cfg;
         global $backup_cfg_file;
         remove_ini_section($backup_cfg, $section, $backup_cfg_file);
-        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update_backups_from_config");
+        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update");
     }
 
     switch ($_POST["cmd"]) {
