@@ -269,7 +269,7 @@ restore_snapshot() {
             if [[ "${type}" == "remote" ]]; then
                 cmd="${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
             elif [[ "${type}" == "local" ]]; then
-                cmd="${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
+                cmd="${syncoid_bin} ${syncoid_flags_local} --include-snaps=\"${snapshot}\" \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
             fi
             result=$(run_and_write_output "${nchan}" "${cmd}");
             error_code=$?
@@ -286,7 +286,7 @@ restore_snapshot() {
             if [[ "${type}" == "remote" ]]; then
                 cmd="${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
             elif [[ "${type}" == "local" ]]; then
-                cmd="${syncoid_bin} ${syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
+                cmd="${syncoid_bin} ${syncoid_flags_local} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
             fi
             result=$(run_and_write_output "${nchan}" "${cmd}");
             error_code=$?
@@ -305,7 +305,7 @@ restore_snapshot() {
         fi
     else 
         full_error=""
-        printf -v full_error "Restoring ${type} backup failed. Error code ${error_code}. Full output:\n\n${result}"
+        printf -v full_error "Restoring ${type} backup failed. Error code ${error_code}. Full output: ${result}"
         if [[ -n "${nchan}" ]]; then
             unraid_notify "${full_error}" "alert"
             printf -v result "Restoring ${type} backup failed. Error code ${error_code}."
