@@ -216,7 +216,7 @@ function update_backups_from_config() {
 
     foreach ($backup_cfg as $uid => $cfg) {
         // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
-        // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_buddy_snapshots
+        // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_available_snapshots
         if ($key = shell_exec("ssh-keyscan -H \"".$cfg["destination_host"]."\"")) {
             ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND)!==false);
         }
@@ -257,7 +257,7 @@ function start_long_running_task_echo_pid($cmd) {
 }
 
 function restore_snapshot($argv) {
-    // uid is passed as first argument. Convert it to destination hostname, otherwise passthrough all other args to rc.buddybackup
+    // uid is passed as first argument. Convert it to destination hostname if type is remote, otherwise passthrough all other args to rc.buddybackup
     global $rc;
     global $plugin_path;
     global $backups_config_path;
@@ -269,11 +269,22 @@ function restore_snapshot($argv) {
     }
     $cfg = $backup_cfg[$uid];
 
-    $cmd = $rc.' restore_snapshot '.$cfg["destination_host"].' '.$argv[3].' '.$argv[4].' '.$argv[5].' '.$argv[6].' '.$argv[7];
-    start_long_running_task_echo_pid($cmd);
+    BB_LOG("restore_snapshot ".$uid);
+
+    if ($cfg["type"] == "remote") {
+        $cmd = $rc.' restore_snapshot remote "'.$cfg["destination_host"].'" "'.$argv[3].'" "'.$argv[4].'" "'.$argv[5].'" "'.$argv[6].'" "'.$argv[7].'"';
+        BB_LOG("remote cmd ".$cmd);
+        start_long_running_task_echo_pid($cmd);
+    } else if ($cfg["type"] == "local") {
+        $cmd = $rc.' restore_snapshot local "'.$argv[3].'" "'.$argv[4].'" "'.$argv[5].'" "'.$argv[6].'" "'.$argv[7].'"';
+        BB_LOG("local cmd ".$cmd);
+        start_long_running_task_echo_pid($cmd);
+    } else {
+        BB_ERR("Unknown backup type: ".$cfg["type"]);
+    }
 }
 
-function get_buddy_snapshots($uid) {
+function get_available_snapshots($uid) {
     global $rc;
     global $plugin_path;
     global $backups_config_path;
@@ -283,7 +294,11 @@ function get_buddy_snapshots($uid) {
         return;
     }
     $cfg = $backup_cfg[$uid];
-    passthru($rc.' get_buddy_snapshots "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
+    if ($cfg["type"] == "remote") {
+        passthru($rc.' get_available_snapshots remote "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
+    } else {
+        passthru($rc.' get_available_snapshots local "'.$cfg["destination_dataset"].'"');
+    }
 }
 
 // Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
@@ -348,8 +363,8 @@ switch ($argv[1]) {
     case 'test_connection':
         passthru($rc.' '.$argv[1].' '.$argv[2]);
         break;
-    case 'get_buddy_snapshots':
-        get_buddy_snapshots($argv[2]);
+    case 'get_available_snapshots':
+        get_available_snapshots($argv[2]);
         break;
     case 'mark_received_backup':
         mark_received_backup();
@@ -362,7 +377,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|send_backup|get_buddy_snapshots|mark_received_backup|restore_snapshot";
+        echo "usage ".$argv[0]." update|send_backup|get_available_snapshots|mark_received_backup|restore_snapshot";
         break;
 }
 ?>

@@ -55,10 +55,10 @@
     });
     nchan_buddybackup_restore.start();
 
-    function get_buddy_snapshots() {
+    function get_available_snapshots() {
         list = $('#restore-snapshot');
-        list.html("<option selected disabled value=''>Fetching snapshots from buddy..</option>");
-        var cmd = '<?=$rc_name?> get_buddy_snapshots "'+the_uid+'"';
+        list.html("<option selected disabled value=''>Fetching snapshots..</option>");
+        var cmd = '<?=$rc_name?> get_available_snapshots "'+the_uid+'"';
 
         $.post('/webGui/include/StartCommand.php', {cmd: cmd, start:2, csrf_token: '<?=$_GET['csrf_token']?>'})
             .done(function(data) {
@@ -192,7 +192,7 @@
     }
 
     $(function() { 
-        get_buddy_snapshots();
+        get_available_snapshots();
         $('#restore-snapshot').not('.lock').each(function() { $(this).on('input change', function() {
             var snap = $(this).find(':selected').val();
             if (snap.length === 0) {
@@ -238,17 +238,17 @@
 </head>
 <body>
     <div id="buddybackup-restore-wizard">
-        <input type="button" value="Update snapshots list" onclick="get_buddy_snapshots()">
+        <input type="button" value="Update snapshots list" onclick="get_available_snapshots()">
         <br>
-        <h3>Your backed-up snapshots available at buddy's:</h3>
+        <h3>Your backed-up snapshots:</h3>
         <br>
         <select id="restore-snapshot" name="RestoreSnapshot" class="align" size=10>
-            <option selected disabled>Fetching snapshots from buddy..</option>
+            <option selected disabled>Fetching snapshots..</option>
         </select>
         <br>
         <input type="button" class="buddybackup-restore-selected" value="Restore selected snapshot" disabled onclick="restore_selected_snapshot()">
         <!-- <input type="button" class="buddybackup-restore-selected" value="Restore selected and all newer snapshots" disabled onclick="restore_selected_and_newer_snapshot()"> -->
-        <input type="button" value="Restore all snapshots in selected dataset" onclick="restore_all_snapshots()">
+        <input type="button" class="buddybackup-restore-selected" value="Restore all snapshots in selected dataset" disabled onclick="restore_all_snapshots()">
     </div>
 
     <div id="buddybackup-restore-wizard-choose-destination" style="display:none;">
@@ -260,7 +260,7 @@
         </select>
         <input type="button" value="Restore to selected" onclick="start_restoring(false)">
         <br>
-        (Needs to have at least one common snapshot with Buddy's dataset)
+        (Needs to have at least one common snapshot with selected dataset to restore)
     </div>
 
     <div id="buddybackup-restore-wizard-new-dataset" style="display:none;">

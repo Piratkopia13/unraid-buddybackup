@@ -206,9 +206,7 @@ _(Your SSH public key (send this to you buddy))_:
         <div style="text-align:center;">
             <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
             <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
-            <span class="buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
-                <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
-            </span>
+            <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
             <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
         </div>
 

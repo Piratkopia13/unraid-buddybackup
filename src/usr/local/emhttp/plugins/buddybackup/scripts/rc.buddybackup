@@ -52,7 +52,7 @@ run_and_write_output() {
         cmd+=" | tee >( stdbuf -oL tr '\r' '\n' | xargs -I % curl -o /dev/null --unix-socket \"${socket}\" -X POST --data-binary \"%\" \"${url}\" >/dev/null 2>&1)"
     fi
 
-    result=$(eval "$cmd")
+    result=$(eval "${cmd}")
     local error_code=$?
     echo "${result}"
     return "${error_code}"
@@ -240,7 +240,12 @@ send_local_backup() {
 }
 
 restore_snapshot() {
-    local destination_host="${1}"
+    local type="${1}"
+    local destination_host=""
+    if [[ "${type}" == "remote" ]]; then
+        destination_host="${2}"
+        shift
+    fi
     local mode="${2}"
     local snapshot="${3}"
     local source_dataset="${4}"
@@ -254,13 +259,19 @@ restore_snapshot() {
         nchan=""
     fi
 
-    logger "Restoring backup from buddy" -t"${plugin}"
+    logger "Restoring ${type} backup" -t"${plugin}"
 
-    error_code=-1
-    result=""
+    local error_code=-1
+    local result=""
     case "$mode" in
         ('selected')
-            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            local cmd=""
+            if [[ "${type}" == "remote" ]]; then
+                cmd="${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
+            elif [[ "${type}" == "local" ]]; then
+                cmd="${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
+            fi
+            result=$(run_and_write_output "${nchan}" "${cmd}");
             error_code=$?
         ;;
         ('selected_and_newer')
@@ -271,7 +282,13 @@ restore_snapshot() {
             return
         ;;
         ('all')
-            result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1");
+            local cmd=""
+            if [[ "${type}" == "remote" ]]; then
+                cmd="${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
+            elif [[ "${type}" == "local" ]]; then
+                cmd="${syncoid_bin} ${syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
+            fi
+            result=$(run_and_write_output "${nchan}" "${cmd}");
             error_code=$?
         ;;
         (*)
@@ -281,17 +298,17 @@ restore_snapshot() {
 
     if [ $error_code -eq 0 ]; then
         if [[ -n "${nchan}" ]]; then
-            printf -v result "\nSuccessfully restored from buddy!"
-            unraid_notify "Restoring from buddy finished successfully!" "normal"
+            printf -v result "\nSuccessfully restored ${type} backup!"
+            unraid_notify "Restoring ${type} backup finished successfully!" "normal"
         else
-            printf -v result "${result}\n\nSuccessfully restored from buddy!"
+            printf -v result "${result}\n\nSuccessfully restored ${type} backup!"
         fi
     else 
         full_error=""
-        printf -v full_error "Restoring from buddy failed. Error code ${error_code}. Full output:\n\n${result}"
+        printf -v full_error "Restoring ${type} backup failed. Error code ${error_code}. Full output:\n\n${result}"
         if [[ -n "${nchan}" ]]; then
             unraid_notify "${full_error}" "alert"
-            printf -v result "Restoring from buddy failed. Error code ${error_code}."
+            printf -v result "Restoring ${type} backup failed. Error code ${error_code}."
         else
             result="${full_error}"
         fi
@@ -331,46 +348,62 @@ test_connection_cmd() {
     echo "</h2>"
 }
 
-get_buddy_snapshots() {
-    local destination_host="${1}"
+get_available_snapshots() {
+    local type="${1}"
+    local destination_host=""
+    if [[ "${type}" == "remote" ]]; then
+        destination_host="${2}"
+        shift
+    fi
     local destination_dataset="${2}"
 
-    cmd="zfs list -o name,origin -t filesystem,volume -Hr '${destination_dataset}'"
-    ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+    local cmd="zfs list -o name,origin -t filesystem,volume -Hr '${destination_dataset}'"
+
+    local result=""
+    if [[ "${type}" == "remote" ]]; then
+        result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+        ## Enable for debugging
+        # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${destination_host}\" \"${cmd}\" 2>&1"
+        # echo "result: ${result}"
+    elif [[ "${type}" == "local" ]]; then
+        result=$(eval "${cmd}")
+    fi
     if [ $? -ne 0 ]; then
-        ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-        printf '{"status": "failed", "error": "%s"}' "${ssh_result}"
+        result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+        printf '{"status": "failed", "error": "%s"}' "${result}"
         return
     fi
-    ## Enable for debugging
-    # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${destination_host}\" \"${cmd}\" 2>&1"
-    # echo "ssh_result: ${ssh_result}"
 
-    # ssh_result should now contain one line per dataset/child dataset
+    # result should now contain one line per dataset/child dataset
 
     cmds=()
     datasets=()
     while IFS= read -r line; do
         # Basic error checking, ensure line begins with dataset name
         if [[ "${line}" != "${destination_dataset}"* ]]; then
-            ssh_result=$(echo "${ssh_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-            printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid line: ${ssh_result}"
+            result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid line: ${result}"
             return
         fi
 
         dataset=$(echo "${line}" | sed 's/\s.*$//')
         cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation '${dataset}'" )
         datasets+=( "${dataset}" )
-    done <<< "${ssh_result}"
+    done <<< "${result}"
     
     json="{\"status\": \"ok\", \"data\": {"
     for ((i = 0; i < ${#cmds[@]}; i++))
     do
         json+="\"${datasets[$i]}\":{"
-        ssh_sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmds[$i]}" 2>&1)
+        local sub_result=""
+        if [[ "${type}" == "remote" ]]; then
+            sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmds[$i]}" 2>&1)
+        elif [[ "${type}" == "local" ]]; then
+            sub_result=$(eval "${cmds[$i]}" 2>&1)
+        fi
         if [ $? -ne 0 ]; then
-            ssh_sub_result=$(echo "${ssh_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-            printf '{"status": "failed", "error": "%s"}' "${ssh_sub_result}"
+            sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "${sub_result}"
             return
         fi
 
@@ -386,7 +419,7 @@ get_buddy_snapshots() {
             creation=$(echo \"${line}\" | tr -s ' ' | cut -d ' ' -f 3)
 
             json+="\"${snap}\":{\"guid\":\"${guid}\",\"creation\":\"${creation}\"}," 
-        done <<< "${ssh_sub_result}"
+        done <<< "${sub_result}"
         json="${json::-1}" # Remove trailing comma
 
         json+="},"
@@ -443,13 +476,14 @@ case "$1" in
     ('test_connection')
 		test_connection_cmd "${2}"
 	;;
-    ('get_buddy_snapshots')
-        get_buddy_snapshots "${2}" "${3}" 
+    ('get_available_snapshots')
+        get_available_snapshots "${2}" "${3}" "${4}"
     ;;
     ('get_buddy_used_size')
         get_buddy_used_size "${2}" "${3}"
+    ;;
     ('restore_snapshot')
-        restore_snapshot "${2}" "${3}" "${4}" "${5}" "${6}" "${7}"
+        restore_snapshot "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}"
     ;;
     ('enable_backups_from_buddy')
         enable_backups_from_buddy
@@ -464,5 +498,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_buddy_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac
