@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.02.23">
+  <!ENTITY version      "2025.03.02">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "dceb465ea6e7b197daad8cbb1263dd90">
+  <!ENTITY pkgMD5        "bf454420cbc882c504886aeff5b25429">
 ]>
 
 <PLUGIN  name="&name;"
@@ -24,144 +24,148 @@
          launch="&launch;"
          min="6.12.0"
          >
-    <CHANGES>
+  <CHANGES>
     ##&name;
-###2025.02.23
-  Fix permission issue when getting dataset size for buddy's backup shown in dashboard panel
-###2025.02.19
-  Fix bug requiring buddys backups to be enable for snapshot creation/pruning to work. Thanks to @adamzetpl for reporting this bug
-  Fix bug causing snapshot creation/pruning entries to break after removing any entry.
-###2025.02.18
-   Expose advanced settings for utc timezone, and dashboard panel coloring
-###2025.02.17
-  Add panel to Unraid Dashboard with info about last backup and destination size
-  Clarified remote destination dataset names in settings
-###2025.02.10
-  Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset. Thanks to @MowMdown for reporting this bug
-###2025.02.09
-  Multiple backups can now be specified
-  Added support for local datasets as backup destination
-  Add option to trigger backup after snapshot creation
-  Restoring backups is now done from a button in the backup section instead of restore having its own section
-###2025.02.02
-  Improve error handling when getting list of snapshots from buddy
-###2025.01.31
-  Bug fixes
-###2025.01.29
-  Added settings section for automatic snapshot creation and pruning
-###2025.01.25
-  Added restore functionality
-###2025.01.19b
-  Bug fixes
-###2025.01.18 - BuddyBackup
-    Initial release
-    </CHANGES>
+    ###2025.03.02
+    - Allow restoring from local backup destination
+    - Print syncoid errors to log when run from cron
+    - Add separate advanced options for warn/crit on buddys dashboard entry
+    ###2025.02.23
+    - Fix permission issue when getting dataset size for buddy's backup shown in dashboard panel
+    ###2025.02.19
+    - Fix bug requiring buddys backups to be enable for snapshot creation/pruning to work. Thanks to @adamzetpl for reporting this bug
+    - Fix bug causing snapshot creation/pruning entries to break after removing any entry.
+    ###2025.02.18
+    - Expose advanced settings for utc timezone, and dashboard panel coloring
+    ###2025.02.17
+    - Add panel to Unraid Dashboard with info about last backup and destination size
+    - Clarified remote destination dataset names in settings
+    ###2025.02.10
+    - Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset. Thanks to @MowMdown for reporting this bug
+    ###2025.02.09
+    - Multiple backups can now be specified
+    - Added support for local datasets as backup destination
+    - Add option to trigger backup after snapshot creation
+    - Restoring backups is now done from a button in the backup section instead of restore having its own section
+    ###2025.02.02
+    - Improve error handling when getting list of snapshots from buddy
+    ###2025.01.31
+    - Bug fixes
+    ###2025.01.29
+    - Added settings section for automatic snapshot creation and pruning
+    ###2025.01.25
+    - Added restore functionality
+    ###2025.01.19b
+    - Bug fixes
+    ###2025.01.18 - BuddyBackup
+    - Initial release
+  </CHANGES>
 
-    <!--
-    The 'plugin' package file.
-    -->
-    <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
-      <URL>&gitRelURL;/&pkgName;</URL>
-      <MD5>&pkgMD5;</MD5>
-    </FILE>
+  <!--
+  The 'plugin' package file.
+  -->
+  <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
+    <URL>&gitRelURL;/&pkgName;</URL>
+    <MD5>&pkgMD5;</MD5>
+  </FILE>
 
-    <!-- Create default buddybackup.cfg -->
-    <FILE Name="&pkgPath;/&name;.cfg">
-      <INLINE>
-        ReceiveBackups=disable
-        ReceiveDestinationRententionHourly=0
-        ReceiveDestinationRententionDaily=7
-        ReceiveDestinationRententionWeekly=4
-        ReceiveDestinationRententionMonthly=3
-        ReceiveDestinationRententionYearly=0
-      </INLINE>
-    </FILE>
+  <!-- Create default buddybackup.cfg -->
+  <FILE Name="&pkgPath;/&name;.cfg">
+    <INLINE>
+      ReceiveBackups=disable
+      ReceiveDestinationRententionHourly=0
+      ReceiveDestinationRententionDaily=7
+      ReceiveDestinationRententionWeekly=4
+      ReceiveDestinationRententionMonthly=3
+      ReceiveDestinationRententionYearly=0
+    </INLINE>
+  </FILE>
 
-    <!-- Install dependencies -->
-    <FILE Run="/bin/bash">
-        <INLINE>
-            echo "Installing BuddyBackup dependencies.."
-            
-            source /etc/unraid-version
-            major=${version:0:2}
-            minor=${version:2:2}
-            DEPS=( "perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
-                   "perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
-                   "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
-                   "perl-List-MoreUtils-0.425-x86_64-2_slonly.txz" )
-            if [[ $((${major/./}*1)) -lt 7 ]]; then
-              DEPS+=( "mbuffer-20240107-x86_64-1_SBo.tgz" )
-            fi
+  <!-- Install dependencies -->
+  <FILE Run="/bin/bash">
+    <INLINE>
+      echo "Installing BuddyBackup dependencies.."
+      
+      source /etc/unraid-version
+      major=${version:0:2}
+      minor=${version:2:2}
+      DEPS=( "perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
+              "perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
+              "perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
+              "perl-List-MoreUtils-0.425-x86_64-2_slonly.txz" )
+      if [[ $((${major/./}*1)) -lt 7 ]]; then
+        DEPS+=( "mbuffer-20240107-x86_64-1_SBo.tgz" )
+      fi
 
-            function install_dep() {
-              local dest="&pkgPath;/deps/${1}"
-              local src="&gitURL;/deps/${1}"
+      function install_dep() {
+        local dest="&pkgPath;/deps/${1}"
+        local src="&gitURL;/deps/${1}"
 
-              mkdir -p "&pkgPath;/deps"
-              if [ ! -f "${dest}" ]; then
-                echo "Downloading dependency '${1}'.."
-                curl --location --silent --fail "${src}" --output "${dest}"
-              fi
-              if [ ! -f "${dest}.md5" ]; then
-                curl --location --silent --fail "${src}.md5" --output "${dest}.md5"
-              fi
+        mkdir -p "&pkgPath;/deps"
+        if [ ! -f "${dest}" ]; then
+          echo "Downloading dependency '${1}'.."
+          curl --location --silent --fail "${src}" --output "${dest}"
+        fi
+        if [ ! -f "${dest}.md5" ]; then
+          curl --location --silent --fail "${src}.md5" --output "${dest}.md5"
+        fi
 
-              expected_md5=$(cat "${dest}.md5")
-              actual_md5=$(md5sum "${dest}" | sed 's/\s.*$//')
+        expected_md5=$(cat "${dest}.md5")
+        actual_md5=$(md5sum "${dest}" | sed 's/\s.*$//')
 
-              if [ "${actual_md5}" != "${expected_md5}" ]; then
-                echo "Mismatched md5 hash for dependency '${1}'. Aborting."
-                rm "${dest}"
-                exit 1
-              elif ! installpkg "$dest"; then
-                  echo "Failed to install dependency '${1}'"
-                  exit 1
-              fi 
-            }
+        if [ "${actual_md5}" != "${expected_md5}" ]; then
+          echo "Mismatched md5 hash for dependency '${1}'. Aborting."
+          rm "${dest}"
+          exit 1
+        elif ! installpkg "$dest"; then
+            echo "Failed to install dependency '${1}'"
+            exit 1
+        fi 
+      }
 
-            for d in ${DEPS[@]}; do
-              install_dep "${d}"
-            done
-        </INLINE>
-    </FILE>
-    
-    <FILE Run="/bin/bash">
-        <INLINE>
-            &emhttp;/scripts/rc.buddybackup.php update
+      for d in ${DEPS[@]}; do
+        install_dep "${d}"
+      done
+    </INLINE>
+  </FILE>
 
-            echo ""
-            echo "-----------------------------------------------------------"
-            echo " &name; has been installed."
-            echo " Happy backups"
-            echo " Version: &version;"
-            echo "-----------------------------------------------------------"
-            echo ""
-        </INLINE>
-    </FILE>
+  <FILE Run="/bin/bash">
+    <INLINE>
+      &emhttp;/scripts/rc.buddybackup.php update
 
-    <!-- Copy sanoid default conf -->
-    <FILE Name="&pkgPath;/sanoid.defaults.conf">
-      <LOCAL>&emhttp;/deps/sanoid.defaults.conf</LOCAL>
-    </FILE>
+      echo ""
+      echo "-----------------------------------------------------------"
+      echo " &name; has been installed."
+      echo " Happy backups"
+      echo " Version: &version;"
+      echo "-----------------------------------------------------------"
+      echo ""
+    </INLINE>
+  </FILE>
 
-    <!--
-    The 'remove' script.
-    -->
-    <FILE Run="/bin/bash" Method="remove">
-        <INLINE>
-            echo "-----------------------------------------------------------"
-            echo " Uninstalling &name;"
-            echo "-----------------------------------------------------------"
-            echo ""
+  <!-- Copy sanoid default conf -->
+  <FILE Name="&pkgPath;/sanoid.defaults.conf">
+    <LOCAL>&emhttp;/deps/sanoid.defaults.conf</LOCAL>
+  </FILE>
 
-            &emhttp;/scripts/rc.buddybackup.php uninstall
+  <!--
+  The 'remove' script.
+  -->
+  <FILE Run="/bin/bash" Method="remove">
+    <INLINE>
+      echo "-----------------------------------------------------------"
+      echo " Uninstalling &name;"
+      echo "-----------------------------------------------------------"
+      echo ""
 
-            removepkg &pkgPath;/&pkgName;
+      &emhttp;/scripts/rc.buddybackup.php uninstall
 
-            echo ""
-            echo " &name; has been uninstalled. Dependencies will be gone after next reboot"
-            echo ""
-        </INLINE>
-    </FILE>
+      removepkg &pkgPath;/&pkgName;
+
+      echo ""
+      echo " &name; has been uninstalled. Dependencies will be gone after next reboot"
+      echo ""
+    </INLINE>
+  </FILE>
 
 </PLUGIN>
