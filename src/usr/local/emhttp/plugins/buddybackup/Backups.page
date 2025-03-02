@@ -26,12 +26,14 @@ Title="Backup and restore"
         $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
     }
 
-    function backup_input_changed() {
-        var form = $(this).parentsUntil('form').parent();
-        form.find("input[name='#apply']").not('.lock').prop('disabled', false);
-        form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
-            return this.value + ' (apply changes to do this)';
-        });
+    function backup_input_changed(ctx, on_change = false) {
+        var form = $(ctx).parentsUntil('form').parent();
+        if (on_change) {
+            form.find("input[name='#apply']").not('.lock').prop('disabled', false);
+            form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
+                return this.value + ' (apply changes to do this)';
+            });
+        }
         var dest_type = form.find("select[name='type']").val();
         if (dest_type == "remote") {
             form.find('.buddybackup-type-remote').show();
@@ -54,7 +56,7 @@ Title="Backup and restore"
     $(function() { 
         $('form.buddybackup-backup-entry')
             .find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
-            .not('.lock').each(function(){$(this).on('input change', backup_input_changed)});
+            .not('.lock').each(function(){backup_input_changed(this); $(this).on('input change', function(){backup_input_changed(this, true)})});
     })
     function add_backup() {
         var template = $("#buddybackup-backup-entry-template");
@@ -66,9 +68,26 @@ Title="Backup and restore"
         new_form.find("input[name='#section']").val(new_uid);
 
         new_form.find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
-            .not('.lock').each(function(){$(this).on('input change', backup_input_changed)});
+            .not('.lock').each(function(){backup_input_changed(this); $(this).on('input change', function(){backup_input_changed(this, true)})});
 
         list.append(new_dataset);
+    }
+    function verify_and_submit_backup(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var dest_type = form.find("select[name='type']").val();
+        var saved = form.find("input[name='#saved']").val();
+        var abort = false;
+        if (dest_type == "local" && saved != "true") {
+            var destination_dataset = form.find("input[name='destination_dataset']").val();
+            var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
+            if (destination_dataset_exists) {
+                swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+                    form.submit();
+                }});
+            }
+        } else {
+            form.submit();
+        }
     }
     function remove_backup(btn) {
         swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
@@ -185,7 +204,7 @@ _(Your SSH public key (send this to you buddy))_:
         </tr></table>
 
         <div style="text-align:center;">
-            <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+            <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
             <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
             <span class="buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
                 <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">

@@ -188,8 +188,8 @@ send_backup() {
         send_mark_received_backup "${destination_host}"
     else 
         error_code=$?
-        unraid_notify "Sending backup failed. Error code ${error_code}. Full output: ${result}" "alert"
-        printf -v result "Sending backup failed. Error code ${error_code}."
+        printf -v result "Sending backup failed. Error code ${error_code}. Full output: ${result}"
+        unraid_notify "${result}" "alert"
     fi
     write "${nchan}" "${result}"
 
@@ -228,8 +228,8 @@ send_local_backup() {
         printf -v result "\nSuccessfully synced local backup!"
     else 
         error_code=$?
-        unraid_notify "Local backup failed. Error code ${error_code}. Full output: ${result}" "alert"
-        printf -v result "Local backup failed. Error code ${error_code}."
+        printf -v result "Local backup failed. Error code ${error_code}. Full output: ${result}"
+        unraid_notify "${result}" "alert"
     fi
     write "${nchan}" "${result}"
 

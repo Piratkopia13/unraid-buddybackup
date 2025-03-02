@@ -177,9 +177,6 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
     $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
-    # Using the two lines below threw wierd lock errors, so trying the one above now with just --cron
-    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-take -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --take-snapshots\" 2>&1 | $log_script\n";
-    # $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron-prune -c \"$sanoid_bin --configdir=\"$plugin_path\" --prune-snapshots\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
