@@ -162,9 +162,14 @@ send_backup() {
     local destination_host="${3}"
     local destination_dataset="${4}"
 
+    local encrypted_dataset=0
+    if is_encrypted "${source_dataset}"; then
+        encrypted_dataset=1
+    fi
+
     local nchan="send"
     error=""
-    if ! is_encrypted "${source_dataset}"; then
+    if [[ "${AllowUnencryptedRemoteBackups}" != "yes" ]] && [[ $encrypted_dataset -eq 0 ]]; then
         error="Source dataset '${source_dataset}' is not encrypted!"
     fi
     if ! dataset_exists "${source_dataset}"; then
@@ -179,7 +184,11 @@ send_backup() {
     fi
 
     local my_syncoid_flags="${syncoid_flags}"
-    if [[ "${recursive}" == "yes" ]] then
+    if [[ "${AllowUnencryptedRemoteBackups}" == "yes" ]] && [[ $encrypted_dataset -eq 0 ]]; then
+        write "${nchan}" "Warning: sending unencrypted dataset to remote destination!"
+        my_syncoid_flags="${syncoid_flags_unencrypted}"
+    fi
+    if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
     fi
     local error_code=0
@@ -473,6 +482,7 @@ empath="/usr/local/emhttp/plugins/buddybackup"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
+syncoid_flags_unencrypted="--no-privilege-elevation --no-sync-snap --pv-options='-pterbf' --compress=zstdmt-fast" # flags when sending unencrypted backup to remote destination
 syncoid_flags_local="--no-sync-snap --pv-options='-pterbf' --compress=none" # flags when backup destination is on local machine
 
 case "$1" in

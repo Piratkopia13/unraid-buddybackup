@@ -77,6 +77,7 @@ function update() {
         $set_default("BuddysBackupDaysAgoWarning", "7");
         $set_default("BuddysBackupDaysAgoCritical", "30");
         $set_default("UtcTimezone", "no");
+        $set_default("AllowUnencryptedRemoteBackups", "no");
 
         if ($any_changed) {
             write_ini($plugin_config_path, $plugin_cfg);

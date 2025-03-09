@@ -42,6 +42,18 @@ _(Mark **buddy's** backup as yellow if it last ran more than this many days ago)
 _(Mark **buddy's** backup as red if it last ran more than this many days ago)_:
 : <input type="text" name="BuddysBackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoCritical'];?>" <?=$disabled?>>
 
+_(**Bad choices**)_
+: &nbsp;
+
+_(*<span style="color:red;">Do NOT enable these unless you fully understand the implications</span>*)_
+: &nbsp;
+
+_(Allow unencrypted backups to remote destinations)_:
+: <select name="AllowUnencryptedRemoteBackups" class="align" <?=$disabled?>>
+    <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "no", "_(No)_");?>
+    <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "yes", "_(Yes)_");?>
+  </select>
+
 &nbsp;
 : <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
 

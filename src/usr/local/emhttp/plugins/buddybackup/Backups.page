@@ -39,9 +39,15 @@ Title="Backup and restore"
             form.find('.buddybackup-type-remote').show();
             form.find('input[name="destination_dataset"]').removeAttr('list');
 
+            var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
+
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
-            source_dataset.html($('datalist#local-encrypted-datasets').html());
+            if (allow_unencrypted_remote_backups == "yes") {
+                source_dataset.html($('datalist#local-datasets').html());
+            } else {
+                source_dataset.html($('datalist#local-encrypted-datasets').html());
+            }
             source_dataset.val(source_dataset_val);
         } else if (dest_type == "local") {
             form.find('.buddybackup-type-remote').hide();
@@ -132,6 +138,7 @@ _(Your SSH public key (send this to you buddy))_:
 <div id="buddybackup-backup-list">
 <?php
     function backup_entry($uid, $data) {
+        global $cfg;
         global $plugin;
         global $rc_script;
         global $disabled;
@@ -159,7 +166,7 @@ _(Your SSH public key (send this to you buddy))_:
             <dt>_(ZFS dataset to backup)_:</dt>
             <dd>
                 <select name="source_dataset" class="align" <?=$disabled?>>
-                <?=datasets($data["source_dataset"], $data['type']!='local')?>
+                <?=datasets($data["source_dataset"], $data['type']!='local' && $cfg["AllowUnencryptedRemoteBackups"]!='yes')?>
                 </select>
             </dd>
         </dl>
