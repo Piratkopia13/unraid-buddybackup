@@ -20,10 +20,25 @@ Title="Backup and restore"
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
         var the_uid = form.find("input[name='#section']").val();
-        var cmd = '<?=$rc_name?> send_backup '+the_uid;
-        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
-        show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
-        $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
+        var cmd = '<?=$rc_name?> send_backup '+the_uid+' echopid';
+        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
+            .done(function(pid) {
+                var output = $(".buddybackup-backup-output-log");
+                if (!isNumeric(pid)) {
+                    output.append("Failed to start backup script: "+pid);
+                    return;
+                }
+                var abort_func = function() {
+                    $.post('/webGui/include/StartCommand.php', {kill: pid}, function() {
+                        output.append("\nBackup aborted!\n");
+                    });
+                };
+                show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea', "Abort backup", abort_func);
+                output.append("\nRunning backup..\n");
+            })
+            .fail(function(xhr, status, error) {
+                output.append("Failed! Error: "+error);
+            });
     }
 
     function backup_input_changed(ctx, on_change = false) {

@@ -154,6 +154,27 @@ send_mark_received_backup() {
     fi
 }
 
+mark_sent_backup() {
+    # Store info to tmp file read by plugin dashboard panel
+    local dest_size="";
+    local type="${1}"
+    local destination_host="${2}"
+    local destination_dataset="${3}"
+    local uid="${4}"
+    if [[ "${type}" == "local" ]]; then
+        dest_size=$(zfs get -H -o value used "${destination_dataset}");
+    else
+        local result=$(get_buddy_used_size "${destination_host}" "${destination_dataset}");
+        if [[ $? -eq 0 ]]; then
+            dest_size="${result}";
+        else
+            write "" "Failed to get used size from buddy: ${result}"
+        fi
+    fi
+
+    echo "last_ran=$(date +%s)\ndest_size=${dest_size}" > "/tmp/buddybackup-${uid}";
+}
+
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
@@ -161,6 +182,7 @@ send_backup() {
     local recursive="${2}"
     local destination_host="${3}"
     local destination_dataset="${4}"
+    local uid="${5}"
 
     local encrypted_dataset=0
     if is_encrypted "${source_dataset}"; then
@@ -194,6 +216,7 @@ send_backup() {
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced backup to buddy!"
+        mark_sent_backup "remote" "${destination_host}" "${destination_dataset}" "${uid}"
         send_mark_received_backup "${destination_host}"
     else 
         error_code=$?
@@ -214,6 +237,7 @@ send_local_backup() {
     local source_dataset="${1}"
     local recursive="${2}"
     local destination_dataset="${3}"
+    local uid="${4}"
 
     local nchan="send"
     error=""
@@ -235,6 +259,7 @@ send_local_backup() {
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced local backup!"
+        mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
     else 
         error_code=$?
         printf -v result "Local backup failed. Error code ${error_code}. Full output: ${result}"
@@ -490,10 +515,10 @@ case "$1" in
 		update
 	;;
     ('send_backup')
-		send_backup "${2}" "${3}" "${4}" "${5}"
+		send_backup "${2}" "${3}" "${4}" "${5}" "${6}"
 	;;
     ('send_local_backup')
-		send_local_backup "${2}" "${3}" "${4}"
+		send_local_backup "${2}" "${3}" "${4}" "${5}"
 	;;
     ('test_connection')
 		test_connection_cmd "${2}"
