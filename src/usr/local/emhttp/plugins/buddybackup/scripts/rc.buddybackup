@@ -322,8 +322,9 @@ restore_snapshot() {
 
 test_connection() {
     local host=$1
+    local cmd="${2:-echo ok}"
     # test SSH connection to buddy
-    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" echo ok 2>&1)
+    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" $cmd 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
         echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
     elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
@@ -337,13 +338,24 @@ test_connection_cmd() {
     local host=$1
     echo "<h2>Trying to connect to ${host} over SSH..<br>"
 
+    local success=0
     eval $(test_connection "${host}")
     case "${connection_status}" in
-        ("ok") echo "Success!<br>" ;;
+        ("ok")
+            echo "Success!<br>"
+            success=1
+        ;;
         ("no auth") echo "Authentication failed. Make sure buddy has enabled \"Buddy's Backups\" and entered your public key.<br>" ;;
         ("fail") echo "Failed: ${connection_result}<br>" ;;
         (*) echo "unexpected error" ;;
     esac
+
+    if [[ $success -eq 1 ]]; then
+        eval $(test_connection "${host}" "echo ok && ls")
+        if [[ "${connection_status}" != "fail" ]] || [[ ${connection_result} != "" ]]; then
+            echo "<span style='color:red'>BuddyBackup SSH security validation failed! This could happen if remote is not using BuddyBackup. Backups will still work, but connection is not restriced to backups. This is a security risk.<span>"
+        fi
+    fi
 
     echo "</h2>"
 }
