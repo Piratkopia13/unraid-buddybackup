@@ -77,6 +77,7 @@ function update() {
         $set_default("BuddysBackupDaysAgoWarning", "7");
         $set_default("BuddysBackupDaysAgoCritical", "30");
         $set_default("UtcTimezone", "no");
+        $set_default("AllowUnencryptedRemoteBackups", "no");
 
         if ($any_changed) {
             write_ini($plugin_config_path, $plugin_cfg);
@@ -311,7 +312,7 @@ function mark_received_backup() {
     file_put_contents($file, $info);
 }
 
-function send_backup($uid) {
+function send_backup($uid, $echo_pid_arg) {
     BB_LOG("Sending backup $uid");
     global $rc;
     global $plugin_path;
@@ -321,35 +322,26 @@ function send_backup($uid) {
         BB_ERR("Could not startup backup with uid '$uid' since it does not exist");
         return;
     }
+    $echo_pid = (!empty($echo_pid_arg) && $echo_pid_arg == "echopid");
     $cfg = $backup_cfg[$uid];
     $result_code = null;
     if ($cfg['type'] == "local") {
-        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'"';
-        passthru($cmd, $result_code);
-    } else {
-        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';
-        passthru($cmd, $result_code);
-    }
-    BB_VERBOSE("backup result: $result_code");
-    if ($result_code == 0) {
-        // Backup succeeded! Store info to tmp file read by plugin dashboard panel
-        $dest_size = "";
-        if ($cfg['type'] == "local") {
-            $dest_size = exec("zfs get -H -o value used ".$cfg["destination_dataset"]);
+        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'" "'.$uid.'"';
+        if ($echo_pid) {
+            start_long_running_task_echo_pid($cmd);
         } else {
-            $cmd = $rc.' get_buddy_used_size "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"';
-            $out = array();
-            $result = exec($cmd, $out, $result_code);
-            if ($result_code == 0) {
-                $dest_size = $result;
-            } else {
-                BB_WARN("Failed to get used size from buddy: $result");
-            }
+            passthru($cmd, $result_code);
         }
-
-        $file = "/tmp/buddybackup-$uid";
-        $info = "last_ran=".time()."\ndest_size=$dest_size";
-        file_put_contents($file, $info);
+    } else {
+        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'" "'.$uid.'"';
+        if ($echo_pid) {
+            start_long_running_task_echo_pid($cmd);
+        } else {
+            passthru($cmd, $result_code);
+        }
+    }
+    if (!$echo_pid) {
+        BB_VERBOSE("backup result: $result_code");
     }
 }
 
@@ -358,7 +350,7 @@ switch ($argv[1]) {
         update();
         break;
     case 'send_backup':
-        send_backup($argv[2]);
+        send_backup($argv[2], $argv[3]);
         break;
     case 'test_connection':
         passthru($rc.' '.$argv[1].' '.$argv[2]);

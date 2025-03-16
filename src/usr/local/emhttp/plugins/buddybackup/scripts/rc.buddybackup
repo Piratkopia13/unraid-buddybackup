@@ -154,6 +154,27 @@ send_mark_received_backup() {
     fi
 }
 
+mark_sent_backup() {
+    # Store info to tmp file read by plugin dashboard panel
+    local dest_size="";
+    local type="${1}"
+    local destination_host="${2}"
+    local destination_dataset="${3}"
+    local uid="${4}"
+    if [[ "${type}" == "local" ]]; then
+        dest_size=$(zfs get -H -o value used "${destination_dataset}");
+    else
+        local result=$(get_buddy_used_size "${destination_host}" "${destination_dataset}");
+        if [[ $? -eq 0 ]]; then
+            dest_size="${result}";
+        else
+            write "" "Failed to get used size from buddy: ${result}"
+        fi
+    fi
+
+    printf "last_ran=$(date +%s)\ndest_size=${dest_size}" > "/tmp/buddybackup-${uid}";
+}
+
 send_backup() {
     logger "Sending backup to buddy" -t"${plugin}"
 
@@ -161,10 +182,16 @@ send_backup() {
     local recursive="${2}"
     local destination_host="${3}"
     local destination_dataset="${4}"
+    local uid="${5}"
+
+    local encrypted_dataset=0
+    if is_encrypted "${source_dataset}"; then
+        encrypted_dataset=1
+    fi
 
     local nchan="send"
     error=""
-    if ! is_encrypted "${source_dataset}"; then
+    if [[ "${AllowUnencryptedRemoteBackups}" != "yes" ]] && [[ $encrypted_dataset -eq 0 ]]; then
         error="Source dataset '${source_dataset}' is not encrypted!"
     fi
     if ! dataset_exists "${source_dataset}"; then
@@ -179,12 +206,17 @@ send_backup() {
     fi
 
     local my_syncoid_flags="${syncoid_flags}"
-    if [[ "${recursive}" == "yes" ]] then
+    if [[ "${AllowUnencryptedRemoteBackups}" == "yes" ]] && [[ $encrypted_dataset -eq 0 ]]; then
+        write "${nchan}" "Warning: sending unencrypted dataset to remote destination!"
+        my_syncoid_flags="${syncoid_flags_unencrypted}"
+    fi
+    if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
     fi
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced backup to buddy!"
+        mark_sent_backup "remote" "${destination_host}" "${destination_dataset}" "${uid}"
         send_mark_received_backup "${destination_host}"
     else 
         error_code=$?
@@ -205,6 +237,7 @@ send_local_backup() {
     local source_dataset="${1}"
     local recursive="${2}"
     local destination_dataset="${3}"
+    local uid="${4}"
 
     local nchan="send"
     error=""
@@ -226,6 +259,7 @@ send_local_backup() {
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
         printf -v result "\nSuccessfully synced local backup!"
+        mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
     else 
         error_code=$?
         printf -v result "Local backup failed. Error code ${error_code}. Full output: ${result}"
@@ -322,8 +356,9 @@ restore_snapshot() {
 
 test_connection() {
     local host=$1
+    local cmd="${2:-echo ok}"
     # test SSH connection to buddy
-    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" echo ok 2>&1)
+    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" $cmd 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
         echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
     elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
@@ -337,13 +372,24 @@ test_connection_cmd() {
     local host=$1
     echo "<h2>Trying to connect to ${host} over SSH..<br>"
 
+    local success=0
     eval $(test_connection "${host}")
     case "${connection_status}" in
-        ("ok") echo "Success!<br>" ;;
+        ("ok")
+            echo "Success!<br>"
+            success=1
+        ;;
         ("no auth") echo "Authentication failed. Make sure buddy has enabled \"Buddy's Backups\" and entered your public key.<br>" ;;
         ("fail") echo "Failed: ${connection_result}<br>" ;;
         (*) echo "unexpected error" ;;
     esac
+
+    if [[ $success -eq 1 ]]; then
+        eval $(test_connection "${host}" "echo ok && ls")
+        if [[ "${connection_status}" != "fail" ]] || [[ ${connection_result} != "" ]]; then
+            echo "<span style='color:red'>BuddyBackup SSH security validation failed! This could happen if remote is not using BuddyBackup. Backups will still work, but connection is not restriced to backups. This is a security risk.<span>"
+        fi
+    fi
 
     echo "</h2>"
 }
@@ -461,6 +507,7 @@ empath="/usr/local/emhttp/plugins/buddybackup"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
+syncoid_flags_unencrypted="--no-privilege-elevation --no-sync-snap --pv-options='-pterbf' --compress=zstdmt-fast" # flags when sending unencrypted backup to remote destination
 syncoid_flags_local="--no-sync-snap --pv-options='-pterbf' --compress=none" # flags when backup destination is on local machine
 
 case "$1" in
@@ -468,10 +515,10 @@ case "$1" in
 		update
 	;;
     ('send_backup')
-		send_backup "${2}" "${3}" "${4}" "${5}"
+		send_backup "${2}" "${3}" "${4}" "${5}" "${6}"
 	;;
     ('send_local_backup')
-		send_local_backup "${2}" "${3}" "${4}"
+		send_local_backup "${2}" "${3}" "${4}" "${5}"
 	;;
     ('test_connection')
 		test_connection_cmd "${2}"

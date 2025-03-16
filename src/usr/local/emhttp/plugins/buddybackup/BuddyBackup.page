@@ -48,11 +48,11 @@ Tag="buddybackup"
     }
     .buddybackup-restore-output-log, .buddybackup-backup-output-log {
         overflow: auto;
-        height: 90%;
+        height: 88%;
         width: 90%;
         background-color: rgba(0, 0, 0, 0.1);
         margin: 0px;
-        padding: 20px;
+        padding: 20px 20px 0px 20px;
     }
     #buddybackup-restore-running h3, #buddybackup-backup-running h3 {
         display: inline;
@@ -66,6 +66,9 @@ Tag="buddybackup"
     .buddybackup-list-entry {
         border: 1px solid gray;
         padding-top: 5px;
+    }
+    .buddybackup-toggle-autoscroll {
+        vertical-align: middle !important;
     }
 </style>
 <script>
@@ -91,6 +94,10 @@ Tag="buddybackup"
             return v.toString(16);
         });
     }
+    function isNumeric(str) {
+        if (typeof str != "string") return false;
+        return !isNaN(str) && !isNaN(parseFloat(str));
+    }
 
     // Throw away messages at beginning of page load since they are probably old cached messages
     var allow_nchan = false;
@@ -102,6 +109,7 @@ Tag="buddybackup"
 
     var restore_in_progress = false;
     var backup_in_progress = false;
+    var auto_scroll = true;
 
     var nchan_buddybackup_restore = new NchanSubscriber('/sub/buddybackup-restore',{subscriber:'websocket'});
     var nchan_buddybackup_backup = new NchanSubscriber('/sub/buddybackup-send',{subscriber:'websocket'});
@@ -115,8 +123,10 @@ Tag="buddybackup"
         var output_log = $('.buddybackup-restore-output-log');
         output_log.append(data+'\n');
 
-        var ta = $('.active-textarea');
-        ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+        if (auto_scroll) {
+            var ta = $('.active-textarea');
+            ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+        }
     });
     nchan_buddybackup_backup.on('message', function(data) {
         if (!allow_nchan) return;
@@ -128,18 +138,60 @@ Tag="buddybackup"
         var output_log = $('.buddybackup-backup-output-log');
         output_log.append(data+'\n');
 
-        var ta = $('.active-textarea');
-        ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+        if (auto_scroll) {
+            var ta = $('.active-textarea');
+            ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+        }
     });
     nchan_buddybackup_restore.start();
     nchan_buddybackup_backup.start();
 
-    function show_in_progress_log(title, element_name, log_class) {
-        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>"}, function(){$('.sweet-alert').removeClass('nchan');});
+    function toggle_autoscroll(cb) {
+        auto_scroll = cb.checked;
+        $('.buddybackup-toggle-autoscroll').prop('checked', auto_scroll);
+    }
+    function abort_backups() {
+        $.post(api_url, { cmd:"count_running_backups" }, function(count){
+            $('.sweet-alert').removeClass('nchan');
+            if (count == 0) { 
+                swal({title:"_(No backups are running)_", html:true, type:'info', width: 600});
+                return;
+            }
+            swal({title:"_(Abort all running backups?)_", text:count+" running backup"+((count>1)?"s":"")+" will be stopped.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+                $.post(api_url, { cmd:"kill_running_backups" }, function(){
+                    $('.buddybackup-backup-output-log').append("\nBackups aborted by user!\n");
+                });
+            }});
+        });
+    }
+    function abort_restores() {
+        $.post(api_url, { cmd:"count_running_restores" }, function(count){
+            $('.sweet-alert').removeClass('nchan');
+            if (count == 0) {
+                swal({title:"_(No restores are running)_", html:true, type:'info', width: 600});
+                return;
+            }
+            swal({title:"_(Abort all running restores?)_", text:count+" running restore"+((count>1)?"s":"")+" will be stopped.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+                $.post(api_url, { cmd:"kill_running_restores" }, function(){
+                    $('.buddybackup-restore-output-log').append("\nRestores aborted by user!\n");
+                });
+            }});
+        });
+    }
+
+    function show_in_progress_log(title, element_name, log_class, abort_text=null, abort_func=null) {
+        console.warn(auto_scroll);
+        swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>",showCancelButton:(abort_text!=null),cancelButtonText:abort_text},
+            function(p){
+                $('.sweet-alert').removeClass('nchan');
+                if (!p && abort_func) abort_func();
+            }
+        );
         $('.sweet-alert').addClass("nchan");
         $('pre#swalbody').html($(element_name).html());
         $('pre#swalbody').addClass("buddybackup-center");
         $('pre#swalbody').find("textarea").addClass(log_class);
+        $('.buddybackup-toggle-autoscroll').prop('checked', auto_scroll);
     }
 
 </script>
@@ -162,11 +214,21 @@ This plugin is fully open source, and I encourage you to review the source to en
 <span id="buddybackup-not-running">No backups or restores are currently running.</span>
 <div id="buddybackup-restore-running" style="display:none;">
     <h3>A restore is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show restore log" onclick="show_in_progress_log('Restore log', '#buddybackup-restore-log', 'active-textarea')">
-    <span id="buddybackup-restore-log" style="display:none;"><textarea readonly class="buddybackup-restore-output-log"></textarea></span>
+    <span id="buddybackup-restore-log" style="display:none;">
+        <textarea readonly class="buddybackup-restore-output-log"></textarea>
+        <br>
+        <input type="checkbox" class="buddybackup-toggle-autoscroll" onclick="toggle_autoscroll(this)"> Auto scroll
+        <button onclick="abort_restores()" style="margin-left:50px"><i class='fa fa-bomb fa-fw'></i> Abort all running restores</button>
+    </span>
 </div>
 <div id="buddybackup-backup-running" style="display:none;">
     <h3>A backup is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show backup log" onclick="show_in_progress_log('Backup log', '#buddybackup-backup-log', 'active-textarea')">
-    <span id="buddybackup-backup-log" style="display:none;"><textarea readonly class="buddybackup-backup-output-log"></textarea></span>
+    <span id="buddybackup-backup-log" style="display:none;">
+        <textarea readonly class="buddybackup-backup-output-log"></textarea>
+        <br>
+        <input type="checkbox" class="buddybackup-toggle-autoscroll" onclick="toggle_autoscroll(this)"> Auto scroll
+        <button onclick="abort_backups()" style="margin-left:50px"><i class='fa fa-bomb fa-fw'></i> Abort all running backups</button>
+    </span>
 </div>
 </span>
 <datalist id="cron">

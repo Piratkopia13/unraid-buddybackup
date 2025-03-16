@@ -20,10 +20,25 @@ Title="Backup and restore"
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
         var the_uid = form.find("input[name='#section']").val();
-        var cmd = '<?=$rc_name?> send_backup '+the_uid;
-        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2});
-        show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea');
-        $(".buddybackup-backup-output-log").append("\nRunning backup..\n");
+        var cmd = '<?=$rc_name?> send_backup '+the_uid+' echopid';
+        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
+            .done(function(pid) {
+                var output = $(".buddybackup-backup-output-log");
+                if (!isNumeric(pid)) {
+                    output.append("Failed to start backup script: "+pid);
+                    return;
+                }
+                var abort_func = function() {
+                    $.post('/webGui/include/StartCommand.php', {kill: pid}, function() {
+                        output.append("\nBackup aborted!\n");
+                    });
+                };
+                show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea', "Abort backup", abort_func);
+                output.append("\nRunning backup..\n");
+            })
+            .fail(function(xhr, status, error) {
+                output.append("Failed! Error: "+error);
+            });
     }
 
     function backup_input_changed(ctx, on_change = false) {
@@ -39,9 +54,15 @@ Title="Backup and restore"
             form.find('.buddybackup-type-remote').show();
             form.find('input[name="destination_dataset"]').removeAttr('list');
 
+            var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
+
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
-            source_dataset.html($('datalist#local-encrypted-datasets').html());
+            if (allow_unencrypted_remote_backups == "yes") {
+                source_dataset.html($('datalist#local-datasets').html());
+            } else {
+                source_dataset.html($('datalist#local-encrypted-datasets').html());
+            }
             source_dataset.val(source_dataset_val);
         } else if (dest_type == "local") {
             form.find('.buddybackup-type-remote').hide();
@@ -132,6 +153,7 @@ _(Your SSH public key (send this to you buddy))_:
 <div id="buddybackup-backup-list">
 <?php
     function backup_entry($uid, $data) {
+        global $cfg;
         global $plugin;
         global $rc_script;
         global $disabled;
@@ -159,7 +181,7 @@ _(Your SSH public key (send this to you buddy))_:
             <dt>_(ZFS dataset to backup)_:</dt>
             <dd>
                 <select name="source_dataset" class="align" <?=$disabled?>>
-                <?=datasets($data["source_dataset"], $data['type']!='local')?>
+                <?=datasets($data["source_dataset"], $data['type']!='local' && $cfg["AllowUnencryptedRemoteBackups"]!='yes')?>
                 </select>
             </dd>
         </dl>
