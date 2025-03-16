@@ -172,7 +172,7 @@ mark_sent_backup() {
         fi
     fi
 
-    echo "last_ran=$(date +%s)\ndest_size=${dest_size}" > "/tmp/buddybackup-${uid}";
+    printf "last_ran=$(date +%s)\ndest_size=${dest_size}" > "/tmp/buddybackup-${uid}";
 }
 
 send_backup() {
