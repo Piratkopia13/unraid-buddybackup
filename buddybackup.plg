@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.03.02">
+  <!ENTITY version      "2025.03.16">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "c9f0e4daa3392766a4f3d77096b4df8c">
+  <!ENTITY pkgMD5        "d3410d9f5c9aefa485de8f16ee30dff4">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,37 +26,56 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.03.16
+- The "Test connection" button now does a simple security validation to ensure permissions are set correctly.
+- Add advanced option to allow unencrypted remote backups
+- Allow aborting all running backups or restores from gui
+- Add checkbox for toggling auto scrolling in backup/restore outputs
+
 ###2025.03.02
 - Allow restoring from local backup destination
 - Print syncoid errors to log when run from cron
 - Add separate advanced options for warn/crit on buddys dashboard entry
+
 ###2025.02.23
 - Fix permission issue when getting dataset size for buddy's backup shown in dashboard panel
+
 ###2025.02.19
 - Fix bug requiring buddys backups to be enable for snapshot creation/pruning to work. Thanks to @adamzetpl for reporting this bug
 - Fix bug causing snapshot creation/pruning entries to break after removing any entry.
+
 ###2025.02.18
 - Expose advanced settings for utc timezone, and dashboard panel coloring
+
 ###2025.02.17
 - Add panel to Unraid Dashboard with info about last backup and destination size
 - Clarified remote destination dataset names in settings
+
 ###2025.02.10
 - Fix logic error that caused a warning for snapshot creation entries when buddy's destination dataset was unset. Thanks to @MowMdown for reporting this bug
+
 ###2025.02.09
 - Multiple backups can now be specified
 - Added support for local datasets as backup destination
 - Add option to trigger backup after snapshot creation
 - Restoring backups is now done from a button in the backup section instead of restore having its own section
+
 ###2025.02.02
 - Improve error handling when getting list of snapshots from buddy
+
 ###2025.01.31
 - Bug fixes
+
 ###2025.01.29
 - Added settings section for automatic snapshot creation and pruning
+
 ###2025.01.25
 - Added restore functionality
+
 ###2025.01.19b
 - Bug fixes
+
 ###2025.01.18 - BuddyBackup
 - Initial release
 </CHANGES>
