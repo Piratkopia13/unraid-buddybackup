@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.04.06">
+  <!ENTITY version      "2025.04.06a">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "ab8dec27ec4ec139094c5a19836db3d3">
+  <!ENTITY pkgMD5        "a901c60c83303f5f98a2d55c9df2d46f">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,9 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.04.06a
+- Fix plugin update not applying the latest changes directly
 
 ###2025.04.06
 - Fix remote not being able to connect after destination machine reboots
@@ -86,7 +89,7 @@
   <!--
   The 'plugin' package file.
   -->
-  <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new">
+  <FILE Name="&pkgPath;/&pkgName;" Run="upgradepkg --install-new --reinstall">
     <URL>&gitRelURL;/&pkgName;</URL>
     <MD5>&pkgMD5;</MD5>
   </FILE>
