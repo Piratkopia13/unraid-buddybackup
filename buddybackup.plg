@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.03.16">
+  <!ENTITY version      "2025.04.06">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "8d4e84e5da9e7ec7e4028ef664660e7f">
+  <!ENTITY pkgMD5        "ab8dec27ec4ec139094c5a19836db3d3">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,9 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.04.06
+- Fix remote not being able to connect after destination machine reboots
 
 ###2025.03.16
 - The "Test connection" button now does a simple security validation to ensure permissions are set correctly.

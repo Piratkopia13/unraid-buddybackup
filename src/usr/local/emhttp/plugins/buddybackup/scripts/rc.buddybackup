@@ -80,6 +80,17 @@ enable_backups_from_buddy() {
     if ! id "${username}" >/dev/null 2>&1; then
         useradd -m -s /bin/bash "${username}" >/dev/null 2>&1
     fi
+    # after a reboot unraid remebers the user, but does not create home dirs or groups
+    # create home dir if missing
+    if [ ! -d "/home/${username}" ]; then
+        usermod -d "/home/${username}" "${username}" >/dev/null 2>&1
+        mkhomedir_helper "${username}"
+    fi
+    # create group if missing
+    if [ ! $(getent group "${username}") ]; then
+        groupadd "${username}"
+        usermod -g "${username}" "${username}" >/dev/null 2>&1
+    fi
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
     mkdir "/home/${username}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${username}/.ssh"
