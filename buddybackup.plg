@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.04.06a">
+  <!ENTITY version      "2025.04.06b">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "a901c60c83303f5f98a2d55c9df2d46f">
+  <!ENTITY pkgMD5        "475536b2d99e218cb75f4bd399a2a0a6">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,10 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.04.06b
+- Fix invisible public key in settings
+- Fix SSH wierdness by always recreating buddybackup user on update
 
 ###2025.04.06a
 - Fix plugin update not applying the latest changes directly

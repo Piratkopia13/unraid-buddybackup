@@ -5,8 +5,11 @@ Title="Backup and restore"
     $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
     if (file_exists($public_ssh_key_path)) {
         $public_ssh_key	= file_get_contents($public_ssh_key_path);
+        if ($public_ssh_key === false) {
+            $public_ssh_key = "Failed to read file";
+        }
     } else {
-        $public_ssh_key	= "";
+        $public_ssh_key	= "Reinstall plugin. SSH key not found.";
     }
 
     $disabled = ($disable_send) ? "disabled" : "";
@@ -148,7 +151,7 @@ Title="Backup and restore"
 </style>
 
 _(Your SSH public key (send this to you buddy))_:
-: <input disabled type="text" class="align" value="<?=$public_ssh_key;?>" <?=$disabled?>>
+: <input disabled type="text" class="align" style="opacity:1;" value="<?=$public_ssh_key;?>" <?=$disabled?>>
 
 <div id="buddybackup-backup-list">
 <?php
