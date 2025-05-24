@@ -60,26 +60,44 @@ run_and_write_output() {
 
 enable_backups_from_buddy() {
     if [[ -z "${ReceiveDestinationDataset}" ]]; then
-        err="Can not enable backups from buddy, no recieve destination dataset set."
+        local err="Can not enable backups from buddy, no recieve destination dataset set."
         logger "${err}" -t"${plugin}"
         echo "${err}"
         return
     fi
 
-    # add buddybackup to "AllowUsers list" in /etc/ssh/sshd_config if AllowUsers exists (and restart sshd)
+    # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
-    grepped=$(grep "buddybackup" /etc/ssh/sshd_config)
-    trimmed=$(echo "${grepped}" | sed 's/^[ \t]*//')
+    local grepped=$(grep "AllowUsers.*${username}" "${sshd_config}")
+    local trimmed=$(echo "${grepped}" | sed 's/^[ \t]*//')
+    local restart_sshd=false
     if [[ ! $grepped ]] || [[ $trimmed == "#"* ]]; then
-        sed -i 's/^#\?AllowUsers .*/AllowUsers root/' /etc/ssh/sshd_config
-        sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' /etc/ssh/sshd_config
+        sed -i 's/^#\?AllowUsers .*/AllowUsers root/' "${sshd_config}"
+        sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' "${sshd_config}"
+        restart_sshd=true
+    fi
+
+    # Add own section to sshd_config for buddybackup to try avoid having unraid updates break buddybackup auth
+    if ! grep -q "^Match User ${username}" "${sshd_config}"; then
+        cat <<EOF >> "${sshd_config}"
+Match User ${username}
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
+    PubkeyAuthentication yes
+    AuthorizedKeysFile    .ssh/authorized_keys
+EOF
+        restart_sshd=true
+    fi
+
+    if [ "$restart_sshd" = true ]; then
         /etc/rc.d/rc.sshd restart >/dev/null 2>&1
     fi
 
     # Ensure user is setup correctly by re-creating it
     userdel "${username}" >/dev/null 2>&1
     # make buddybackup user (with a homedir)
-    useradd -m -s /bin/bash "${username}" >/dev/null 2>&1
+    local pwd=$(openssl rand -base64 32)
+    useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
     
     # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
     mkdir "/home/${username}/.ssh" >/dev/null 2>&1
@@ -94,9 +112,27 @@ enable_backups_from_buddy() {
 }
 
 disable_backups_from_buddy() {
-    # remove buddybackup from "AllowUsers list" in /etc/ssh/sshd_config (and restart sshd)
-    if grep -q "buddybackup" /etc/ssh/sshd_config; then
-        sed -i 's/ '${username}'//' /etc/ssh/sshd_config
+    local restart_sshd=false
+    # Remove "Match User buddybackup" section from sshd_config
+    if grep -q "^Match User ${username}" "${sshd_config}"; then
+        awk -v user="${username}" '
+        BEGIN { skip=0 }
+        $0 ~ "^Match User "user"$" { skip=1; next }
+        skip {
+            if ($0 !~ /^(\t|    )/) { skip=0 } else { next }
+        }
+        { print }
+        ' "${sshd_config}" | tee "${sshd_config}.tmp" > /dev/null && mv "${sshd_config}.tmp" "${sshd_config}"
+        restart_sshd=true
+    fi
+
+    # remove buddybackup from "AllowUsers list" in sshd_config
+    if grep -q "AllowUsers.*${username}" "${sshd_config}"; then
+        sed -i '/^[[:space:]#]*AllowUsers/ s/ '${username}'\b//' "${sshd_config}"
+        restart_sshd=true
+    fi
+
+    if [ "$restart_sshd" = true ]; then
         /etc/rc.d/rc.sshd restart >/dev/null 2>&1
     fi
 
@@ -500,6 +536,18 @@ uninstall() {
 # read our configuration.
 CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
 source $CONFIG
+
+# Unraid 7.1 copies ssh configs from boot, so edit the boot file if on that version and it exists
+source /etc/unraid-version
+unraid_7_1_or_higher=false
+if [[ "$(echo "$version" | awk -F. '{print $2}')" -ge 1 ]]; then
+    unraid_7_1_or_higher=true
+fi
+if [[ -f "/boot/config/ssh/sshd_config" ]] && [ "$unraid_7_1_or_higher" = true ]; then
+    sshd_config="/boot/config/ssh/sshd_config"
+else
+    sshd_config="/etc/ssh/sshd_config"
+fi
 
 username="buddybackup"
 plugin_path="/boot/config/plugins/${plugin}"
