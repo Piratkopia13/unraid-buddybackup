@@ -253,12 +253,12 @@ send_backup() {
     fi
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
-        printf -v result "\nSuccessfully synced backup to buddy!"
+        printf -v result "\n%s" "Successfully synced backup to buddy!"
         mark_sent_backup "remote" "${destination_host}" "${destination_dataset}" "${uid}"
         send_mark_received_backup "${destination_host}"
     else 
         error_code=$?
-        printf -v result "Sending backup failed. Error code ${error_code}. Full output: ${result}"
+        printf -v result "%s" "Sending backup failed. Error code ${error_code}. Full output: ${result}"
         unraid_notify "${result}" "alert"
     fi
     write "${nchan}" "${result}"
@@ -296,11 +296,11 @@ send_local_backup() {
     fi
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
-        printf -v result "\nSuccessfully synced local backup!"
+        printf -v result "\n%s" "Successfully synced local backup!"
         mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
     else 
         error_code=$?
-        printf -v result "Local backup failed. Error code ${error_code}. Full output: ${result}"
+        printf -v result "%s" "Local backup failed. Error code ${error_code}. Full output: ${result}"
         unraid_notify "${result}" "alert"
     fi
     write "${nchan}" "${result}"
@@ -370,17 +370,17 @@ restore_snapshot() {
 
     if [ $error_code -eq 0 ]; then
         if [[ -n "${nchan}" ]]; then
-            printf -v result "\nSuccessfully restored ${type} backup!"
+            printf -v result "\n%s" "Successfully restored ${type} backup!"
             unraid_notify "Restoring ${type} backup finished successfully!" "normal"
         else
-            printf -v result "${result}\n\nSuccessfully restored ${type} backup!"
+            printf -v result "%s\n\n%s" "${result}" "Successfully restored ${type} backup!"
         fi
     else 
         full_error=""
-        printf -v full_error "Restoring ${type} backup failed. Error code ${error_code}. Full output: ${result}"
+        printf -v full_error "%s" "Restoring ${type} backup failed. Error code ${error_code}. Full output: ${result}"
         if [[ -n "${nchan}" ]]; then
             unraid_notify "${full_error}" "alert"
-            printf -v result "Restoring ${type} backup failed. Error code ${error_code}."
+            printf -v result "%s" "Restoring ${type} backup failed. Error code ${error_code}."
         else
             result="${full_error}"
         fi
