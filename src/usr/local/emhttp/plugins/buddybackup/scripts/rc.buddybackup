@@ -95,7 +95,8 @@ EOF
 
     # Ensure user is setup correctly by re-creating it
     userdel "${username}" >/dev/null 2>&1
-    # make buddybackup user (with a homedir)
+    # make buddybackup user, with a homedir and random password
+    # a password is required, even though it's never used, for ssh access to function with PAM disabled
     local pwd=$(openssl rand -base64 32)
     useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
     
