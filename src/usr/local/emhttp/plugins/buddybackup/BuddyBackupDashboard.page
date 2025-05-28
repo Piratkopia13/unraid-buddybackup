@@ -36,6 +36,15 @@ $bb_buddys_backup = ($bb_cfg["ReceiveBackups"] == "enable") ? ", Buddy's backup"
 
 $bb_enabled_backups = array_filter($bb_enabled_backups);
 $bb_num_enabled_backups = count($bb_enabled_backups);
+// Sort by source_dataset name and destination_dataset/destination_host name
+uasort($bb_enabled_backups, function($a, $b) {
+  $cmp = strcasecmp($a["source_dataset"], $b["source_dataset"]);
+  if ($cmp !== 0) return $cmp;
+
+  $destA = ($a["type"] == "local") ? $a["destination_dataset"] : $a["destination_host"];
+  $destB = ($b["type"] == "local") ? $b["destination_dataset"] : $b["destination_host"];
+  return strcasecmp($destA, $destB);
+});
 
 function bb_info($file, $buddy = false) {
   global $bb_cfg;
