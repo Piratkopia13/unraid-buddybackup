@@ -501,6 +501,11 @@ get_available_snapshots() {
         fi
 
         while IFS= read -r line; do
+            if [[ -z "${line}" ]]; then
+                # skip empty lines / datasets with no snapshots
+                json+="," 
+                continue
+            fi
             # Parse out snap, guid, creation from every 2 lines
             # examples lines:
             # disk4/offsite_backup/appdata@syncoid_2025-01-21:03:00:03-GMT01:00        guid    13997382453328167196    -

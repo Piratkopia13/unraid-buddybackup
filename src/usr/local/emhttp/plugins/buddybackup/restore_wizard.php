@@ -78,9 +78,13 @@
 
                 $.each(json.data, function(dataset_name, dataset_data) {
                     var group = '<optgroup label="'+dataset_name+'">';
-                    $.each(dataset_data, function(snap_name, snap_data) {
-                        group += '<option value="'+snap_name+'">'+snap_name+'</option>';
-                    })
+                    if (jQuery.isEmptyObject(dataset_data)) {
+                        group += '<option disabled>No snapshots found</option>';
+                    } else {
+                        $.each(dataset_data, function(snap_name, snap_data) {
+                            group += '<option value="'+snap_name+'">'+snap_name+'</option>';
+                        })
+                    }
                     group += '</optgroup>'; 
                     list.append(group);
                 });
@@ -195,7 +199,7 @@
         get_available_snapshots();
         $('#restore-snapshot').not('.lock').each(function() { $(this).on('input change', function() {
             var snap = $(this).find(':selected').val();
-            if (snap.length === 0) {
+            if (!snap || snap.length === 0) {
                 $('.buddybackup-restore-selected').prop('disabled', true);
             } else {
                 $('.buddybackup-restore-selected').prop('disabled', false);
