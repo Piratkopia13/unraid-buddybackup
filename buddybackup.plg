@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.05.24">
+  <!ENTITY version      "2025.06.01">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "26551de48bf06abf817d057b4acc79d7">
+  <!ENTITY pkgMD5        "d95ba1407a261c946a1bf083144eac39">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,10 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.06.01
+- Sort backups list in dashboard by source and destination name [#11](https://github.com/Piratkopia13/unraid-buddybackup/issues/11)
+- Fix potential issue causing "invalid format character" [#8](https://github.com/Piratkopia13/unraid-buddybackup/issues/8)
 
 ###2025.05.24
 - Fix remote SSH connection issue on Unraid 7.1

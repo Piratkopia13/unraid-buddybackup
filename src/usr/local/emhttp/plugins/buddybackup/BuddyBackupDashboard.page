@@ -80,7 +80,7 @@ function bb_info($file, $buddy = false) {
 $bb_backups_table_content = "";
 foreach ($bb_enabled_backups as $uid => $cfg) {
   $source = $cfg["source_dataset"];
-  $dest = ($cfg["type"] == "local") ? $cfg["destination_dataset"] : $cfg["destination_host"];
+  $dest = ($cfg["type"] == "local") ? $cfg["destination_dataset"] : $cfg["destination_host"]; // note: if this line changes, also update the uasort of $bb_enabled_backups above
   $info = bb_info("/tmp/buddybackup-$uid");
   $last_ran = $info["last_ran"];
   $last_ran_style = $info["last_ran_style"];
