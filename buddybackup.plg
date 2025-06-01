@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.06.01">
+  <!ENTITY version      "2025.06.01a">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "d95ba1407a261c946a1bf083144eac39">
+  <!ENTITY pkgMD5        "ad6bb75fcaf9bdec848bafd5ca39c3aa">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,10 @@
          >
 <CHANGES>
 ##&name;
+
+###2025.06.01a
+- Allow adding multiple buddy ssh keys to allow multiple buddies to push backups to the same destination [#10](https://github.com/Piratkopia13/unraid-buddybackup/issues/10)
+- Fix bug causing snapshot listing to fail when trying to restore data if the any of the destination datasets had no snapshots [#7](https://github.com/Piratkopia13/unraid-buddybackup/issues/7)
 
 ###2025.06.01
 - Sort backups list in dashboard by source and destination name [#11](https://github.com/Piratkopia13/unraid-buddybackup/issues/11)
