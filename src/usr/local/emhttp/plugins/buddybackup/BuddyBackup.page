@@ -180,7 +180,6 @@ Tag="buddybackup"
     }
 
     function show_in_progress_log(title, element_name, log_class, abort_text=null, abort_func=null) {
-        console.warn(auto_scroll);
         swal({title:title,text:"<pre id='swalbody'></pre><hr>",html:true,animation:'none',showConfirmButton:true,confirmButtonText:"<?=_('Close')?>",showCancelButton:(abort_text!=null),cancelButtonText:abort_text},
             function(p){
                 $('.sweet-alert').removeClass('nchan');
