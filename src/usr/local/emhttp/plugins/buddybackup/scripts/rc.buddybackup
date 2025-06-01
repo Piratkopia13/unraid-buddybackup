@@ -106,7 +106,16 @@ EOF
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${username}/.ssh/authorized_keys"
     chown -R ${username}:${username} "/home/${username}/"
-    echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${DestinationPubSSHKey}" > "/home/${username}/.ssh/authorized_keys"
+
+    # Copy each buddy key to authorized_keys file. If multiple keys are provided, each key will be on a new line.
+    > "/home/${username}/.ssh/authorized_keys" # Clear the file before writing new keys
+    while IFS= read -r key; do
+        # Trim whitespace and check if the line is non-empty
+        trimmed_key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        if [[ -n "$trimmed_key" ]]; then
+            echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${trimmed_key}" >> "/home/${username}/.ssh/authorized_keys"
+        fi
+    done <<< "${DestinationPubSSHKey}"
 
     # note: this spins up disk
     zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"

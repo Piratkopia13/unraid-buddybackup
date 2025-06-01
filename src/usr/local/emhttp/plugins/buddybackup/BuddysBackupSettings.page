@@ -6,9 +6,23 @@ function update_example() {
   var val = $('form').find('select[name=ReceiveDestinationDataset]').val();
   $('#buddybackup-destination-example').text("Example for what buddy can use as destination dataset: "+val+"/my-stuff");
 }
+function update_key_textarea(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
+  if (ta.value.split('\n').length > 1) {
+    $('#buddybackup-multiple-keys span').remove();
+    $('#buddybackup-multiple-keys').append('<span style="color: #ffffa3;">Important: all keys you add will have access to retrieve data from all child datasets in the parent dataset specified below.</span>');
+  } else {
+    $('#buddybackup-multiple-keys span').remove();
+  }
+}
 $(function() { 
   $('form').find('select[name=ReceiveDestinationDataset]').each(function(){$(this).on('input change', update_example)});
   update_example();
+
+  // Resize textarea for Buddy's SSH public key and add important note when more than one key is added
+  $('form').find('textarea[name=DestinationPubSSHKey]').each(function(){$(this).on('input', function() {update_key_textarea(this);})});
+  update_key_textarea($('form').find('textarea[name=DestinationPubSSHKey]')[0]);
 })
 
 </script>
@@ -30,7 +44,14 @@ _(Enable)_:
 :end
 
 _(Buddy's SSH public key (get this from your buddy))_:
-: <input type="text" name="DestinationPubSSHKey" class="align" value="<?=$cfg['DestinationPubSSHKey'];?>" <?=$disabled?>>
+: <textarea name="DestinationPubSSHKey" class="align" wrap="off" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>>
+    <?=$cfg['DestinationPubSSHKey'];?>
+  </textarea>
+
+<div id="buddybackup-multiple-keys" class="buddybackup-center" style="color:gray; margin-top: -10px;">
+  You can add multiple keys, just make sure there is only one key per line.<br>
+</div>
+<br>
 
 _(Destination parent dataset)_:
 : <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
