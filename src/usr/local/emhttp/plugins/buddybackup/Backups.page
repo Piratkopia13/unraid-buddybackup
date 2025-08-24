@@ -108,10 +108,10 @@ Title="Backup and restore"
                 swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
                     form.submit();
                 }});
+                return;
             }
-        } else {
-            form.submit();
         }
+        form.submit();
     }
     function remove_backup(btn) {
         swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
