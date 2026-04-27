@@ -7,10 +7,10 @@ use Sys::Syslog qw(:standard :macros);
 use Scalar::Util qw(looks_like_number);
 
 my $POOL = qr/'[\w-]+'/;
-my $DATASET = qr/'[\w\/-]+'/;
-my $DATASET_SNAPSHOT = qr/'[\w\/-]+('?)@('?)[\w:-]+'/;
+my $DATASET = qr/'[\w\/ -]+'/;
+my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
 
-my $SYNCOID_SNAPSHOT = qr/'[\w\/-]+'@('?)syncoid_[\w:-]+\1/;
+my $SYNCOID_SNAPSHOT = qr/'[\w\/ -]+'@('?)syncoid_[\w:-]+\1/;
 
 my $REDIRS = qr/(?:\s+(?:2>\/dev\/null|2>&1))?/;
 my $PIPE = qr/\s*\|\s*/;
