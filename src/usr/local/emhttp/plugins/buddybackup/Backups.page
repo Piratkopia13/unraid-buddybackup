@@ -15,10 +15,14 @@ Title="Backup and restore"
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
+    function shell_escape_arg(value) {
+        return String(value).replace(/(["\\$`])/g, '\\$1');
+    }
     function test_connection(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
-        ip = form.find('input[name="destination_host"]').val();
-        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
     }
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");

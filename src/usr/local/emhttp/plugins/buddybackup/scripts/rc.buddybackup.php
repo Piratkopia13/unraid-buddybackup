@@ -11,6 +11,13 @@ $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
 $tmp_recv_dataset_path = "/tmp/buddybackup-recv-dest";
 
+$buddybackup_path = '/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin';
+$current_path = getenv('PATH') ?: '';
+$normalized_path = $buddybackup_path . ($current_path !== '' ? ":$current_path" : '');
+putenv("PATH=$normalized_path");
+$_ENV['PATH'] = $normalized_path;
+$_SERVER['PATH'] = $normalized_path;
+
 $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
@@ -168,6 +175,7 @@ function update_sanoid_conf() {
 function enable_sanoid_cron() {
     global $sanoid_cron_path;
     global $sanoid_bin;
+    global $buddybackup_path;
     global $plugin_path;
     global $log_script;
     global $plugin_config_path;
@@ -176,8 +184,9 @@ function enable_sanoid_cron() {
         ENSURE_SUCCESS(unlink($sanoid_cron_path));
     }
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
+    $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$tz $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
@@ -312,6 +321,32 @@ function mark_received_backup() {
     file_put_contents($file, $info);
 }
 
+function probe_zfs() {
+    global $tmp_recv_dataset_path;
+
+    if (!file_exists($tmp_recv_dataset_path)) {
+        echo "status=error\nmessage=Buddy receive destination dataset is not configured.";
+        exit(1);
+    }
+
+    $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
+    if ($dataset === '') {
+        echo "status=error\nmessage=Buddy receive destination dataset is not configured.";
+        exit(1);
+    }
+
+    $output = array();
+    $result_code = 0;
+    exec("zfs get -H -o value used " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
+    if ($result_code === 0) {
+        echo "status=ok\ndataset=$dataset";
+        return;
+    }
+
+    echo "status=error\nmessage=" . implode("\n", $output);
+    exit($result_code === 0 ? 1 : $result_code);
+}
+
 function send_backup($uid, $echo_pid_arg) {
     BB_LOG("Sending backup $uid");
     global $rc;
@@ -353,10 +388,15 @@ switch ($argv[1]) {
         send_backup($argv[2], $argv[3]);
         break;
     case 'test_connection':
-        passthru($rc.' '.$argv[1].' '.$argv[2]);
+        $host = escapeshellarg($argv[2] ?? '');
+        $destination_dataset = escapeshellarg($argv[3] ?? '');
+        passthru($rc.' test_connection '.$host.' '.$destination_dataset);
         break;
     case 'get_available_snapshots':
         get_available_snapshots($argv[2]);
+        break;
+    case 'probe_zfs':
+        probe_zfs();
         break;
     case 'mark_received_backup':
         mark_received_backup();

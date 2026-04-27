@@ -13,6 +13,18 @@ my $script = File::Spec->rel2abs(File::Spec->catfile(
 
 ok(-f $script, 'restrict_zfs script exists');
 
+my $script_source = do {
+    open my $fh, '<', $script or die "Unable to read $script: $!";
+    local $/;
+    <$fh>;
+};
+
+like(
+    $script_source,
+    qr!join\(':',\s*grep\s*\{\s*length\s*\}\s*qw\(/usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin\)!s,
+    'restrict_zfs normalizes PATH to include sbin directories'
+);
+
 sub run_restrict {
     my ($command) = @_;
 
@@ -162,6 +174,11 @@ subtest 'allowed commands' => sub {
             label => 'receive reset',
             command => qq{zfs receive -A $dataset},
             expected_lines => [qq{would run command: zfs receive -A $dataset}],
+        },
+        {
+            label => 'zfs probe callback',
+            command => q{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs},
+            expected_lines => ['would run command: /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs'],
         },
         {
             label => 'mark received backup callback',

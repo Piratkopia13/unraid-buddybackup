@@ -6,6 +6,8 @@ use Getopt::Long qw(GetOptions);
 use Sys::Syslog qw(:standard :macros);
 use Scalar::Util qw(looks_like_number);
 
+$ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin), ($ENV{'PATH'} // ''));
+
 my $POOL = qr/'[\w-]+'/;
 my $DATASET = qr/'[\w\/ -]+'/;
 my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
@@ -34,6 +36,7 @@ my @ALLOWED_COMMANDS = (
     qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT/,
     qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
     qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs/,
     qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup/,
 );
 

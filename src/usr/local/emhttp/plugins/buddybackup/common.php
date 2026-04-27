@@ -3,6 +3,13 @@
     $docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
     require_once $docroot."/plugins/dynamix/include/Helpers.php";
 
+    $buddybackup_path = '/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin';
+    $current_path = getenv('PATH') ?: '';
+    $normalized_path = $buddybackup_path . ($current_path !== '' ? ":$current_path" : '');
+    putenv("PATH=$normalized_path");
+    $_ENV['PATH'] = $normalized_path;
+    $_SERVER['PATH'] = $normalized_path;
+
     $cfg = parse_plugin_cfg($plugin, true);
     $rc_name = "rc.$plugin.php";
     $rc_script = "/plugins/$plugin/scripts/$rc_name";

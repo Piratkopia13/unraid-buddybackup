@@ -1,6 +1,8 @@
 #!/bin/bash
 set -o pipefail
 
+export PATH="/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin${PATH:+:${PATH}}"
+
 plugin="buddybackup"
 
 list_descendants() {
@@ -405,7 +407,7 @@ test_connection() {
     local host=$1
     local cmd="${2:-echo ok}"
     # test SSH connection to buddy
-    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" $cmd 2>&1)
+    ssh_status=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${cmd}" 2>&1)
     if [[ "${ssh_status}" == ok ]] || [[ "${ssh_status}" == *"hostfile_replace_entries"* ]]; then
         echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
     elif [[ "${ssh_status}" == *"Permission denied"* ]] ; then
@@ -417,6 +419,7 @@ test_connection() {
 
 test_connection_cmd() {
     local host=$1
+    local destination_dataset=$2
     echo "<h2>Trying to connect to ${host} over SSH..<br>"
 
     local success=0
@@ -432,6 +435,74 @@ test_connection_cmd() {
     esac
 
     if [[ $success -eq 1 ]]; then
+        local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+        local zfs_probe_result
+        zfs_probe_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${zfs_probe_cmd}" 2>&1)
+        local zfs_probe_status=$?
+
+        local remote_receive_dataset=""
+        local remote_probe_message=""
+        local remote_probe_status=""
+        if [[ "${zfs_probe_result}" == status=* ]]; then
+            while IFS= read -r line; do
+                case "${line}" in
+                    status=*)
+                        remote_probe_status="${line#status=}"
+                    ;;
+                    dataset=*)
+                        remote_receive_dataset="${line#dataset=}"
+                    ;;
+                    message=*)
+                        remote_probe_message="${line#message=}"
+                    ;;
+                esac
+            done <<< "${zfs_probe_result}"
+        elif [[ "${zfs_probe_result}" == "ok" ]]; then
+            remote_probe_status="ok"
+        fi
+
+        if [[ "${remote_probe_status}" == "ok" ]] && [[ -n "${remote_receive_dataset}" ]]; then
+            echo "Buddy's configured receive dataset: ${remote_receive_dataset}<br>"
+
+            if [[ -z "${destination_dataset}" ]]; then
+                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset}/'.</span><br>"
+            elif [[ "${destination_dataset}" == "${remote_receive_dataset}/"* ]]; then
+                echo "Destination dataset is under the receiver's configured dataset.<br>"
+            elif [[ "${destination_dataset}" == "${remote_receive_dataset}" ]]; then
+                echo "<span style='color:red'>Destination dataset must be a child dataset under '${remote_receive_dataset}', not the parent dataset itself.</span><br>"
+            else
+                echo "<span style='color:red'>Destination dataset '${destination_dataset}' does not begin with '${remote_receive_dataset}/'.</span><br>"
+            fi
+        elif [[ "${zfs_probe_result}" != "ok" ]]; then
+            if [[ -z "${zfs_probe_result}" ]] && [[ -n "${destination_dataset}" ]]; then
+                local probe_dataset="${destination_dataset%/*}"
+                if [[ -z "${probe_dataset}" ]] || [[ "${probe_dataset}" == "${destination_dataset}" ]]; then
+                    probe_dataset="${destination_dataset}"
+                fi
+
+                local legacy_probe_cmd="zfs get -H name '${probe_dataset}'"
+                zfs_probe_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${legacy_probe_cmd}" 2>&1)
+                zfs_probe_status=$?
+                local legacy_probe_line="${zfs_probe_result%%$'\n'*}"
+                local legacy_probe_name=""
+                local legacy_probe_property=""
+                local legacy_probe_value=""
+                IFS=$'\t' read -r legacy_probe_name legacy_probe_property legacy_probe_value _ <<< "${legacy_probe_line}"
+                if [[ $zfs_probe_status -ne 0 ]] || [[ "${legacy_probe_property}" != "name" ]] || [[ "${legacy_probe_value}" != "${probe_dataset}" ]]; then
+                    echo "<span style='color:red'>Connected, but the receiver is running an older BuddyBackup version, so BuddyBackup fell back to probing '${probe_dataset}'. That legacy ZFS probe failed. Result: ${zfs_probe_result}</span><br>"
+                else
+                    echo "<span style='color:#996600'>Connected. The receiver is running an older BuddyBackup version, so BuddyBackup used a legacy ZFS probe on '${probe_dataset}'.</span><br>"
+                    echo "The legacy probe succeeded, but this receiver does not report its configured receive dataset yet, so the destination dataset prefix could not be validated automatically.<br>"
+                fi
+            elif [[ -z "${zfs_probe_result}" ]]; then
+                echo "<span style='color:#996600'>Connected, but this buddy's BuddyBackup version does not support the host-only ZFS probe yet. Fill in the destination dataset or update the receiving server to fully verify remote ZFS access here.</span><br>"
+            elif [[ "${remote_probe_status}" == "error" ]]; then
+                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${remote_probe_message}</span><br>"
+            else
+                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${zfs_probe_result}</span><br>"
+            fi
+        fi
+
         eval $(test_connection "${host}" "echo ok && ls")
         if [[ "${connection_status}" != "fail" ]] || [[ ${connection_result} != "" ]]; then
             echo "<span style='color:red'>BuddyBackup SSH security validation failed! This could happen if remote is not using BuddyBackup. Backups will still work, but connection is not restriced to backups. This is a security risk.<span>"
@@ -585,7 +656,7 @@ case "$1" in
 		send_local_backup "${2}" "${3}" "${4}" "${5}"
 	;;
     ('test_connection')
-		test_connection_cmd "${2}"
+        test_connection_cmd "${2}" "${3}"
 	;;
     ('get_available_snapshots')
         get_available_snapshots "${2}" "${3}" "${4}"
