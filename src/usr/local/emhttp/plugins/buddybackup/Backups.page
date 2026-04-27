@@ -222,7 +222,7 @@ _(Your SSH public key (send this to you buddy))_:
             <dt>_(Destination dataset)_:</dt>
             <dd>
                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
-                <div class="buddybackup-center buddybackup-type-remote" style="color:gray;" <?=($data['type']=='local')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</span>
+                <div class="buddybackup-field-note buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</div>
             </dd>
         </dl>
         </td>

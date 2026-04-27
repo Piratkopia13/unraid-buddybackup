@@ -43,35 +43,44 @@ _(Enable)_:
     > Enable receival of Buddy's backups. Buddy will not be able to connect to you unless this is enabled.
 :end
 
-_(Buddy's SSH public key (get this from your buddy))_:
-: <textarea name="DestinationPubSSHKey" class="align" wrap="off" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>>
+<dl>
+  <dt>_(Buddy's SSH public key (get this from your buddy))_:</dt>
+  <dd>
+    <textarea name="DestinationPubSSHKey" class="align" wrap="off" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>>
     <?=$cfg['DestinationPubSSHKey'];?>
   </textarea>
+    <div id="buddybackup-multiple-keys" class="buddybackup-field-note">
+      You can add multiple keys, just make sure there is only one key per line.<br>
+    </div>
+  </dd>
+</dl>
 
-<div id="buddybackup-multiple-keys" class="buddybackup-center" style="color:gray; margin-top: -10px;">
-  You can add multiple keys, just make sure there is only one key per line.<br>
-</div>
-<br>
-
-_(Destination parent dataset)_:
-: <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
+<dl>
+  <dt>_(Destination parent dataset)_:</dt>
+  <dd>
+    <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
   <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
-  </select>
-<div class="buddybackup-center" style="color:gray;">Buddy should prefix their destination dataset with this, but always end with a child dataset.
+    </select>
+    <div class="buddybackup-field-note">Buddy should prefix their destination dataset with this, but always end with a child dataset.
 Buddy can use any child dataset following this as destination, but not this dataset directly.<br>
 <span id="buddybackup-destination-example"></span></div>
-<br>
+  </dd>
+</dl>
 
 _(Snapshot retention)_:
-: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> Hourly</span>
-<input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> Monthly
-
-&nbsp;
-: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> Daily</span>
-<input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> Yearly
-
-&nbsp;
-: <span class="buddy-left"><input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> Weekly</span>
+: <span class="buddy-retention-group">
+    <span class="buddy-retention-row">
+      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> <span>Hourly</span></label>
+      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> <span>Monthly</span></label>
+    </span>
+    <span class="buddy-retention-row">
+      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> <span>Daily</span></label>
+      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> <span>Yearly</span></label>
+    </span>
+    <span class="buddy-retention-row">
+      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> <span>Weekly</span></label>
+    </span>
+  </span>
 
 :retention_plug:
     > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.

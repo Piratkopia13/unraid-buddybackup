@@ -60,8 +60,41 @@ Tag="buddybackup"
     .buddybackup-center {
         text-align: center !important;
     }
+    .buddybackup-field-note {
+        display: block;
+        margin-top: 4px;
+        color: gray;
+        text-align: left !important;
+    }
     .narrow {
-        width: 20px !important;
+        width: 4ch !important;
+        min-width: 4ch;
+    }
+    .buddy-retention-group {
+        display: block;
+    }
+    .buddy-retention-row {
+        display: flex;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+    }
+    .buddy-retention-row:last-child {
+        margin-bottom: 0;
+    }
+    .buddy-retention-item {
+        display: inline-flex;
+        align-items: center;
+        min-width: 180px;
+        margin: 0 24px 0 0;
+    }
+    .buddy-retention-item:last-child {
+        margin-right: 0;
+    }
+    .buddy-retention-item span {
+        margin-left: 8px;
+    }
+    .buddy-retention-item input {
+        margin: 0;
     }
     .buddybackup-list-entry {
         border: 1px solid gray;
