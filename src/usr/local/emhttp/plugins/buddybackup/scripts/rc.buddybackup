@@ -51,6 +51,10 @@ html_escape() {
         -e "s/'/\&#39;/g"
 }
 
+shell_single_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"
+}
+
 # Runs cmd and continously sends output to nchan if specified, otherwise runs cmd and echos result afterwards
 run_and_write_output() {
     local nchan="$1"  # Set to empty string to only write to console. Otherwise it will be sent to the nchan channel with this name
@@ -497,7 +501,7 @@ test_connection_cmd() {
                     probe_dataset="${destination_dataset}"
                 fi
 
-                local legacy_probe_cmd="zfs get -H name '${probe_dataset}'"
+                local legacy_probe_cmd="zfs get -H name $(shell_single_quote "${probe_dataset}")"
                 zfs_probe_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${legacy_probe_cmd}" 2>&1)
                 zfs_probe_status=$?
                 local legacy_probe_line="${zfs_probe_result%%$'\n'*}"
@@ -546,7 +550,7 @@ get_available_snapshots() {
     fi
     local destination_dataset="${2}"
 
-    local cmd="zfs list -o name,origin -t filesystem,volume -Hr '${destination_dataset}'"
+    local cmd="zfs list -o name,origin -t filesystem,volume -Hr $(shell_single_quote "${destination_dataset}")"
 
     local result=""
     if [[ "${type}" == "remote" ]]; then
@@ -576,7 +580,7 @@ get_available_snapshots() {
         fi
 
         dataset=$(echo "${line}" | sed 's/\s.*$//')
-        cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation '${dataset}'" )
+        cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation $(shell_single_quote "${dataset}")" )
         datasets+=( "${dataset}" )
     done <<< "${result}"
     
@@ -627,7 +631,7 @@ get_buddy_used_size() {
     local destination_host="${1}"
     local destination_dataset="${2}"
 
-    local cmd="zfs get -H -o value used '${destination_dataset}'"
+    local cmd="zfs get -H -o value used $(shell_single_quote "${destination_dataset}")"
     local ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
     local error_code=$?
     if [[ $error_code -eq 0 ]] && [[ -z "${ssh_result}" ]]; then
