@@ -42,6 +42,15 @@ write() {
     done
 }
 
+html_escape() {
+    printf '%s' "$1" | sed \
+        -e 's/&/\&amp;/g' \
+        -e 's/</\&lt;/g' \
+        -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' \
+        -e "s/'/\&#39;/g"
+}
+
 # Runs cmd and continously sends output to nchan if specified, otherwise runs cmd and echos result afterwards
 run_and_write_output() {
     local nchan="$1"  # Set to empty string to only write to console. Otherwise it will be sent to the nchan channel with this name
@@ -420,17 +429,23 @@ test_connection() {
 test_connection_cmd() {
     local host=$1
     local destination_dataset=$2
-    echo "<h2>Trying to connect to ${host} over SSH..<br>"
+    local host_html
+    host_html=$(html_escape "${host}")
+    local destination_dataset_html
+    destination_dataset_html=$(html_escape "${destination_dataset}")
+    echo "<h2>Trying to connect to ${host_html} over SSH..<br>"
 
     local success=0
     eval $(test_connection "${host}")
+    local connection_result_html
+    connection_result_html=$(html_escape "${connection_result}")
     case "${connection_status}" in
         ("ok")
             echo "Success!<br>"
             success=1
         ;;
         ("no auth") echo "Authentication failed. Make sure buddy has enabled \"Buddy's Backups\" and entered your public key.<br>" ;;
-        ("fail") echo "Failed: ${connection_result}<br>" ;;
+        ("fail") echo "Failed: ${connection_result_html}<br>" ;;
         (*) echo "unexpected error" ;;
     esac
 
@@ -462,16 +477,18 @@ test_connection_cmd() {
         fi
 
         if [[ "${remote_probe_status}" == "ok" ]] && [[ -n "${remote_receive_dataset}" ]]; then
-            echo "Buddy's configured receive dataset: ${remote_receive_dataset}<br>"
+            local remote_receive_dataset_html
+            remote_receive_dataset_html=$(html_escape "${remote_receive_dataset}")
+            echo "Buddy's configured receive dataset: ${remote_receive_dataset_html}<br>"
 
             if [[ -z "${destination_dataset}" ]]; then
-                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset}/'.</span><br>"
+                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset_html}/'.</span><br>"
             elif [[ "${destination_dataset}" == "${remote_receive_dataset}/"* ]]; then
                 echo "Destination dataset is under the receiver's configured dataset.<br>"
             elif [[ "${destination_dataset}" == "${remote_receive_dataset}" ]]; then
-                echo "<span style='color:red'>Destination dataset must be a child dataset under '${remote_receive_dataset}', not the parent dataset itself.</span><br>"
+                echo "<span style='color:red'>Destination dataset must be a child dataset under '${remote_receive_dataset_html}', not the parent dataset itself.</span><br>"
             else
-                echo "<span style='color:red'>Destination dataset '${destination_dataset}' does not begin with '${remote_receive_dataset}/'.</span><br>"
+                echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${remote_receive_dataset_html}/'.</span><br>"
             fi
         elif [[ "${zfs_probe_result}" != "ok" ]]; then
             if [[ -z "${zfs_probe_result}" ]] && [[ -n "${destination_dataset}" ]]; then
@@ -487,19 +504,27 @@ test_connection_cmd() {
                 local legacy_probe_name=""
                 local legacy_probe_property=""
                 local legacy_probe_value=""
+                local probe_dataset_html
+                probe_dataset_html=$(html_escape "${probe_dataset}")
+                local zfs_probe_result_html
+                zfs_probe_result_html=$(html_escape "${zfs_probe_result}")
                 IFS=$'\t' read -r legacy_probe_name legacy_probe_property legacy_probe_value _ <<< "${legacy_probe_line}"
                 if [[ $zfs_probe_status -ne 0 ]] || [[ "${legacy_probe_property}" != "name" ]] || [[ "${legacy_probe_value}" != "${probe_dataset}" ]]; then
-                    echo "<span style='color:red'>Connected, but the receiver is running an older BuddyBackup version, so BuddyBackup fell back to probing '${probe_dataset}'. That legacy ZFS probe failed. Result: ${zfs_probe_result}</span><br>"
+                    echo "<span style='color:red'>Connected, but the receiver is running an older BuddyBackup version, so BuddyBackup fell back to probing '${probe_dataset_html}'. That legacy ZFS probe failed. Result: ${zfs_probe_result_html}</span><br>"
                 else
-                    echo "<span style='color:#996600'>Connected. The receiver is running an older BuddyBackup version, so BuddyBackup used a legacy ZFS probe on '${probe_dataset}'.</span><br>"
+                    echo "<span style='color:#996600'>Connected. The receiver is running an older BuddyBackup version, so BuddyBackup used a legacy ZFS probe on '${probe_dataset_html}'.</span><br>"
                     echo "The legacy probe succeeded, but this receiver does not report its configured receive dataset yet, so the destination dataset prefix could not be validated automatically.<br>"
                 fi
             elif [[ -z "${zfs_probe_result}" ]]; then
                 echo "<span style='color:#996600'>Connected, but this buddy's BuddyBackup version does not support the host-only ZFS probe yet. Fill in the destination dataset or update the receiving server to fully verify remote ZFS access here.</span><br>"
             elif [[ "${remote_probe_status}" == "error" ]]; then
-                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${remote_probe_message}</span><br>"
+                local remote_probe_message_html
+                remote_probe_message_html=$(html_escape "${remote_probe_message}")
+                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${remote_probe_message_html}</span><br>"
             else
-                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${zfs_probe_result}</span><br>"
+                local zfs_probe_result_html
+                zfs_probe_result_html=$(html_escape "${zfs_probe_result}")
+                echo "<span style='color:red'>Connected, but BuddyBackup could not run the remote ZFS probe. This usually means the buddybackup user cannot resolve or run ZFS commands yet. Result: ${zfs_probe_result_html}</span><br>"
             fi
         fi
 
