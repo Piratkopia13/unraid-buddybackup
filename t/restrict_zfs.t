@@ -286,8 +286,8 @@ subtest 'blocked commands' => sub {
         },
         {
             label => 'command substitution attempt',
-            command => qq{zfs get -H name $dataset4(id)},
-            expected_lines => [qq{blocked command: zfs get -H name $dataset4(id)}],
+            command => qq{zfs get -H name $dataset \$(id)},
+            expected_lines => [qq{blocked command: zfs get -H name $dataset \$(id)}],
         },
         {
             label => 'backtick substitution attempt',
