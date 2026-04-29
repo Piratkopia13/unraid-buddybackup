@@ -51,6 +51,13 @@ html_escape() {
         -e "s/'/\&#39;/g"
 }
 
+json_field() {
+    local json="$1"
+    local field="$2"
+
+    printf '%s' "${json}" | jq -r --arg field "${field}" 'if type == "object" then .[$field] // empty else empty end' 2>/dev/null
+}
+
 shell_single_quote() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\''/g")"
 }
@@ -462,22 +469,12 @@ test_connection_cmd() {
         local remote_receive_dataset=""
         local remote_probe_message=""
         local remote_probe_status=""
-        if [[ "${zfs_probe_result}" == status=* ]]; then
-            while IFS= read -r line; do
-                case "${line}" in
-                    status=*)
-                        remote_probe_status="${line#status=}"
-                    ;;
-                    dataset=*)
-                        remote_receive_dataset="${line#dataset=}"
-                    ;;
-                    message=*)
-                        remote_probe_message="${line#message=}"
-                    ;;
-                esac
-            done <<< "${zfs_probe_result}"
-        elif [[ "${zfs_probe_result}" == "ok" ]]; then
-            remote_probe_status="ok"
+        if [[ "${zfs_probe_result}" == \{* ]]; then
+            remote_probe_status=$(json_field "${zfs_probe_result}" "status")
+            if [[ -n "${remote_probe_status}" ]]; then
+                remote_receive_dataset=$(json_field "${zfs_probe_result}" "dataset")
+                remote_probe_message=$(json_field "${zfs_probe_result}" "message")
+            fi
         fi
 
         if [[ "${remote_probe_status}" == "ok" ]] && [[ -n "${remote_receive_dataset}" ]]; then

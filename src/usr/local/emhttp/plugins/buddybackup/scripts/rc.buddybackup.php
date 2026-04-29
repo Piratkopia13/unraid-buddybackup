@@ -62,6 +62,58 @@ function file_exists_and_not_empty($file) {
     return file_exists($file) && filesize($file) > 1;
 }
 
+function is_valid_zfs_dataset_name($dataset) {
+    if ($dataset === '') {
+        return false;
+    }
+
+    if (preg_match('/[\x00-\x1F\x7F]/', $dataset)) {
+        return false;
+    }
+
+    if (strpos($dataset, '@') !== false || strpos($dataset, '#') !== false) {
+        return false;
+    }
+
+    return preg_match('/^(?!\/)(?!.*\/\/)(?!.*\/$)[^\/]+(?:\/[^\/]+)*$/', $dataset) === 1;
+}
+
+function read_receive_destination_dataset(&$error_message = null) {
+    global $tmp_recv_dataset_path;
+
+    if (!file_exists($tmp_recv_dataset_path)) {
+        $error_message = 'Buddy receive destination dataset is not configured.';
+        return null;
+    }
+
+    $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
+    if ($dataset === '') {
+        $error_message = 'Buddy receive destination dataset is not configured.';
+        return null;
+    }
+
+    if (!is_valid_zfs_dataset_name($dataset)) {
+        $error_message = 'Buddy receive destination dataset is invalid.';
+        return null;
+    }
+
+    return $dataset;
+}
+
+function write_probe_zfs_response($status, $dataset = null, $message = null) {
+    $response = array('status' => $status);
+
+    if ($dataset !== null) {
+        $response['dataset'] = $dataset;
+    }
+
+    if ($message !== null) {
+        $response['message'] = $message;
+    }
+
+    echo json_encode($response, JSON_UNESCAPED_SLASHES);
+}
+
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
 function update() {
     global $rc;
@@ -313,25 +365,32 @@ function get_available_snapshots($uid) {
 
 // Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
 function mark_received_backup() {
-    global $tmp_recv_dataset_path;
-    $dataset = file_get_contents($tmp_recv_dataset_path);
-    $dest_size = exec("zfs get -H -o value used \"".$dataset."\"");
+    $error_message = null;
+    $dataset = read_receive_destination_dataset($error_message);
+    if ($dataset === null) {
+        BB_ERR($error_message);
+        return;
+    }
+
+    $output = array();
+    $result_code = 0;
+    exec("zfs get -H -o value used " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
+    if ($result_code !== 0) {
+        BB_ERR("Failed to get used size for buddy receive destination dataset '$dataset': " . implode("\n", $output));
+        return;
+    }
+
+    $dest_size = trim(implode("\n", $output));
     $file = "/tmp/buddybackup-buddy";
     $info = "last_ran=".time()."\ndest_size=$dest_size";
     file_put_contents($file, $info);
 }
 
 function probe_zfs() {
-    global $tmp_recv_dataset_path;
-
-    if (!file_exists($tmp_recv_dataset_path)) {
-        echo "status=error\nmessage=Buddy receive destination dataset is not configured.";
-        exit(1);
-    }
-
-    $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
-    if ($dataset === '') {
-        echo "status=error\nmessage=Buddy receive destination dataset is not configured.";
+    $error_message = null;
+    $dataset = read_receive_destination_dataset($error_message);
+    if ($dataset === null) {
+        write_probe_zfs_response('error', null, $error_message);
         exit(1);
     }
 
@@ -339,11 +398,12 @@ function probe_zfs() {
     $result_code = 0;
     exec("zfs get -H -o value used " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
     if ($result_code === 0) {
-        echo "status=ok\ndataset=$dataset";
+        write_probe_zfs_response('ok', $dataset, null);
         return;
     }
 
-    echo "status=error\nmessage=" . implode("\n", $output);
+    $message = implode("\n", $output);
+    write_probe_zfs_response('error', null, $message);
     exit($result_code === 0 ? 1 : $result_code);
 }
 
@@ -409,7 +469,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|send_backup|get_available_snapshots|mark_received_backup|restore_snapshot";
+        echo "usage ".$argv[0]." update|send_backup|get_available_snapshots|probe_zfs|mark_received_backup|restore_snapshot";
         break;
 }
 ?>
