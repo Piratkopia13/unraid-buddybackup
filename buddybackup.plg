@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2025.09.13">
+  <!ENTITY version      "2026.05.02">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "886e8b64f779b9647c92b05d35db4c25">
+  <!ENTITY pkgMD5        "d384fbb66105db10ee103446227331ca">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,14 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.05.02
+- Allow spaces in snapshot and dataset names sent over SSH [#20](https://github.com/Piratkopia13/unraid-buddybackup/issues/20)
+- Fix GUI field alignment that broke in some version of Unraid
+- Handle if ZFS is not available in SSH user buddybackup's PATH
+- Validate destination dataset name during connection testing
+- Validate that ZFS is available and working on the remote during connection testing
+- Reduce false positives for failed security validation during connection testing, and add debug logs if the test still fails
 
 ###2025.09.13
 - Update to sanoid/syncoid 2.3
