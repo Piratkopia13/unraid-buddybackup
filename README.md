@@ -8,6 +8,10 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 ### [User guide here](https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/)
 
+### Testing lab bootstrap
+
+Initial reproducible test-lab scaffolding (matrix, lifecycle scenarios, and scripts) is in `testlab/`.
+
 ![Logo](src/usr/local/emhttp/plugins/buddybackup/images/buddybackup.png)
 
 ---

@@ -1,0 +1,28 @@
+{
+  "provider": "manual",
+  "artifactsRoot": ".testlab/artifacts",
+  "logsRoot": ".testlab/logs",
+  "ssh": {
+    "user": "root",
+    "port": 22,
+    "identityFile": "~/.ssh/id_ed25519"
+  },
+  "nodes": {
+    "sender": {
+      "name": "unraid-sender",
+      "host": "192.168.1.101"
+    },
+    "receiver": {
+      "name": "unraid-receiver",
+      "host": "192.168.1.102"
+    }
+  },
+  "plugin": {
+    "installMethod": "url",
+    "plgUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg"
+  },
+  "timeouts": {
+    "sshReadySeconds": 300,
+    "rebootSettleSeconds": 30
+  }
+}

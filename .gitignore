@@ -1,1 +1,5 @@
 ﻿buddybackup.txz
+
+# Local test lab artifacts and machine-specific config
+.testlab/
+testlab/config/lab.local.json
