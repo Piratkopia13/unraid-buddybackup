@@ -15,8 +15,9 @@ This initial implementation provides:
 
 - Host bootstrap script.
 - Lab config templates.
+- Manual-provider provisioning probe with JSON readiness report.
 - Small matrix definition.
-- Matrix runner with lifecycle scenario hooks.
+- Matrix runner with lifecycle scenario hooks and per-cell artifacts.
 - Scenario scripts for fresh install and reboot checks.
 
 ## Quick start
@@ -33,7 +34,12 @@ This initial implementation provides:
    powershell
    ./testlab/scripts/run-matrix.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json
 
-5. Execute for real:
+5. Validate node readiness with provisioning probe:
+
+   powershell
+   ./testlab/scripts/provision-lab.ps1 -LabConfig testlab/config/lab.local.json
+
+6. Execute for real:
 
    powershell
    ./testlab/scripts/run-matrix.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json -Execute
@@ -42,4 +48,4 @@ This initial implementation provides:
 
 - Scripts default to dry-run to avoid accidental VM reboot or remote changes.
 - SSH key-based access is expected for sender/receiver nodes.
-- This phase is report-only and writes artifacts to `.testlab/artifacts`.
+- This phase is report-only and writes artifacts to `.testlab/artifacts` and provisioning reports to `.testlab/logs`.
