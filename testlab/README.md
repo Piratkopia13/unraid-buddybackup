@@ -15,7 +15,7 @@ This initial implementation provides:
 
 - Host bootstrap script.
 - Lab config templates.
-- Windows-local VM planning scaffold with backend auto-detection.
+- Windows-local WSL/QEMU provisioning path with artifact-backed SSH readiness checks.
 - Manual-provider provisioning probe with JSON readiness report.
 - Small matrix definition.
 - Matrix runner with lifecycle scenario hooks and per-cell artifacts.
@@ -40,16 +40,23 @@ This initial implementation provides:
    powershell
    ./testlab/scripts/provision-lab.ps1 -LabConfig testlab/config/lab.local.json
 
-   If `provider` is set to `windows-local`, the provision step writes a VM plan and detects Hyper-V or VirtualBox when available.
+   If `provider` is set to `windows-local`, the provision step boots local Unraid nodes through WSL/QEMU and verifies SSH on the configured localhost ports.
 
 6. Execute for real:
 
    powershell
    ./testlab/scripts/run-matrix.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json -Execute
 
+7. Tear down the local WSL/QEMU nodes when you are done:
+
+   powershell
+   ./testlab/scripts/teardown-wsl-qemu-lab.ps1 -LabConfig testlab/config/lab.local.json -Execute
+
 ## Notes
 
 - Scripts default to dry-run to avoid accidental VM reboot or remote changes.
 - SSH key-based access is expected for sender/receiver nodes.
 - This phase is report-only and writes artifacts to `.testlab/artifacts` and provisioning reports to `.testlab/logs`.
-- For Windows-local VM work, copy `testlab/config/vm-blueprint.example.json` to `testlab/config/vm-blueprint.local.json` and adjust host-specific paths if needed.
+- The `windows-local` provider now targets WSL2 plus QEMU/KVM rather than Hyper-V.
+- For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
+- If automatic Unraid zip download fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.

@@ -37,6 +37,29 @@ function Ensure-Dir {
     }
 }
 
+function Get-NodeConnection {
+    param(
+        $Lab,
+        [string]$NodeName
+    )
+
+    $node = $Lab.nodes.$NodeName
+    if (-not $node -or -not $node.host) {
+        throw "Missing lab.nodes.$NodeName.host"
+    }
+
+    $defaultPort = if ($Lab.ssh -and $Lab.ssh.port) { [int]$Lab.ssh.port } else { 22 }
+    $defaultUser = if ($Lab.ssh -and $Lab.ssh.user) { [string]$Lab.ssh.user } else { "root" }
+    $defaultIdentityFile = if ($Lab.ssh -and $Lab.ssh.identityFile) { [string]$Lab.ssh.identityFile } else { $null }
+
+    return [pscustomobject]@{
+        User = if ($node.user) { [string]$node.user } else { $defaultUser }
+        Host = [string]$node.host
+        Port = if ($node.port) { [int]$node.port } else { $defaultPort }
+        IdentityFile = if ($node.identityFile) { [string]$node.identityFile } else { $defaultIdentityFile }
+    }
+}
+
 function Invoke-NodeProbe {
     param(
         [string]$User,
@@ -91,38 +114,37 @@ $report = [pscustomobject]@{
 
 switch ($provider) {
     "windows-local" {
-        Write-Host "[testlab] Windows-local provider selected. Generating VM plan."
-        $blueprintPath = if ($lab.vmBlueprintPath) { $lab.vmBlueprintPath } else { "testlab/config/vm-blueprint.local.json" }
-        $vmScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-windows-vms.ps1"
-        if ($Execute) {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $vmScript -BlueprintPath $blueprintPath -Execute
-        } else {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $vmScript -BlueprintPath $blueprintPath
-        }
+        Write-Host "[testlab] Windows-local provider selected. Booting local WSL/QEMU nodes."
+        $providerScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-wsl-qemu-lab.ps1"
+        & $providerScript -LabConfig $LabConfig -Execute:$Execute
+        break
+    }
+    "windows-wsl-qemu" {
+        Write-Host "[testlab] Windows WSL/QEMU provider selected. Booting local nodes."
+        $providerScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-wsl-qemu-lab.ps1"
+        & $providerScript -LabConfig $LabConfig -Execute:$Execute
         break
     }
     "manual" {
         Write-Host "[testlab] Manual provider selected. Validating configured nodes."
 
         foreach ($nodeName in @("sender", "receiver")) {
-            $node = $lab.nodes.$nodeName
-            if (-not $node -or -not $node.host) {
-                throw "Missing lab.nodes.$nodeName.host"
-            }
+            $connection = Get-NodeConnection -Lab $lab -NodeName $nodeName
 
-            $probe = Invoke-NodeProbe -User $lab.ssh.user -TargetHost $node.host -Port $lab.ssh.port -IdentityFile $lab.ssh.identityFile -DoExecute:$Execute
+            $probe = Invoke-NodeProbe -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -DoExecute:$Execute
             $report.nodeChecks += [pscustomobject]@{
                 node = $nodeName
-                host = $node.host
+                host = $connection.Host
+                port = $connection.Port
                 success = $probe.success
                 exitCode = $probe.exitCode
                 output = $probe.output
             }
 
             if ($probe.success) {
-                Write-Host "[testlab] Node $nodeName ($($node.host)) reachable"
+                Write-Host "[testlab] Node $nodeName ($($connection.Host):$($connection.Port)) reachable"
             } else {
-                Write-Host "[testlab] Node $nodeName ($($node.host)) probe failed"
+                Write-Host "[testlab] Node $nodeName ($($connection.Host):$($connection.Port)) probe failed"
             }
         }
     }

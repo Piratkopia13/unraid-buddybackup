@@ -1,6 +1,5 @@
 {
   "provider": "windows-local",
-  "backend": "auto",
   "artifactsRoot": ".testlab/artifacts",
   "logsRoot": ".testlab/logs",
   "ssh": {
@@ -11,11 +10,15 @@
   "nodes": {
     "sender": {
       "name": "buddybackup-sender",
-      "host": "10.88.0.101"
+      "host": "127.0.0.1",
+      "port": 2222,
+      "unraidVersion": "7.2.6"
     },
     "receiver": {
       "name": "buddybackup-receiver",
-      "host": "10.88.0.102"
+      "host": "127.0.0.1",
+      "port": 2223,
+      "unraidVersion": "7.2.6"
     }
   },
   "plugin": {
@@ -25,5 +28,12 @@
   "timeouts": {
     "sshReadySeconds": 300,
     "rebootSettleSeconds": 30
+  },
+  "wslQemu": {
+    "distro": "Ubuntu",
+    "cacheRoot": ".testlab/cache",
+    "imageSizeMB": 1024,
+    "bootWaitSeconds": 120,
+    "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip"
   }
 }

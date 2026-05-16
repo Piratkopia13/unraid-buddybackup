@@ -40,6 +40,29 @@ function Resolve-IdentityPath {
     return $IdentityFile
 }
 
+function Get-NodeConnection {
+    param(
+        $Lab,
+        [string]$NodeName
+    )
+
+    $node = $Lab.nodes.$NodeName
+    if (-not $node -or -not $node.host) {
+        throw "Missing lab.nodes.$NodeName.host"
+    }
+
+    $defaultPort = if ($Lab.ssh -and $Lab.ssh.port) { [int]$Lab.ssh.port } else { 22 }
+    $defaultUser = if ($Lab.ssh -and $Lab.ssh.user) { [string]$Lab.ssh.user } else { "root" }
+    $defaultIdentityFile = if ($Lab.ssh -and $Lab.ssh.identityFile) { [string]$Lab.ssh.identityFile } else { $null }
+
+    return [pscustomobject]@{
+        User = if ($node.user) { [string]$node.user } else { $defaultUser }
+        Host = [string]$node.host
+        Port = if ($node.port) { [int]$node.port } else { $defaultPort }
+        IdentityFile = if ($node.identityFile) { [string]$node.identityFile } else { $defaultIdentityFile }
+    }
+}
+
 function Invoke-RemoteCommand {
     param(
         [string]$User,
@@ -103,22 +126,21 @@ function Wait-SshReady {
 
 function Install-Plugin {
     param(
-        $Lab,
-        [string]$TargetHost,
+        $NodeConnection,
         [string]$Version,
         [switch]$DoExecute
     )
 
     $url = $Lab.plugin.plgUrlTemplate.Replace("{version}", $Version)
     $cmd = "plugin install $url"
-    Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $TargetHost -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command $cmd -Label "plugin-install" -DoExecute:$DoExecute
+    Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $cmd -Label "plugin-install" -DoExecute:$DoExecute
 }
 
 function Collect-NodeArtifacts {
     param(
         $Lab,
         [string]$NodeName,
-        [string]$TargetHost,
+        $NodeConnection,
         [string]$CellDir,
         [switch]$DoExecute
     )
@@ -138,7 +160,7 @@ function Collect-NodeArtifacts {
     )
 
     foreach ($item in $commands) {
-        $result = Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $TargetHost -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command $item.Cmd -Label $item.Name -DoExecute:$DoExecute
+        $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $item.Cmd -Label $item.Name -DoExecute:$DoExecute
         $artifactPath = Join-Path -Path $nodeDir -ChildPath ("{0}.txt" -f $item.Name)
         $content = @(
             "label=$($result.Label)",
@@ -160,19 +182,19 @@ function Run-Scenario {
         [switch]$DoExecute
     )
 
-    $sender = $Lab.nodes.sender.host
-    $receiver = $Lab.nodes.receiver.host
+    $sender = Get-NodeConnection -Lab $Lab -NodeName "sender"
+    $receiver = Get-NodeConnection -Lab $Lab -NodeName "receiver"
 
     $results = @()
 
     switch ($Scenario) {
         "fresh-install" {
-            $results += Install-Plugin -Lab $Lab -TargetHost $sender -Version $Cell.sender.plugin -DoExecute:$DoExecute
-            $results += Install-Plugin -Lab $Lab -TargetHost $receiver -Version $Cell.receiver.plugin -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -Version $Cell.sender.plugin -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -Version $Cell.receiver.plugin -DoExecute:$DoExecute
         }
         "post-reboot" {
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $sender -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command "reboot" -Label "sender-reboot" -DoExecute:$DoExecute
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $receiver -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command "reboot" -Label "receiver-reboot" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command "reboot" -Label "sender-reboot" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command "reboot" -Label "receiver-reboot" -DoExecute:$DoExecute
 
             if ($DoExecute) {
                 $timeout = 300
@@ -180,24 +202,24 @@ function Run-Scenario {
                     $timeout = [int]$Lab.timeouts.sshReadySeconds
                 }
 
-                if (-not (Wait-SshReady -User $Lab.ssh.user -TargetHost $sender -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -TimeoutSeconds $timeout)) {
+                if (-not (Wait-SshReady -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -TimeoutSeconds $timeout)) {
                     throw "Sender did not return after reboot in $timeout seconds"
                 }
-                if (-not (Wait-SshReady -User $Lab.ssh.user -TargetHost $receiver -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -TimeoutSeconds $timeout)) {
+                if (-not (Wait-SshReady -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -TimeoutSeconds $timeout)) {
                     throw "Receiver did not return after reboot in $timeout seconds"
                 }
             }
 
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $sender -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command "plugin list | grep buddybackup" -Label "sender-plugin-check" -DoExecute:$DoExecute
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $receiver -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command "plugin list | grep buddybackup" -Label "receiver-plugin-check" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command "plugin list | grep buddybackup" -Label "sender-plugin-check" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command "plugin list | grep buddybackup" -Label "receiver-plugin-check" -DoExecute:$DoExecute
         }
         "backup-smoke" {
             $cmd = "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php send_backup smoke"
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $sender -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command $cmd -Label "backup-smoke" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $cmd -Label "backup-smoke" -DoExecute:$DoExecute
         }
         "restore-smoke" {
             $cmd = "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php restore_snapshot smoke restore_last"
-            $results += Invoke-RemoteCommand -User $Lab.ssh.user -TargetHost $sender -Port $Lab.ssh.port -IdentityFile $Lab.ssh.identityFile -Command $cmd -Label "restore-smoke" -DoExecute:$DoExecute
+            $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $cmd -Label "restore-smoke" -DoExecute:$DoExecute
         }
         default {
             throw "Unknown scenario: $Scenario"
@@ -270,8 +292,8 @@ foreach ($cell in $matrix.cells) {
 
     if (-not $SkipArtifacts) {
         try {
-            Collect-NodeArtifacts -Lab $lab -NodeName "sender" -TargetHost $lab.nodes.sender.host -CellDir $cellDir -DoExecute:$Execute
-            Collect-NodeArtifacts -Lab $lab -NodeName "receiver" -TargetHost $lab.nodes.receiver.host -CellDir $cellDir -DoExecute:$Execute
+            Collect-NodeArtifacts -Lab $lab -NodeName "sender" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "sender") -CellDir $cellDir -DoExecute:$Execute
+            Collect-NodeArtifacts -Lab $lab -NodeName "receiver" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "receiver") -CellDir $cellDir -DoExecute:$Execute
         } catch {
             $status = "fail"
             $errors += "Artifact collection failed: $($_.Exception.Message)"
