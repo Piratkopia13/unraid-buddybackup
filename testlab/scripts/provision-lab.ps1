@@ -90,6 +90,17 @@ $report = [pscustomobject]@{
 }
 
 switch ($provider) {
+    "windows-local" {
+        Write-Host "[testlab] Windows-local provider selected. Generating VM plan."
+        $blueprintPath = if ($lab.vmBlueprintPath) { $lab.vmBlueprintPath } else { "testlab/config/vm-blueprint.local.json" }
+        $vmScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-windows-vms.ps1"
+        if ($Execute) {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $vmScript -BlueprintPath $blueprintPath -Execute
+        } else {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $vmScript -BlueprintPath $blueprintPath
+        }
+        break
+    }
     "manual" {
         Write-Host "[testlab] Manual provider selected. Validating configured nodes."
 

@@ -1,5 +1,6 @@
 {
-  "provider": "manual",
+  "provider": "windows-local",
+  "backend": "auto",
   "artifactsRoot": ".testlab/artifacts",
   "logsRoot": ".testlab/logs",
   "ssh": {
@@ -7,14 +8,23 @@
     "port": 22,
     "identityFile": "~/.ssh/id_ed25519"
   },
+  "vm": {
+    "namePrefix": "buddybackup-test",
+    "cpu": 2,
+    "memoryMB": 4096,
+    "diskGB": 32,
+    "network": "nat"
+  },
   "nodes": {
     "sender": {
       "name": "unraid-sender",
-      "host": "192.168.1.101"
+      "host": "192.168.1.101",
+      "role": "sender"
     },
     "receiver": {
       "name": "unraid-receiver",
-      "host": "192.168.1.102"
+      "host": "192.168.1.102",
+      "role": "receiver"
     }
   },
   "plugin": {

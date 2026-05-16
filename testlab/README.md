@@ -15,6 +15,7 @@ This initial implementation provides:
 
 - Host bootstrap script.
 - Lab config templates.
+- Windows-local VM planning scaffold with backend auto-detection.
 - Manual-provider provisioning probe with JSON readiness report.
 - Small matrix definition.
 - Matrix runner with lifecycle scenario hooks and per-cell artifacts.
@@ -39,6 +40,8 @@ This initial implementation provides:
    powershell
    ./testlab/scripts/provision-lab.ps1 -LabConfig testlab/config/lab.local.json
 
+   If `provider` is set to `windows-local`, the provision step writes a VM plan and detects Hyper-V or VirtualBox when available.
+
 6. Execute for real:
 
    powershell
@@ -49,3 +52,4 @@ This initial implementation provides:
 - Scripts default to dry-run to avoid accidental VM reboot or remote changes.
 - SSH key-based access is expected for sender/receiver nodes.
 - This phase is report-only and writes artifacts to `.testlab/artifacts` and provisioning reports to `.testlab/logs`.
+- For Windows-local VM work, copy `testlab/config/vm-blueprint.example.json` to `testlab/config/vm-blueprint.local.json` and adjust host-specific paths if needed.
