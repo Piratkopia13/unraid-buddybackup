@@ -44,7 +44,12 @@ if (-not (Test-Path $labKeyPath)) {
     # On Windows, ssh-keygen needs the empty passphrase piped via stdin; -N """" is unreliable
     $tmpIn = [System.IO.Path]::GetTempFileName()
     "" | Set-Content -Path $tmpIn -Encoding ASCII
-    & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $labKeyPath -q -N """"
+            $tmpKey = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName())
+        & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $tmpKey -q -N """"
+        if ($LASTEXITCODE -eq 0) {
+            Move-Item $tmpKey $labKeyPath -Force
+            Move-Item "${tmpKey}.pub" $labKeyPubPath -Force
+        }
     Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[testlab] WARNING: ssh-keygen failed. Generate a key manually:"
