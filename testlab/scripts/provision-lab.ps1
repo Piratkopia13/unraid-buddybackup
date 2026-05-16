@@ -109,6 +109,7 @@ $report = [pscustomobject]@{
     runId = $runId
     provider = $provider
     executeMode = [bool]$Execute
+    providerReportPath = $null
     nodeChecks = @()
 }
 
@@ -116,13 +117,29 @@ switch ($provider) {
     "windows-local" {
         Write-Host "[testlab] Windows-local provider selected. Booting local WSL/QEMU nodes."
         $providerScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-wsl-qemu-lab.ps1"
+        $providerStarted = Get-Date
         & $providerScript -LabConfig $LabConfig -Execute:$Execute
+        $providerReport = Get-ChildItem -Path $logsRoot -Filter "local-provider-*.json" -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $providerStarted.AddSeconds(-5) } |
+            Sort-Object -Property LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($providerReport) {
+            $report.providerReportPath = $providerReport.FullName
+        }
         break
     }
     "windows-wsl-qemu" {
         Write-Host "[testlab] Windows WSL/QEMU provider selected. Booting local nodes."
         $providerScript = Join-Path -Path (Split-Path -Parent $PSCommandPath) -ChildPath "provision-wsl-qemu-lab.ps1"
+        $providerStarted = Get-Date
         & $providerScript -LabConfig $LabConfig -Execute:$Execute
+        $providerReport = Get-ChildItem -Path $logsRoot -Filter "local-provider-*.json" -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -ge $providerStarted.AddSeconds(-5) } |
+            Sort-Object -Property LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($providerReport) {
+            $report.providerReportPath = $providerReport.FullName
+        }
         break
     }
     "manual" {
