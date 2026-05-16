@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "d384fbb66105db10ee103446227331ca">
+  <!ENTITY pkgMD5        "227be0534e05772148e844589e7493f4">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,13 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.xx.xx
+- Add button to create a fresh snapshot and immediately send a backup
+- Prompt to create a fresh snapshot when "Send backup now" is used before any snapshots exist
+- Improve restore snapshot loading with clearer messages and compatibility with buddies that have not updated yet BuddyBackup plugin yet
+- Improve remote SSH host key handling and show clearer guidance when a buddy's SSH host key has changed
+- Improve ZFS compatibility so dataset lists and reported backup sizes load more reliably
 
 ###2026.05.02
 - Allow spaces in snapshot and dataset names sent over SSH [#20](https://github.com/Piratkopia13/unraid-buddybackup/issues/20)

@@ -116,6 +116,11 @@ subtest 'allowed commands' => sub {
             expected_lines => [qq{would run command: zfs get -H -o value used $dataset}],
         },
         {
+            label => 'json used size query',
+            command => qq{zfs get -j used $dataset},
+            expected_lines => [qq{would run command: zfs get -j used $dataset}],
+        },
+        {
             label => 'precise used size query',
             command => qq{zfs get -H -p used $dataset},
             expected_lines => [qq{would run command: zfs get -H -p used $dataset}],
@@ -131,9 +136,19 @@ subtest 'allowed commands' => sub {
             expected_lines => [qq{would run command: zfs list -o name,origin -t filesystem,volume -Hr $dataset}],
         },
         {
+            label => 'json dataset list query',
+            command => qq{zfs list -r -j -o name,origin -t filesystem,volume $dataset},
+            expected_lines => [qq{would run command: zfs list -r -j -o name,origin -t filesystem,volume $dataset}],
+        },
+        {
             label => 'snapshot metadata query',
             command => qq{zfs get -Hpd 1 -t snapshot guid,creation $dataset},
             expected_lines => [qq{would run command: zfs get -Hpd 1 -t snapshot guid,creation $dataset}],
+        },
+        {
+            label => 'json snapshot metadata query',
+            command => qq{zfs get -j -p -d 1 -t snapshot guid,creation $dataset},
+            expected_lines => [qq{would run command: zfs get -j -p -d 1 -t snapshot guid,creation $dataset}],
         },
         {
             label => 'bookmark metadata query',

@@ -18,19 +18,18 @@ Title="Backup and restore"
     function shell_escape_arg(value) {
         return String(value).replace(/(["\\$`])/g, '\\$1');
     }
-    function test_connection(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
-        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
-        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
-        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+    function escape_html(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
-    function send_backup(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
-        var the_uid = form.find("input[name='#section']").val();
-        var cmd = '<?=$rc_name?> send_backup '+the_uid+' echopid';
+    function start_backup_command(cmd, initial_message) {
+        var output = $(".buddybackup-backup-output-log");
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
             .done(function(pid) {
-                var output = $(".buddybackup-backup-output-log");
                 if (!isNumeric(pid)) {
                     output.append("Failed to start backup script: "+pid);
                     return;
@@ -40,12 +39,94 @@ Title="Backup and restore"
                         output.append("\nBackup aborted!\n");
                     });
                 };
+                output.append(initial_message);
                 show_in_progress_log('Backup in progress', '#buddybackup-backup-log', 'active-textarea', "Abort backup", abort_func);
-                output.append("\nRunning backup..\n");
             })
             .fail(function(xhr, status, error) {
                 output.append("Failed! Error: "+error);
             });
+    }
+    function start_saved_backup(form, command_name, initial_message) {
+        var the_uid = form.find("input[name='#section']").val();
+        var cmd = '<?=$rc_name?> '+command_name+' '+the_uid+' echopid';
+        start_backup_command(cmd, initial_message);
+    }
+    function show_send_backup_error(message) {
+        swal({
+            title:"_(Can not start backup)_",
+            text:'<div class="buddybackup-center">'+escape_html(message).replace(/\n/g, '<br>')+'</div>',
+            type:'warning',
+            html:true,
+            showCancelButton:false,
+            confirmButtonText:"_(Ok)_"
+        });
+    }
+    function show_missing_snapshot_actions(form, message) {
+        swal({
+            title:"_(No snapshots yet)_",
+            text:'<div class="buddybackup-center">'+escape_html(message).replace(/\n/g, '<br>')+'</div>',
+            type:'warning',
+            html:true,
+            showCancelButton:true,
+            confirmButtonText:"_(Create fresh snapshot and send now)_",
+            cancelButtonText:"_(Cancel)_"
+        }, function(is_confirm) {
+            if (is_confirm) {
+                window.setTimeout(function() {
+                    start_saved_backup(form, 'create_snapshot_and_send', "\nCreating fresh snapshot and running backup..\n");
+                }, 150);
+            }
+        });
+    }
+    function request_send_backup_preflight(form) {
+        var the_uid = form.find("input[name='#section']").val();
+        var cmd = '<?=$rc_name?> preflight_send_backup '+the_uid;
+
+        $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
+            .done(function(raw_response) {
+                var response = null;
+
+                try {
+                    response = JSON.parse($.trim(raw_response));
+                } catch (error) {
+                    show_send_backup_error('Could not parse backup preflight response.');
+                    return;
+                }
+
+                if (!response || !response.status) {
+                    show_send_backup_error('Backup preflight returned an invalid response.');
+                    return;
+                }
+
+                if (response.status === 'ok') {
+                    start_saved_backup(form, 'send_backup', "\nRunning backup..\n");
+                    return;
+                }
+
+                if (response.status === 'missing_snapshots') {
+                    show_missing_snapshot_actions(form, response.message || 'No snapshots are available yet.');
+                    return;
+                }
+
+                show_send_backup_error(response.message || 'Could not start backup.');
+            })
+            .fail(function(xhr, status, error) {
+                show_send_backup_error('Failed to run backup preflight: '+error);
+            });
+    }
+    function test_connection(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+    }
+    function send_backup(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        request_send_backup_preflight(form);
+    }
+    function create_snapshot_and_send(btn) {
+        var form = $(btn).closest("form.buddybackup-backup-entry");
+        start_saved_backup(form, 'create_snapshot_and_send', "\nCreating fresh snapshot and running backup..\n");
     }
 
     function backup_input_changed(ctx, on_change = false) {
@@ -55,6 +136,7 @@ Title="Backup and restore"
             form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
                 return this.value + ' (apply changes to do this)';
             });
+            form.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled',true).addClass("lock");
         }
         var dest_type = form.find("select[name='type']").val();
         if (dest_type == "remote") {
@@ -235,6 +317,7 @@ _(Your SSH public key (send this to you buddy))_:
         <div style="text-align:center;">
             <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
             <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+            <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
             <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
             <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
         </div>

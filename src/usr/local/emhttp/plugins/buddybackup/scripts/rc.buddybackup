@@ -74,6 +74,118 @@ log_escape_value() {
     printf '%s' "$1" | jq -Rsa . | sed -e 's/^"//' -e 's/"$//'
 }
 
+zfs_json_property_value() {
+    local json="$1"
+    local dataset="$2"
+    local property="$3"
+
+    printf '%s' "${json}" | jq -er --arg dataset "${dataset}" --arg property "${property}" '
+        .datasets[$dataset].properties[$property].value
+    ' 2>/dev/null
+}
+
+zfs_json_dataset_names() {
+    local json="$1"
+
+    printf '%s' "${json}" | jq -er '
+        (.datasets // {}) | keys_unsorted[]?
+    ' 2>/dev/null
+}
+
+zfs_json_snapshots_for_dataset() {
+    local json="$1"
+    local dataset="$2"
+
+    printf '%s' "${json}" | jq -c --arg dataset "${dataset}" '
+        (.datasets // {})
+        | to_entries
+        | map(
+            select(
+                .value.type == "SNAPSHOT"
+                and ((.value.dataset // (.key | split("@")[0])) == $dataset)
+                and (.value.properties.guid.value != null)
+                and (.value.properties.creation.value != null)
+            )
+            | {
+                key: (.value.snapshot_name // ((.key | split("@"))[1])),
+                value: {
+                    guid: .value.properties.guid.value,
+                    creation: .value.properties.creation.value
+                }
+            }
+        )
+        | from_entries
+    ' 2>/dev/null
+}
+
+zfs_error_indicates_missing_dataset() {
+    local error_text="$1"
+
+    [[ "${error_text}" == *"dataset does not exist"* ]] || [[ "${error_text}" == *"cannot open"* ]]
+}
+
+zfs_legacy_dataset_names() {
+    local output="$1"
+    local destination_dataset="$2"
+    local dataset=""
+
+    while IFS=$'\t' read -r dataset _; do
+        [[ -z "${dataset}" ]] && continue
+
+        if [[ "${dataset}" != "${destination_dataset}" ]] && [[ "${dataset}" != "${destination_dataset}/"* ]]; then
+            return 1
+        fi
+
+        printf '%s\n' "${dataset}"
+    done <<< "${output}"
+}
+
+zfs_legacy_snapshots_for_dataset() {
+    local output="$1"
+    local dataset="$2"
+    local json='{}'
+    local snapshot_row=""
+    local snapshot=""
+    local property=""
+    local value=""
+    local creation_row=""
+    local creation_snapshot=""
+    local creation_property=""
+    local creation_value=""
+
+    while IFS=$'\t' read -r snapshot property value _; do
+        [[ -z "${snapshot}" ]] && continue
+
+        if [[ "${snapshot}" != "${dataset}@"* ]] || [[ "${property}" != "guid" ]]; then
+            return 1
+        fi
+
+        IFS= read -r creation_row || return 1
+        IFS=$'\t' read -r creation_snapshot creation_property creation_value _ <<< "${creation_row}"
+        if [[ "${creation_snapshot}" != "${snapshot}" ]] || [[ "${creation_property}" != "creation" ]]; then
+            return 1
+        fi
+
+        json=$(jq -cn \
+            --arg snapshot_name "${snapshot#${dataset}@}" \
+            --arg guid "${value}" \
+            --arg creation "${creation_value}" \
+            --argjson data "${json}" \
+            '$data + {($snapshot_name): {guid: $guid, creation: $creation}}')
+    done <<< "${output}"
+
+    echo "${json}"
+}
+
+zfs_get_property_value() {
+    local dataset="$1"
+    local property="$2"
+    local json_output=""
+
+    json_output=$(zfs get -j "${property}" "${dataset}" 2>/dev/null) || return 1
+    zfs_json_property_value "${json_output}" "${dataset}" "${property}"
+}
+
 append_to_buddybackup_log() {
     local log_script="${empath}/scripts/log.sh"
 
@@ -203,11 +315,17 @@ disable_backups_from_buddy() {
     rm -r "/home/${username}" >/dev/null 2>&1
 
     # note: this spins up disk
-    for dataset in $(zfs list -H -o name); do 
-        if zfs allow "${dataset}" | grep -q "${username}"; then
-            zfs unallow -u "${username}" "${dataset}" >/dev/null 2>&1
-        fi
-    done
+    local datasets_json=""
+    datasets_json=$(zfs list -j -o name 2>/dev/null)
+    if [[ -n "${datasets_json}" ]]; then
+        while IFS= read -r dataset; do
+            [[ -z "${dataset}" ]] && continue
+
+            if zfs allow "${dataset}" | grep -q "${username}"; then
+                zfs unallow -u "${username}" "${dataset}" >/dev/null 2>&1
+            fi
+        done < <(zfs_json_dataset_names "${datasets_json}")
+    fi
 
     userdel "${username}" >/dev/null 2>&1
 }
@@ -229,26 +347,184 @@ update() {
     fi
 }
 
+ensure_managed_known_hosts_file() {
+    mkdir -p "${plugin_path}" >/dev/null 2>&1
+    touch "${ssh_known_hosts_path}" >/dev/null 2>&1
+    chmod 600 "${ssh_known_hosts_path}" >/dev/null 2>&1
+}
+
+strip_legacy_root_known_hosts_entries() {
+    if [[ ! -f "${legacy_root_known_hosts_path}" ]]; then
+        return
+    fi
+
+    local stripped
+    stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' "${legacy_root_known_hosts_path}" | sed -n '/^# buddybackup /d;p')
+    printf '%s\n' "${stripped}" > "${legacy_root_known_hosts_path}"
+}
+
 clear_known_hosts() {
-    # remove old entries to known_host
-    stripped=$(sed -n '1,/# buddybackup start/p;/# buddybackup end/,$p' ~/.ssh/known_hosts | sed -n '/^# buddybackup /d;p')
-    echo "${stripped}" > ~/.ssh/known_hosts
+    ensure_managed_known_hosts_file
+    : > "${ssh_known_hosts_path}"
+    strip_legacy_root_known_hosts_entries
+}
+
+managed_known_host_exists() {
+    local host="$1"
+
+    ensure_managed_known_hosts_file
+    ssh-keygen -F "${host}" -f "${ssh_known_hosts_path}" >/dev/null 2>&1
+}
+
+append_managed_known_host() {
+    local host="$1"
+    local scanned_key=""
+
+    ensure_managed_known_hosts_file
+    scanned_key=$(ssh-keyscan -H "${host}" 2>/dev/null)
+    if [[ -z "${scanned_key}" ]]; then
+        return 1
+    fi
+
+    printf '%s\n' "${scanned_key}" >> "${ssh_known_hosts_path}"
+}
+
+ensure_managed_known_host() {
+    local host="$1"
+
+    if managed_known_host_exists "${host}"; then
+        return 0
+    fi
+
+    append_managed_known_host "${host}"
+}
+
+ssh_has_host_key_error() {
+    local ssh_output="$1"
+
+    [[ "${ssh_output}" == *"Host key verification failed"* ]] || [[ "${ssh_output}" == *"REMOTE HOST IDENTIFICATION HAS CHANGED"* ]]
+}
+
+run_remote_ssh() {
+    local host="$1"
+    local remote_cmd="$2"
+
+    ensure_managed_known_host "${host}" >/dev/null 2>&1
+
+    local ssh_result=""
+    ssh_result=$(ssh "${ssh_common_opts[@]}" "${username}@${host}" "${remote_cmd}" 2>&1)
+    local error_code=$?
+
+    printf '%s' "${ssh_result}"
+    return $error_code
 }
 
 dataset_exists() {
     local dataset="$1"
-    [[ $(zfs get -Ho value type "${dataset}" 2>&1) != *"dataset does not exist" ]]
+    zfs_get_property_value "${dataset}" "type" >/dev/null
+}
+dataset_has_snapshots() {
+    local dataset="$1"
+    local snapshots_json=""
+
+    snapshots_json=$(zfs list -j -d 1 -t snapshot -o name "${dataset}" 2>/dev/null) || return 1
+
+    while IFS= read -r snapshot_name; do
+        [[ -n "${snapshot_name}" ]] && return 0
+    done < <(zfs_json_dataset_names "${snapshots_json}")
+
+    return 1
 }
 is_encrypted() {
     local dataset="$1"
-    [[ $(zfs get -Ho value encryption "${dataset}" 2>&1) != "off" ]]
+    local encryption=""
+
+    encryption=$(zfs_get_property_value "${dataset}" "encryption") || return 1
+    [[ "${encryption}" != "off" ]]
+}
+
+preflight_send_state() {
+    local type="$1"
+    local source_dataset="$2"
+    local require_snapshots="${3:-yes}"
+    local encryption=""
+
+    PREFLIGHT_STATUS="ok"
+    PREFLIGHT_MESSAGE=""
+
+    if ! dataset_exists "${source_dataset}"; then
+        PREFLIGHT_STATUS="error"
+        PREFLIGHT_MESSAGE="Source dataset '${source_dataset}' does not exist!"
+        return
+    fi
+
+    if [[ "${type}" == "remote" ]] && [[ "${AllowUnencryptedRemoteBackups}" != "yes" ]]; then
+        encryption=$(zfs_get_property_value "${source_dataset}" "encryption") || {
+            PREFLIGHT_STATUS="error"
+            PREFLIGHT_MESSAGE="Could not read encryption status for source dataset '${source_dataset}'."
+            return
+        }
+
+        if [[ "${encryption}" == "off" ]]; then
+            PREFLIGHT_STATUS="error"
+            PREFLIGHT_MESSAGE="Source dataset '${source_dataset}' is not encrypted!"
+            return
+        fi
+    fi
+
+    if [[ "${require_snapshots}" == "yes" ]] && ! dataset_has_snapshots "${source_dataset}"; then
+        PREFLIGHT_STATUS="missing_snapshots"
+        PREFLIGHT_MESSAGE="Source dataset '${source_dataset}' has no snapshots yet. Create a snapshot first or configure 'Snapshot creation and pruning'."
+    fi
+}
+
+emit_send_preflight_status() {
+    local type="$1"
+    local source_dataset="$2"
+    local require_snapshots="${3:-yes}"
+
+    preflight_send_state "${type}" "${source_dataset}" "${require_snapshots}"
+    if [[ "${PREFLIGHT_STATUS}" == "ok" ]]; then
+        jq -cn '{"status": "ok"}'
+        return
+    fi
+
+    jq -cn --arg status "${PREFLIGHT_STATUS}" --arg message "${PREFLIGHT_MESSAGE}" '{"status": $status, "message": $message}'
+}
+
+manual_snapshot_timestamp() {
+    if [[ "${UtcTimezone}" == "yes" ]]; then
+        date -u '+%Y-%m-%d_%H:%M:%S'
+    else
+        date '+%Y-%m-%d_%H:%M:%S'
+    fi
+}
+
+manual_snapshot_name() {
+    local dataset="$1"
+    local timestamp=""
+    local base_snapshot=""
+    local snapshot_name=""
+    local suffix=1
+
+    timestamp=$(manual_snapshot_timestamp)
+    base_snapshot="${dataset}@autosnap_${timestamp}_hourly"
+    snapshot_name="${base_snapshot}"
+
+    while zfs_get_property_value "${snapshot_name}" "type" >/dev/null 2>&1; do
+        snapshot_name="${dataset}@autosnap_${timestamp}_${suffix}_hourly"
+        suffix=$((suffix + 1))
+    done
+
+    printf '%s' "${snapshot_name}"
 }
 
 send_mark_received_backup() {
     local destination_host="${1}"
     
     local cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup"
-    local ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+    local ssh_result
+    ssh_result=$(run_remote_ssh "${destination_host}" "${cmd}" 2>&1)
     local error_code=$?
     if [[ $error_code -ne 0 ]]; then
         write "" "Failed to send mark_received_backup to buddy"
@@ -263,7 +539,7 @@ mark_sent_backup() {
     local destination_dataset="${3}"
     local uid="${4}"
     if [[ "${type}" == "local" ]]; then
-        dest_size=$(zfs get -H -o value used "${destination_dataset}");
+        dest_size=$(zfs_get_property_value "${destination_dataset}" "used");
     else
         local result=$(get_buddy_used_size "${destination_host}" "${destination_dataset}");
         if [[ $? -eq 0 ]]; then
@@ -285,18 +561,13 @@ send_backup() {
     local destination_dataset="${4}"
     local uid="${5}"
 
-    local encrypted_dataset=0
-    if is_encrypted "${source_dataset}"; then
-        encrypted_dataset=1
-    fi
-
     local nchan="send"
-    error=""
-    if [[ "${AllowUnencryptedRemoteBackups}" != "yes" ]] && [[ $encrypted_dataset -eq 0 ]]; then
-        error="Source dataset '${source_dataset}' is not encrypted!"
-    fi
-    if ! dataset_exists "${source_dataset}"; then
-        error="Source dataset '${source_dataset}' does not exist!"
+    local encrypted_dataset=0
+    local error=""
+
+    preflight_send_state "remote" "${source_dataset}" "yes"
+    if [[ "${PREFLIGHT_STATUS}" != "ok" ]]; then
+        error="${PREFLIGHT_MESSAGE}"
     fi
 
     if [ -n "${error}" ]; then
@@ -304,6 +575,10 @@ send_backup() {
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
+    fi
+
+    if is_encrypted "${source_dataset}"; then
+        encrypted_dataset=1
     fi
 
     local my_syncoid_flags="${syncoid_flags}"
@@ -314,8 +589,9 @@ send_backup() {
     if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
     fi
+    ensure_managed_known_host "${destination_host}" >/dev/null 2>&1
     local error_code=0
-    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
+    if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} ${syncoid_ssh_options} --sshkey \"${ssh_key_path}\" \"${source_dataset}\" \"${username}@${destination_host}:${destination_dataset}\" 2>&1"); then
         printf -v result "\n%s" "Successfully synced backup to buddy!"
         mark_sent_backup "remote" "${destination_host}" "${destination_dataset}" "${uid}"
         send_mark_received_backup "${destination_host}"
@@ -341,9 +617,11 @@ send_local_backup() {
     local uid="${4}"
 
     local nchan="send"
-    error=""
-    if ! dataset_exists "${source_dataset}"; then
-        error="Source dataset '${source_dataset}' does not exist!"
+    local error=""
+
+    preflight_send_state "local" "${source_dataset}" "yes"
+    if [[ "${PREFLIGHT_STATUS}" != "ok" ]]; then
+        error="${PREFLIGHT_MESSAGE}"
     fi
 
     if [ -n "${error}" ]; then
@@ -374,6 +652,53 @@ send_local_backup() {
     exit $error_code
 }
 
+create_snapshot_and_send() {
+    local type="${1}"
+    local source_dataset="${2}"
+    local recursive="${3}"
+    local destination_host="${4}"
+    local destination_dataset="${5}"
+    local uid="${6}"
+    local nchan="send"
+    local snapshot_name=""
+    local snapshot_output=""
+    local error=""
+    local snapshot_cmd=(zfs snapshot)
+
+    logger "Creating fresh snapshot before backup" -t"${plugin}"
+
+    preflight_send_state "${type}" "${source_dataset}" "no"
+    if [[ "${PREFLIGHT_STATUS}" != "ok" ]]; then
+        error="Aborting backup. ${PREFLIGHT_MESSAGE}"
+        write "${nchan}" "${error}"
+        unraid_notify "${error}" "alert"
+        return
+    fi
+
+    snapshot_name=$(manual_snapshot_name "${source_dataset}")
+    write "${nchan}" "Creating fresh snapshot '${snapshot_name}'.."
+
+    if [[ "${recursive}" == "yes" ]]; then
+        snapshot_cmd+=(-r)
+    fi
+    snapshot_cmd+=("${snapshot_name}")
+
+    if ! snapshot_output=$("${snapshot_cmd[@]}" 2>&1); then
+        error="Failed to create snapshot '${snapshot_name}'. ${snapshot_output}"
+        write "${nchan}" "${error}"
+        unraid_notify "${error}" "alert"
+        return
+    fi
+
+    write "${nchan}" "Created snapshot '${snapshot_name}'."
+
+    if [[ "${type}" == "remote" ]]; then
+        send_backup "${source_dataset}" "${recursive}" "${destination_host}" "${destination_dataset}" "${uid}"
+    else
+        send_local_backup "${source_dataset}" "${recursive}" "${destination_dataset}" "${uid}"
+    fi
+}
+
 restore_snapshot() {
     local type="${1}"
     local destination_host=""
@@ -402,7 +727,8 @@ restore_snapshot() {
         ('selected')
             local cmd=""
             if [[ "${type}" == "remote" ]]; then
-                cmd="${syncoid_bin} ${syncoid_flags} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
+                ensure_managed_known_host "${destination_host}" >/dev/null 2>&1
+                cmd="${syncoid_bin} ${syncoid_flags} ${syncoid_ssh_options} --include-snaps=\"${snapshot}\" --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
             elif [[ "${type}" == "local" ]]; then
                 cmd="${syncoid_bin} ${syncoid_flags_local} --include-snaps=\"${snapshot}\" \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
             fi
@@ -419,7 +745,8 @@ restore_snapshot() {
         ('all')
             local cmd=""
             if [[ "${type}" == "remote" ]]; then
-                cmd="${syncoid_bin} ${syncoid_flags} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
+                ensure_managed_known_host "${destination_host}" >/dev/null 2>&1
+                cmd="${syncoid_bin} ${syncoid_flags} ${syncoid_ssh_options} --sshkey \"${ssh_key_path}\" \"${username}@${destination_host}:${source_dataset}\" \"${destination_dataset}\" 2>&1"
             elif [[ "${type}" == "local" ]]; then
                 cmd="${syncoid_bin} ${syncoid_flags_local} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"
             fi
@@ -460,16 +787,19 @@ test_connection() {
     local cmd="${2:-echo ok}"
     # test SSH connection to buddy
     local ssh_status_raw
-    ssh_status_raw=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${cmd}" 2>&1)
+    ssh_status_raw=$(run_remote_ssh "${host}" "${cmd}" 2>&1)
     local ssh_status
     ssh_status=$(sanitize_ssh_output "${ssh_status_raw}")
+    local connection_status="fail"
     if [[ "${ssh_status}" == ok ]]; then
-        echo "connection_status=\"ok\"; connection_result=\"${ssh_status}\""
+        connection_status="ok"
+    elif ssh_has_host_key_error "${ssh_status_raw}"; then
+        connection_status="host key"
     elif [[ "${ssh_status_raw}" == *"Permission denied"* ]] ; then
-        echo "connection_status=\"no auth\"; connection_result=\"${ssh_status}\""
-    else
-        echo "connection_status=\"fail\"; connection_result=\"${ssh_status}\""
+        connection_status="no auth"
     fi
+
+    printf 'connection_status=%q; connection_result=%q\n' "${connection_status}" "${ssh_status}"
 }
 
 test_connection_cmd() {
@@ -482,13 +812,17 @@ test_connection_cmd() {
     echo "<h2>Trying to connect to ${host_html} over SSH..<br>"
 
     local success=0
-    eval $(test_connection "${host}")
+    eval "$(test_connection "${host}")"
     local connection_result_html
     connection_result_html=$(html_escape "${connection_result}")
     case "${connection_status}" in
         ("ok")
-            echo "Success!<br>"
+            echo "<span style='color:green'>Success!</span><br>"
             success=1
+        ;;
+        ("host key")
+            echo "Failed: ${connection_result_html}<br>"
+            echo "<span style='color:red'>BuddyBackup could not verify ${host_html}'s SSH host key. If this buddy was rebuilt or its SSH server keys changed, save/apply the backup settings to refresh BuddyBackup's stored host key before retrying.</span><br>"
         ;;
         ("no auth") echo "Authentication failed. Make sure buddy has enabled \"Buddy's Backups\" and entered your public key.<br>" ;;
         ("fail") echo "Failed: ${connection_result_html}<br>" ;;
@@ -498,7 +832,7 @@ test_connection_cmd() {
     if [[ $success -eq 1 ]]; then
         local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
         local zfs_probe_result
-        zfs_probe_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${zfs_probe_cmd}" 2>&1)
+        zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" 2>&1)
         local zfs_probe_status=$?
 
         local remote_receive_dataset=""
@@ -534,7 +868,7 @@ test_connection_cmd() {
                 fi
 
                 local legacy_probe_cmd="zfs get -H name $(shell_single_quote "${probe_dataset}")"
-                zfs_probe_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "${legacy_probe_cmd}" 2>&1)
+                zfs_probe_result=$(run_remote_ssh "${host}" "${legacy_probe_cmd}" 2>&1)
                 zfs_probe_status=$?
                 local legacy_probe_line="${zfs_probe_result%%$'\n'*}"
                 local legacy_probe_name=""
@@ -565,7 +899,7 @@ test_connection_cmd() {
         fi
 
         local security_validation_raw=""
-        security_validation_raw=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${host}" "echo ok && ls" 2>&1)
+    security_validation_raw=$(run_remote_ssh "${host}" "echo ok && ls" 2>&1)
         local security_validation_status=$?
         local security_validation_result=""
         security_validation_result=$(sanitize_ssh_output "${security_validation_raw}")
@@ -595,100 +929,187 @@ test_connection_cmd() {
 get_available_snapshots() {
     local type="${1}"
     local destination_host=""
+    local legacy_warning="Buddy is running an older BuddyBackup version. Snapshot listing used compatibility mode. Make sure buddy has updated the BuddyBackup plugin."
+    local blocked_message="Buddy appears to be running an older BuddyBackup version that blocked the snapshot listing query. Make sure buddy has updated the BuddyBackup plugin."
+    local empty_message="No snapshots available yet. Run a backup to this destination first."
+    local compatibility_warning=""
     if [[ "${type}" == "remote" ]]; then
         destination_host="${2}"
         shift
     fi
     local destination_dataset="${2}"
 
-    local cmd="zfs list -o name,origin -t filesystem,volume -Hr $(shell_single_quote "${destination_dataset}")"
+    local cmd="zfs list -r -j -o name,origin -t filesystem,volume $(shell_single_quote "${destination_dataset}")"
+    local legacy_cmd="zfs list -o name,origin -t filesystem,volume -Hr $(shell_single_quote "${destination_dataset}")"
 
     local result=""
     if [[ "${type}" == "remote" ]]; then
-        result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+        result=$(run_remote_ssh "${destination_host}" "${cmd}" 2>&1)
         ## Enable for debugging
         # echo "full cmd: ssh -i \"${ssh_key_path}\" -o BatchMode=yes -o ConnectTimeout=5 \"${username}@${destination_host}\" \"${cmd}\" 2>&1"
         # echo "result: ${result}"
     elif [[ "${type}" == "local" ]]; then
         result=$(eval "${cmd}")
     fi
-    if [ $? -ne 0 ]; then
+    local result_status=$?
+    if zfs_error_indicates_missing_dataset "${result}"; then
+        jq -cn --arg empty_message "${empty_message}" '{"status": "ok", "data": {}, "empty_message": $empty_message}'
+        return
+    fi
+
+    if [ ${result_status} -ne 0 ]; then
         result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
         printf '{"status": "failed", "error": "%s"}' "${result}"
         return
     fi
 
-    # result should now contain one line per dataset/child dataset
+    local dataset_list=""
+    dataset_list=$(printf '%s' "${result}" | jq -r --arg destination_dataset "${destination_dataset}" '
+        (.datasets // {})
+        | keys_unsorted[]?
+        | select(. == $destination_dataset or startswith($destination_dataset + "/"))
+    ' 2>/dev/null)
+    local dataset_list_status=$?
 
-    cmds=()
-    datasets=()
-    while IFS= read -r line; do
-        # Basic error checking, ensure line begins with dataset name
-        if [[ "${line}" != "${destination_dataset}"* ]]; then
-            result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-            printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid line: ${result}"
+    if [[ "${type}" == "remote" ]] && { [[ -z "${result}" ]] || [[ ${dataset_list_status} -ne 0 ]]; }; then
+        local legacy_result=""
+        legacy_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" 2>&1)
+        local legacy_status=$?
+
+        if zfs_error_indicates_missing_dataset "${legacy_result}"; then
+            jq -cn --arg empty_message "${empty_message}" '{"status": "ok", "data": {}, "empty_message": $empty_message}'
             return
         fi
 
-        dataset=$(echo "${line}" | sed 's/\s.*$//')
-        cmds+=( "zfs get -Hpd 1 -t snapshot guid,creation $(shell_single_quote "${dataset}")" )
-        datasets+=( "${dataset}" )
-    done <<< "${result}"
-    
-    json="{\"status\": \"ok\", \"data\": {"
-    for ((i = 0; i < ${#cmds[@]}; i++))
-    do
-        json+="\"${datasets[$i]}\":{"
+        if [[ ${legacy_status} -ne 0 ]]; then
+            legacy_result=$(echo "${legacy_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "${blocked_message} ${legacy_result}"
+            return
+        fi
+
+        dataset_list=$(zfs_legacy_dataset_names "${legacy_result}" "${destination_dataset}")
+        local legacy_dataset_list_status=$?
+        if [[ ${legacy_dataset_list_status} -ne 0 ]]; then
+            if [[ -z "${legacy_result}" ]]; then
+                printf '{"status": "failed", "error": "%s"}' "${blocked_message}"
+            else
+                legacy_result=$(echo "${legacy_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+                printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid legacy snapshot list: ${legacy_result}"
+            fi
+            return
+        fi
+
+        compatibility_warning="${legacy_warning}"
+    elif [[ ${dataset_list_status} -ne 0 ]]; then
+        result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+        printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid JSON: ${result}"
+        return
+    fi
+
+    datasets=()
+    if [[ -n "${dataset_list}" ]]; then
+        mapfile -t datasets <<< "${dataset_list}"
+    fi
+
+    if [[ ${#datasets[@]} -eq 0 ]]; then
+        if [[ -n "${compatibility_warning}" ]]; then
+            jq -cn \
+                --arg empty_message "${empty_message}" \
+                --arg warning "${compatibility_warning}" \
+                '{"status": "ok", "data": {}, "empty_message": $empty_message, "warning": $warning}'
+        else
+            jq -cn --arg empty_message "${empty_message}" '{"status": "ok", "data": {}, "empty_message": $empty_message}'
+        fi
+        return
+    fi
+
+    local data='{}'
+    local dataset=""
+    for dataset in "${datasets[@]}"; do
+        local sub_cmd="zfs get -j -p -d 1 -t snapshot guid,creation $(shell_single_quote "${dataset}")"
+        local legacy_sub_cmd="zfs get -Hpd 1 -t snapshot guid,creation $(shell_single_quote "${dataset}")"
         local sub_result=""
         if [[ "${type}" == "remote" ]]; then
-            sub_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmds[$i]}" 2>&1)
+            sub_result=$(run_remote_ssh "${destination_host}" "${sub_cmd}" 2>&1)
         elif [[ "${type}" == "local" ]]; then
-            sub_result=$(eval "${cmds[$i]}" 2>&1)
+            sub_result=$(eval "${sub_cmd}" 2>&1)
         fi
-        if [ $? -ne 0 ]; then
+        local sub_result_status=$?
+        if [ ${sub_result_status} -ne 0 ]; then
             sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
             printf '{"status": "failed", "error": "%s"}' "${sub_result}"
             return
         fi
 
-        while IFS= read -r line; do
-            if [[ -z "${line}" ]]; then
-                # skip empty lines / datasets with no snapshots
-                json+="," 
-                continue
+        local dataset_snapshots=""
+        dataset_snapshots=$(zfs_json_snapshots_for_dataset "${sub_result}" "${dataset}")
+        local dataset_snapshots_status=$?
+        if [[ "${type}" == "remote" ]] && { [[ -z "${sub_result}" ]] || [[ ${dataset_snapshots_status} -ne 0 ]]; }; then
+            local legacy_sub_result=""
+            legacy_sub_result=$(run_remote_ssh "${destination_host}" "${legacy_sub_cmd}" 2>&1)
+            local legacy_sub_status=$?
+            if [[ ${legacy_sub_status} -ne 0 ]]; then
+                legacy_sub_result=$(echo "${legacy_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+                printf '{"status": "failed", "error": "%s"}' "${blocked_message} ${legacy_sub_result}"
+                return
             fi
-            # Parse out snap, guid, creation from every 2 lines
-            # examples lines:
-            # disk4/offsite_backup/appdata@syncoid_2025-01-21:03:00:03-GMT01:00        guid    13997382453328167196    -
-            # disk4/offsite_backup/appdata@syncoid_2025-01-21:03:00:03-GMT01:00        creation        1737424803      -
 
-            snap=$(echo \"${line}\" | tr -s ' ' | cut -d '@' -f 2 | cut -d ' ' -f 1)
-            guid=$(echo \"${line}\" | tr -s ' ' | cut -d ' ' -f 3)
-            IFS= read -r line
-            creation=$(echo \"${line}\" | tr -s ' ' | cut -d ' ' -f 3)
+            dataset_snapshots=$(zfs_legacy_snapshots_for_dataset "${legacy_sub_result}" "${dataset}")
+            local legacy_dataset_snapshots_status=$?
+            if [[ ${legacy_dataset_snapshots_status} -ne 0 || -z "${dataset_snapshots}" ]]; then
+                if [[ -z "${legacy_sub_result}" ]]; then
+                    printf '{"status": "failed", "error": "%s"}' "${blocked_message}"
+                else
+                    legacy_sub_result=$(echo "${legacy_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+                    printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid legacy snapshot metadata: ${legacy_sub_result}"
+                fi
+                return
+            fi
 
-            json+="\"${snap}\":{\"guid\":\"${guid}\",\"creation\":\"${creation}\"}," 
-        done <<< "${sub_result}"
-        json="${json::-1}" # Remove trailing comma
+            compatibility_warning="${legacy_warning}"
+        elif [[ ${dataset_snapshots_status} -ne 0 || -z "${dataset_snapshots}" ]]; then
+            sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "Buddy returned invalid snapshot JSON: ${sub_result}"
+            return
+        fi
 
-        json+="},"
+        data=$(jq -cn --arg dataset "${dataset}" --argjson snapshots "${dataset_snapshots}" --argjson data "${data}" '
+            $data + {($dataset): $snapshots}
+        ')
     done
-    json="${json::-1}" # Remove trailing comma
-    json+="}}"
-    echo "${json}"
+
+    if [[ -n "${compatibility_warning}" ]]; then
+        jq -cn --argjson data "${data}" --arg warning "${compatibility_warning}" '{"status": "ok", "data": $data, "warning": $warning}'
+    else
+        jq -cn --argjson data "${data}" '{"status": "ok", "data": $data}'
+    fi
 }
 
 get_buddy_used_size() {
     local destination_host="${1}"
     local destination_dataset="${2}"
 
-    local cmd="zfs get -H -o value used $(shell_single_quote "${destination_dataset}")"
-    local ssh_result=$(ssh -i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 "${username}@${destination_host}" "${cmd}" 2>&1)
+    local cmd="zfs get -j used $(shell_single_quote "${destination_dataset}")"
+    local ssh_result
+    ssh_result=$(run_remote_ssh "${destination_host}" "${cmd}" 2>&1)
     local error_code=$?
     if [[ $error_code -eq 0 ]] && [[ -z "${ssh_result}" ]]; then
         ssh_result="empty response"
         error_code=1
     fi
+
+    if [[ $error_code -eq 0 ]]; then
+        local used_value=""
+        used_value=$(zfs_json_property_value "${ssh_result}" "${destination_dataset}" "used")
+        if [[ $? -eq 0 ]] && [[ -n "${used_value}" ]]; then
+            echo "${used_value}"
+            exit 0
+        fi
+
+        ssh_result="failed to parse zfs JSON output"
+        error_code=1
+    fi
+
     echo "${ssh_result}";
     exit $error_code
 }
@@ -718,23 +1139,33 @@ fi
 username="buddybackup"
 plugin_path="/boot/config/plugins/${plugin}"
 ssh_key_path="${plugin_path}/buddybackup_sender_key"
+ssh_known_hosts_path="${plugin_path}/buddybackup_known_hosts"
+legacy_root_known_hosts_path="/root/.ssh/known_hosts"
 empath="/usr/local/emhttp/plugins/buddybackup"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
 syncoid_flags_unencrypted="--no-privilege-elevation --no-sync-snap --pv-options='-pterbf' --compress=zstdmt-fast" # flags when sending unencrypted backup to remote destination
 syncoid_flags_local="--no-sync-snap --pv-options='-pterbf' --compress=none" # flags when backup destination is on local machine
+syncoid_ssh_options="--sshoption='BatchMode=yes' --sshoption='ConnectTimeout=5' --sshoption='IdentitiesOnly=yes' --sshoption='StrictHostKeyChecking=yes' --sshoption='UserKnownHostsFile=${ssh_known_hosts_path}' --sshoption='GlobalKnownHostsFile=/dev/null' --sshoption='UpdateHostKeys=no'"
+ssh_common_opts=(-i "${ssh_key_path}" -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${ssh_known_hosts_path}" -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no)
 
 case "$1" in
 	('update')
 		update
 	;;
+    ('preflight_send_backup')
+        emit_send_preflight_status "${2}" "${3}" "${4}"
+    ;;
     ('send_backup')
 		send_backup "${2}" "${3}" "${4}" "${5}" "${6}"
 	;;
     ('send_local_backup')
 		send_local_backup "${2}" "${3}" "${4}" "${5}"
 	;;
+    ('create_snapshot_and_send')
+        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}"
+    ;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}"
 	;;
@@ -760,5 +1191,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-		echo "usage $0 update|send_backup|send_local_backup|test_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|test_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac

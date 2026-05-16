@@ -56,19 +56,34 @@
 
     function datasets($selected, $only_encrypted = true) {
         $datasets = mk_option($selected, "", "Select from list", "disabled");
-        $raw_datasets = array();
-        if (exec("zfs list -rH -o name,encryption", $raw_datasets)) {
-            foreach ($raw_datasets as $set) {
-                $parts = preg_split('/\s+/', $set);
-                if ($parts[1] != "off") {
-                    $datasets .= mk_option($selected, $parts[0], $parts[0]);
-                } else {
-                    if ($only_encrypted) {
-                        $datasets .= mk_option($selected, $parts[0], "$parts[0] (not encrypted)", "disabled");
-                    } else {
-                        $datasets .= mk_option($selected, $parts[0], "$parts[0] (not encrypted)");
-                    }
+            $raw_datasets = array();
+            $result_code = 0;
+            exec("zfs list -j -o name,encryption 2>&1", $raw_datasets, $result_code);
+            if ($result_code === 0) {
+                $decoded = json_decode(implode("\n", $raw_datasets), true);
+                if (is_array($decoded) && isset($decoded["datasets"]) && is_array($decoded["datasets"])) {
+                    foreach ($decoded["datasets"] as $dataset_name => $dataset_info) {
+                        $encryption = $dataset_info["properties"]["encryption"]["value"] ?? null;
+                        if (!is_string($dataset_name) || $dataset_name === '' || !is_string($encryption)) {
+                            continue;
+                        }
+
+                        if ($encryption != "off") {
+                            $datasets .= mk_option($selected, $dataset_name, $dataset_name);
+                        } else {
+                            if ($only_encrypted) {
+                                if ($dataset_name === $selected) {
+                                    $datasets .= mk_option($selected, $dataset_name, "$dataset_name (not encrypted)");
+                                } else {
+                                    $datasets .= mk_option($selected, $dataset_name, "$dataset_name (not encrypted)", "disabled");
+                                }
+                            } else {
+                                $datasets .= mk_option($selected, $dataset_name, "$dataset_name (not encrypted)");
+                            }
+                        }
                 }
+                } else {
+                    $datasets = mk_option(null, "", "failed to parse datasets", "disabled");
             }
         } else {
             $datasets = mk_option(null, "", "failed to list datasets", "disabled");

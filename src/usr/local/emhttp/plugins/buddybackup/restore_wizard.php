@@ -55,24 +55,48 @@
     });
     nchan_buddybackup_restore.start();
 
+    function escape_html(value) {
+        return $('<div/>').text(value == null ? '' : String(value)).html();
+    }
+
+    function show_snapshot_error(message) {
+        var status_message = $('#restore-snapshot-message');
+        var list = $('#restore-snapshot');
+
+        status_message.html("<div style='color:#cc0000; white-space:normal; overflow-wrap:anywhere;'>"+escape_html(message)+"</div>");
+        list.html("<option selected disabled value=''>Failed to load snapshots</option>");
+    }
+
     function get_available_snapshots() {
         list = $('#restore-snapshot');
+        var status_message = $('#restore-snapshot-message');
+        status_message.html('');
         list.html("<option selected disabled value=''>Fetching snapshots..</option>");
         var cmd = '<?=$rc_name?> get_available_snapshots "'+the_uid+'"';
 
         $.post('/webGui/include/StartCommand.php', {cmd: cmd, start:2, csrf_token: '<?=$_GET['csrf_token']?>'})
             .done(function(data) {
                 list.html("");
+                status_message.html('');
 
                 try {
                     json = JSON.parse(data);
                 } catch (error) {
-                    list.html("<option selected disabled value=''>Failed! "+error+"</option>");
+                    show_snapshot_error(error);
                     console.error("JSON parse error:", error, ". Data: ", data);
                     return;
                 }
                 if (json.status != "ok") {
-                    list.html("<option selected disabled value=''>Failed! "+json.error+"</option>");
+                    show_snapshot_error(json.error || "Unknown error while loading snapshots.");
+                    return;
+                }
+
+                if (json.warning) {
+                    status_message.html("<div style='color:#996600; text-align:center;'>"+escape_html(json.warning)+"</div>");
+                }
+
+                if (jQuery.isEmptyObject(json.data)) {
+                    list.html("<option selected disabled value=''>"+escape_html(json.empty_message || "No snapshots available yet.")+"</option>");
                     return;
                 }
 
@@ -245,6 +269,7 @@
         <input type="button" value="Update snapshots list" onclick="get_available_snapshots()">
         <br>
         <h3>Your backed-up snapshots:</h3>
+        <div id="restore-snapshot-message" class="buddybackup-field-note" style="margin: 10px 0;"></div>
         <br>
         <select id="restore-snapshot" name="RestoreSnapshot" class="align" size=10>
             <option selected disabled>Fetching snapshots..</option>

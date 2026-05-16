@@ -22,6 +22,7 @@ $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
 $rc = $empath."/scripts/rc.buddybackup";
+$managed_known_hosts_path = "$plugin_path/buddybackup_known_hosts";
 
 function BB_LOG($msg) {
     global $plugin;
@@ -62,6 +63,18 @@ function file_exists_and_not_empty($file) {
     return file_exists($file) && filesize($file) > 1;
 }
 
+function ensure_managed_known_hosts_file() {
+    global $managed_known_hosts_path;
+
+    $known_hosts_dir = dirname($managed_known_hosts_path);
+    if (!is_dir($known_hosts_dir)) {
+        ENSURE_SUCCESS(mkdir($known_hosts_dir, 0700, true) || is_dir($known_hosts_dir));
+    }
+
+    ENSURE_SUCCESS(file_put_contents($managed_known_hosts_path, '', FILE_APPEND) !== false);
+    @chmod($managed_known_hosts_path, 0600);
+}
+
 function is_valid_zfs_dataset_name($dataset) {
     if ($dataset === '') {
         return false;
@@ -100,6 +113,26 @@ function read_receive_destination_dataset(&$error_message = null) {
     return $dataset;
 }
 
+function read_zfs_property_value($dataset, $property, &$error_message = null) {
+    $output = array();
+    $result_code = 0;
+
+    exec("zfs get -j " . escapeshellarg($property) . " " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
+    if ($result_code !== 0) {
+        $error_message = implode("\n", $output);
+        return null;
+    }
+
+    $decoded = json_decode(implode("\n", $output), true);
+    $value = $decoded['datasets'][$dataset]['properties'][$property]['value'] ?? null;
+    if (!is_string($value)) {
+        $error_message = "Invalid JSON output from zfs get for dataset '$dataset' and property '$property'.";
+        return null;
+    }
+
+    return $value;
+}
+
 function write_probe_zfs_response($status, $dataset = null, $message = null) {
     $response = array('status' => $status);
 
@@ -112,6 +145,80 @@ function write_probe_zfs_response($status, $dataset = null, $message = null) {
     }
 
     echo json_encode($response, JSON_UNESCAPED_SLASHES);
+}
+
+function write_json_response($response) {
+    echo json_encode($response, JSON_UNESCAPED_SLASHES);
+}
+
+function build_shell_command($parts) {
+    return implode(' ', array_map(function($part) {
+        return escapeshellarg((string)$part);
+    }, $parts));
+}
+
+function load_backup_config_entry($uid, &$error_message = null) {
+    global $backups_config_path;
+
+    $backup_cfg = parse_ini_file($backups_config_path, true);
+    if (!is_array($backup_cfg) || !array_key_exists($uid, $backup_cfg)) {
+        $error_message = "Backup with uid '$uid' does not exist.";
+        return null;
+    }
+
+    return $backup_cfg[$uid];
+}
+
+function run_task_command($cmd, $echo_pid) {
+    $result_code = null;
+
+    if ($echo_pid) {
+        start_long_running_task_echo_pid($cmd);
+        return null;
+    }
+
+    passthru($cmd, $result_code);
+    return $result_code;
+}
+
+function build_send_backup_command($cfg, $uid) {
+    global $rc;
+
+    if ($cfg['type'] == 'local') {
+        return build_shell_command(array(
+            $rc,
+            'send_local_backup',
+            $cfg['source_dataset'],
+            $cfg['recursive'],
+            $cfg['destination_dataset'],
+            $uid,
+        ));
+    }
+
+    return build_shell_command(array(
+        $rc,
+        'send_backup',
+        $cfg['source_dataset'],
+        $cfg['recursive'],
+        $cfg['destination_host'],
+        $cfg['destination_dataset'],
+        $uid,
+    ));
+}
+
+function build_create_snapshot_and_send_command($cfg, $uid) {
+    global $rc;
+
+    return build_shell_command(array(
+        $rc,
+        'create_snapshot_and_send',
+        $cfg['type'],
+        $cfg['source_dataset'],
+        $cfg['recursive'],
+        $cfg['destination_host'] ?? '',
+        $cfg['destination_dataset'],
+        $uid,
+    ));
 }
 
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
@@ -257,6 +364,7 @@ function add_backup_cron_file($uid, $cfg) {
 
 function update_backups_from_config() {
     BB_LOG("Updating backup cronjobs");
+    global $managed_known_hosts_path;
     global $plugin_path;
     global $backups_config_path;
     global $rc;
@@ -273,17 +381,21 @@ function update_backups_from_config() {
 
     // Remove all buddybackup entries in known_hosts file
     passthru($rc.' clear_known_hosts');
-    $known_hosts_path = "/root/.ssh/known_hosts";
+    ensure_managed_known_hosts_file();
+    $known_hosts_path = $managed_known_hosts_path;
     ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND)!==false);
 
+    $destination_hosts = [];
     foreach ($backup_cfg as $uid => $cfg) {
+        $is_local = $cfg['type'] == "local";
+        $destination_host = trim((string)($cfg['destination_host'] ?? ''));
+
         // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
         // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_available_snapshots
-        if ($key = shell_exec("ssh-keyscan -H \"".$cfg["destination_host"]."\"")) {
-            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND)!==false);
+        if (!$is_local && $destination_host !== '') {
+            $destination_hosts[$destination_host] = true;
         }
 
-        $is_local = $cfg['type'] == "local";
         $any_empty = false;
         foreach ($cfg as $key => $value) {
             if (empty($value)) {
@@ -301,7 +413,16 @@ function update_backups_from_config() {
 
         add_backup_cron_file($uid, $cfg);
     }
+
+    foreach (array_keys($destination_hosts) as $destination_host) {
+        $command = 'ssh-keyscan -H '.escapeshellarg($destination_host).' 2>/dev/null';
+        if ($key = shell_exec($command)) {
+            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND)!==false);
+        }
+    }
+
     ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND)!==false);
+    @chmod($known_hosts_path, 0600);
 
     passthru("/usr/local/sbin/update_cron");
 }
@@ -320,30 +441,60 @@ function start_long_running_task_echo_pid($cmd) {
 
 function restore_snapshot($argv) {
     // uid is passed as first argument. Convert it to destination hostname if type is remote, otherwise passthrough all other args to rc.buddybackup
-    global $rc;
-    global $plugin_path;
-    global $backups_config_path;
-    $backup_cfg = parse_ini_file($backups_config_path, true);
     $uid = $argv[2];
-    if (!array_key_exists($uid, $backup_cfg)) {
-        echo "UID '$uid' does not exist";
+    $error_message = null;
+    $cfg = load_backup_config_entry($uid, $error_message);
+    if ($cfg === null) {
+        echo $error_message;
         return;
     }
-    $cfg = $backup_cfg[$uid];
 
     BB_LOG("restore_snapshot ".$uid);
 
     if ($cfg["type"] == "remote") {
-        $cmd = $rc.' restore_snapshot remote "'.$cfg["destination_host"].'" "'.$argv[3].'" "'.$argv[4].'" "'.$argv[5].'" "'.$argv[6].'" "'.$argv[7].'"';
+        $cmd = build_shell_command(array(
+            $GLOBALS['rc'],
+            'restore_snapshot',
+            'remote',
+            $cfg['destination_host'],
+            $argv[3],
+            $argv[4],
+            $argv[5],
+            $argv[6],
+            $argv[7],
+        ));
         BB_LOG("remote cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
     } else if ($cfg["type"] == "local") {
-        $cmd = $rc.' restore_snapshot local "'.$argv[3].'" "'.$argv[4].'" "'.$argv[5].'" "'.$argv[6].'" "'.$argv[7].'"';
+        $cmd = build_shell_command(array(
+            $GLOBALS['rc'],
+            'restore_snapshot',
+            'local',
+            $argv[3],
+            $argv[4],
+            $argv[5],
+            $argv[6],
+            $argv[7],
+        ));
         BB_LOG("local cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
     } else {
         BB_ERR("Unknown backup type: ".$cfg["type"]);
     }
+}
+
+function preflight_send_backup($uid) {
+    global $rc;
+
+    $error_message = null;
+    $cfg = load_backup_config_entry($uid, $error_message);
+    if ($cfg === null) {
+        write_json_response(array('status' => 'error', 'message' => $error_message));
+        return;
+    }
+
+    $cmd = build_shell_command(array($rc, 'preflight_send_backup', $cfg['type'], $cfg['source_dataset']));
+    passthru($cmd);
 }
 
 function get_available_snapshots($uid) {
@@ -372,15 +523,12 @@ function mark_received_backup() {
         return;
     }
 
-    $output = array();
-    $result_code = 0;
-    exec("zfs get -H -o value used " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
-    if ($result_code !== 0) {
-        BB_ERR("Failed to get used size for buddy receive destination dataset '$dataset': " . implode("\n", $output));
+    $dest_size = read_zfs_property_value($dataset, 'used', $error_message);
+    if ($dest_size === null) {
+        BB_ERR("Failed to get used size for buddy receive destination dataset '$dataset': $error_message");
         return;
     }
 
-    $dest_size = trim(implode("\n", $output));
     $file = "/tmp/buddybackup-buddy";
     $info = "last_ran=".time()."\ndest_size=$dest_size";
     file_put_contents($file, $info);
@@ -394,49 +542,49 @@ function probe_zfs() {
         exit(1);
     }
 
-    $output = array();
-    $result_code = 0;
-    exec("zfs get -H -o value used " . escapeshellarg($dataset) . " 2>&1", $output, $result_code);
-    if ($result_code === 0) {
+    if (read_zfs_property_value($dataset, 'used', $error_message) !== null) {
         write_probe_zfs_response('ok', $dataset, null);
         return;
     }
 
-    $message = implode("\n", $output);
-    write_probe_zfs_response('error', null, $message);
-    exit($result_code === 0 ? 1 : $result_code);
+    write_probe_zfs_response('error', null, $error_message);
+    exit(1);
 }
 
 function send_backup($uid, $echo_pid_arg) {
     BB_LOG("Sending backup $uid");
-    global $rc;
-    global $plugin_path;
-    global $backups_config_path;
-    $backup_cfg = parse_ini_file($backups_config_path, true);
-    if (!array_key_exists($uid, $backup_cfg)) {
+    $error_message = null;
+    $cfg = load_backup_config_entry($uid, $error_message);
+    if ($cfg === null) {
         BB_ERR("Could not startup backup with uid '$uid' since it does not exist");
         return;
     }
+
     $echo_pid = (!empty($echo_pid_arg) && $echo_pid_arg == "echopid");
-    $cfg = $backup_cfg[$uid];
-    $result_code = null;
-    if ($cfg['type'] == "local") {
-        $cmd = $rc.' send_local_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_dataset"].'" "'.$uid.'"';
-        if ($echo_pid) {
-            start_long_running_task_echo_pid($cmd);
-        } else {
-            passthru($cmd, $result_code);
-        }
-    } else {
-        $cmd = $rc.' send_backup "'.$cfg["source_dataset"].'" "'.$cfg["recursive"].'" "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'" "'.$uid.'"';
-        if ($echo_pid) {
-            start_long_running_task_echo_pid($cmd);
-        } else {
-            passthru($cmd, $result_code);
-        }
-    }
+    $cmd = build_send_backup_command($cfg, $uid);
+    $result_code = run_task_command($cmd, $echo_pid);
+
     if (!$echo_pid) {
         BB_VERBOSE("backup result: $result_code");
+    }
+}
+
+function create_snapshot_and_send($uid, $echo_pid_arg) {
+    BB_LOG("Creating snapshot and sending backup $uid");
+
+    $error_message = null;
+    $cfg = load_backup_config_entry($uid, $error_message);
+    if ($cfg === null) {
+        BB_ERR("Could not start create_snapshot_and_send for uid '$uid' since it does not exist");
+        return;
+    }
+
+    $echo_pid = (!empty($echo_pid_arg) && $echo_pid_arg == 'echopid');
+    $cmd = build_create_snapshot_and_send_command($cfg, $uid);
+    $result_code = run_task_command($cmd, $echo_pid);
+
+    if (!$echo_pid) {
+        BB_VERBOSE("create_snapshot_and_send result: $result_code");
     }
 }
 
@@ -444,8 +592,14 @@ switch ($argv[1]) {
     case 'update':
         update();
         break;
+    case 'preflight_send_backup':
+        preflight_send_backup($argv[2]);
+        break;
     case 'send_backup':
         send_backup($argv[2], $argv[3]);
+        break;
+    case 'create_snapshot_and_send':
+        create_snapshot_and_send($argv[2], $argv[3]);
         break;
     case 'test_connection':
         $host = escapeshellarg($argv[2] ?? '');
@@ -469,7 +623,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|send_backup|get_available_snapshots|probe_zfs|mark_received_backup|restore_snapshot";
+        echo "usage ".$argv[0]." update|preflight_send_backup|send_backup|create_snapshot_and_send|get_available_snapshots|probe_zfs|mark_received_backup|restore_snapshot";
         break;
 }
 ?>
