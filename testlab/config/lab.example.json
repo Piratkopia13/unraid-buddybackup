@@ -6,25 +6,16 @@
   "ssh": {
     "user": "root",
     "port": 22,
-    "identityFile": "~/.ssh/id_ed25519"
-  },
-  "vm": {
-    "namePrefix": "buddybackup-test",
-    "cpu": 2,
-    "memoryMB": 4096,
-    "diskGB": 32,
-    "network": "nat"
+    "identityFile": ".testlab/lab_key"
   },
   "nodes": {
     "sender": {
-      "name": "unraid-sender",
-      "host": "192.168.1.101",
-      "role": "sender"
+      "name": "buddybackup-sender",
+      "host": "10.88.0.101"
     },
     "receiver": {
-      "name": "unraid-receiver",
-      "host": "192.168.1.102",
-      "role": "receiver"
+      "name": "buddybackup-receiver",
+      "host": "10.88.0.102"
     }
   },
   "plugin": {
