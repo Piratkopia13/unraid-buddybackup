@@ -316,7 +316,7 @@ $wslCfg = $lab.wslQemu
 $distro = if ($wslCfg -and $wslCfg.distro) { [string]$wslCfg.distro } else { "Ubuntu" }
 $cacheRoot = if ($wslCfg -and $wslCfg.cacheRoot) { [string]$wslCfg.cacheRoot } else { ".testlab/cache" }
 $imageSizeMB = if ($wslCfg -and $wslCfg.imageSizeMB) { [int]$wslCfg.imageSizeMB } else { 1024 }
-$dataDiskSizeGB = if ($wslCfg -and $wslCfg.dataDiskSizeGB) { [int]$wslCfg.dataDiskSizeGB } else { 24 }
+$dataDiskSizeGB = if ($wslCfg -and $wslCfg.dataDiskSizeGB) { [int]$wslCfg.dataDiskSizeGB } else { 3 }
 $bootWaitSeconds = if ($wslCfg -and $wslCfg.bootWaitSeconds) { [int]$wslCfg.bootWaitSeconds } else { 120 }
 $downloadUrlTemplate = if ($wslCfg -and $wslCfg.unraidDownloadUrlTemplate) { [string]$wslCfg.unraidDownloadUrlTemplate } else { $null }
 

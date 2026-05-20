@@ -5,7 +5,7 @@ param(
     [string]$SshPrivateKeyPath = ".testlab/lab_key",
     [string]$InstanceName = "probe",
     [int]$ImageSizeMB = 1024,
-    [int]$DataDiskSizeGB = 24,
+    [int]$DataDiskSizeGB = 3,
     [int]$BootWaitSeconds = 35,
     [int]$HostSshPort = 2222,
     [string]$OutputPath,
@@ -119,8 +119,8 @@ function Write-ProbeStatus {
 if ($ImageSizeMB -lt 512) {
     throw "ImageSizeMB must be at least 512 MB."
 }
-if ($DataDiskSizeGB -lt 4) {
-    throw "DataDiskSizeGB must be at least 4 GB."
+if ($DataDiskSizeGB -lt 3) {
+    throw "DataDiskSizeGB must be at least 3 GB."
 }
 if ($BootWaitSeconds -lt 5) {
     throw "BootWaitSeconds must be at least 5 seconds."

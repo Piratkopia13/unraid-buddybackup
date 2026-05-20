@@ -35,7 +35,7 @@
     "distro": "Ubuntu",
     "cacheRoot": ".testlab/cache",
     "imageSizeMB": 1024,
-    "dataDiskSizeGB": 24,
+    "dataDiskSizeGB": 3,
     "bootWaitSeconds": 120,
     "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip"
   },
