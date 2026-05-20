@@ -16,6 +16,8 @@ This initial implementation provides:
 - Host bootstrap script.
 - Lab config templates.
 - Windows-local WSL/QEMU provisioning path with artifact-backed SSH readiness checks.
+- Post-SSH base guest setup for the local provider (BuddyBackup plugin install verification, and ZFS pool + datasets).
+- Matrix-time base setup verification checks for plugin install health and ZFS baseline.
 - Manual-provider provisioning probe with JSON readiness report.
 - Small matrix definition.
 - Matrix runner with lifecycle scenario hooks and per-cell artifacts.
@@ -41,6 +43,7 @@ This initial implementation provides:
    ./testlab/scripts/provision-lab.ps1 -LabConfig testlab/config/lab.local.json
 
    If `provider` is set to `windows-local`, the provision step boots local Unraid nodes through WSL/QEMU and verifies SSH on the configured localhost ports.
+   After SSH is ready, it can also apply base guest setup actions from `setup` in the lab config.
 
 6. Execute for real:
 
@@ -60,3 +63,8 @@ This initial implementation provides:
 - The `windows-local` provider now targets WSL2 plus QEMU/KVM rather than Hyper-V.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - If automatic Unraid zip download fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
+- `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
+- Base setup (`setup`) runs after SSH readiness and records testable action outputs in `.testlab/logs/local-provider-*.json`.
+- BuddyBackup plugin install is validated by both install exit status and `plugin list`; by default, install output containing `warning` or `error` fails setup.
+- ZFS base setup creates a standalone pool and two datasets per node: one unencrypted and one encrypted.
+- `setup.verifyBaseConfigInMatrix` controls a `base-setup-verify` check that runs before each matrix cell scenario and writes `scenario-base-setup-verify.json` in the cell artifact directory.

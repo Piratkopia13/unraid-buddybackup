@@ -12,13 +12,15 @@
       "name": "buddybackup-sender",
       "host": "127.0.0.1",
       "port": 2222,
-      "unraidVersion": "7.2.6"
+      "unraidVersion": "7.2.6",
+      "pluginVersion": "2026.05.02"
     },
     "receiver": {
       "name": "buddybackup-receiver",
       "host": "127.0.0.1",
       "port": 2223,
-      "unraidVersion": "7.2.6"
+      "unraidVersion": "7.2.6",
+      "pluginVersion": "2026.05.02"
     }
   },
   "plugin": {
@@ -33,7 +35,24 @@
     "distro": "Ubuntu",
     "cacheRoot": ".testlab/cache",
     "imageSizeMB": 1024,
+    "dataDiskSizeGB": 24,
     "bootWaitSeconds": 120,
     "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip"
+  },
+  "setup": {
+    "applyBaseConfigAfterSsh": true,
+    "verifyBaseConfigInMatrix": true,
+    "buddybackup": {
+      "pluginVersion": "2026.05.02",
+      "pluginUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg",
+      "failOnWarningOrError": true
+    },
+    "zfs": {
+      "poolName": "bbpool",
+      "datasetRoot": "buddybackup",
+      "unencryptedDatasetName": "plain",
+      "encryptedDatasetName": "secure",
+      "encryptedPassphrase": "buddybackup-testlab-passphrase"
+    }
   }
 }

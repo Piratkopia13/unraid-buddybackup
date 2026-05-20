@@ -26,6 +26,28 @@ function Ensure-Dir {
     }
 }
 
+function Get-ObjectValue {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return $null
+    }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        return $Object[$Name]
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        return $property.Value
+    }
+
+    return $null
+}
+
 function Resolve-IdentityPath {
     param([string]$IdentityFile)
 
@@ -122,6 +144,148 @@ function Wait-SshReady {
     }
 
     return $false
+}
+
+function Get-LatestLocalProviderReport {
+    param($Lab)
+
+    $logsRoot = if ($Lab.logsRoot) { [string]$Lab.logsRoot } else { ".testlab/logs" }
+    $reports = Get-ChildItem -Path $logsRoot -Filter "local-provider-*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+    if (-not $reports -or $reports.Count -eq 0) {
+        return $null
+    }
+
+    return Get-Content -Raw -Path $reports[0].FullName | ConvertFrom-Json
+}
+
+function Test-NodeBaseSetupFromProviderReport {
+    param(
+        $NodeReport,
+        [string]$NodeName
+    )
+
+    if (-not $NodeReport) {
+        return [pscustomobject]@{ Success = $false; Error = "No local-provider node report entry found for '$NodeName'." }
+    }
+
+    if (-not $NodeReport.baseSetupApplied) {
+        return [pscustomobject]@{ Success = $false; Error = "baseSetupApplied is false for '$NodeName'." }
+    }
+
+    $actions = @($NodeReport.baseSetup.actions)
+    if ($actions.Count -eq 0) {
+        return [pscustomobject]@{ Success = $false; Error = "No base setup actions were recorded for '$NodeName'." }
+    }
+
+    $pluginInstall = @($actions | Where-Object { $_.label -eq "buddybackup-plugin-install" }) | Select-Object -First 1
+    if (-not $pluginInstall) {
+        return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install action is missing for '$NodeName'." }
+    }
+    if (-not $pluginInstall.success) {
+        return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install failed for '$NodeName'." }
+    }
+    if ($pluginInstall.warningsOrErrorsDetected) {
+        return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install output contained warning/error text for '$NodeName'." }
+    }
+
+    return [pscustomobject]@{ Success = $true; Error = $null }
+}
+
+function Get-SetupZfsValues {
+    param($Lab)
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $zfsCfg = Get-ObjectValue -Object $setupCfg -Name "zfs"
+
+    $poolName = [string](Get-ObjectValue -Object $zfsCfg -Name "poolName")
+    if ([string]::IsNullOrWhiteSpace($poolName)) { $poolName = "bbpool" }
+
+    $datasetRootName = [string](Get-ObjectValue -Object $zfsCfg -Name "datasetRoot")
+    if ([string]::IsNullOrWhiteSpace($datasetRootName)) { $datasetRootName = "buddybackup" }
+
+    $plainDatasetName = [string](Get-ObjectValue -Object $zfsCfg -Name "unencryptedDatasetName")
+    if ([string]::IsNullOrWhiteSpace($plainDatasetName)) { $plainDatasetName = "plain" }
+
+    $encDatasetName = [string](Get-ObjectValue -Object $zfsCfg -Name "encryptedDatasetName")
+    if ([string]::IsNullOrWhiteSpace($encDatasetName)) { $encDatasetName = "secure" }
+
+    $root = "$poolName/$datasetRootName"
+    return [pscustomobject]@{
+        PoolName = $poolName
+        DatasetRoot = $root
+        UnencryptedDataset = "$root/$plainDatasetName"
+        EncryptedDataset = "$root/$encDatasetName"
+    }
+}
+
+function Run-BaseSetupVerification {
+    param(
+        $Lab,
+        [string]$CellDir,
+        [switch]$DoExecute
+    )
+
+    $results = @()
+    $providerReport = $null
+
+    if (($Lab.provider -eq "windows-local" -or $Lab.provider -eq "windows-wsl-qemu") -and $DoExecute) {
+        $providerReport = Get-LatestLocalProviderReport -Lab $Lab
+        if (-not $providerReport) {
+            throw "No local-provider report found for base setup verification."
+        }
+
+        foreach ($nodeName in @("sender", "receiver")) {
+            $nodeReport = @($providerReport.nodes | Where-Object { $_.node -eq $nodeName }) | Select-Object -First 1
+            $nodeCheck = Test-NodeBaseSetupFromProviderReport -NodeReport $nodeReport -NodeName $nodeName
+            $results += [pscustomobject]@{
+                Label = "${nodeName}-provider-base-setup"
+                Command = "provider report base setup validation"
+                ExitCode = if ($nodeCheck.Success) { 0 } else { 1 }
+                Output = if ($nodeCheck.Success) { "ok" } else { $nodeCheck.Error }
+                Success = $nodeCheck.Success
+            }
+            if (-not $nodeCheck.Success) {
+                throw $nodeCheck.Error
+            }
+        }
+    }
+
+    $zfsValues = Get-SetupZfsValues -Lab $Lab
+
+    foreach ($nodeName in @("sender", "receiver")) {
+        $connection = Get-NodeConnection -Lab $Lab -NodeName $nodeName
+
+        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command "plugin list | grep -i buddybackup" -Label "${nodeName}-buddybackup-plugin-check" -DoExecute:$DoExecute
+        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zpool list -H -o name {0}" -f $zfsValues.PoolName) -Label "${nodeName}-zpool-check" -DoExecute:$DoExecute
+        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zfs list -H -o name {0}" -f $zfsValues.UnencryptedDataset) -Label "${nodeName}-plain-dataset-check" -DoExecute:$DoExecute
+        $encResult = Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset) -Label "${nodeName}-encrypted-dataset-check" -DoExecute:$DoExecute
+        $results += $encResult
+
+        if ($DoExecute -and $encResult.Success -and $encResult.Output -match '(?i)^off\s*$') {
+            $encResult.Success = $false
+            $encResult.ExitCode = 1
+            $encResult.Output = "encryption=off"
+        }
+    }
+
+    $verificationPath = Join-Path -Path $CellDir -ChildPath "scenario-base-setup-verify.json"
+    $results | ConvertTo-Json -Depth 8 | Set-Content -Path $verificationPath
+
+    $failed = @($results | Where-Object { -not $_.Success })
+    if ($failed.Count -gt 0) {
+        $labels = @($failed | ForEach-Object { $_.Label }) -join ","
+        return [pscustomobject]@{
+            Scenario = "base-setup-verify"
+            Success = $false
+            Error = "Failed command labels: $labels"
+        }
+    }
+
+    return [pscustomobject]@{
+        Scenario = "base-setup-verify"
+        Success = $true
+        Error = $null
+    }
 }
 
 function Install-Plugin {
@@ -270,6 +434,32 @@ foreach ($cell in $matrix.cells) {
     $scenarioResults = @()
     $cellDir = Join-Path -Path $runDir -ChildPath $cell.id
     Ensure-Dir -Path $cellDir
+
+    $setupCfg = Get-ObjectValue -Object $lab -Name "setup"
+    $runBaseSetupVerification = $true
+    $runBaseSetupVerificationValue = Get-ObjectValue -Object $setupCfg -Name "verifyBaseConfigInMatrix"
+    if ($null -ne $runBaseSetupVerificationValue) {
+        $runBaseSetupVerification = [bool]$runBaseSetupVerificationValue
+    }
+
+    if ($runBaseSetupVerification) {
+        try {
+            $baseSetupRun = Run-BaseSetupVerification -Lab $lab -CellDir $cellDir -DoExecute:$Execute
+            $scenarioResults += $baseSetupRun
+            if (-not $baseSetupRun.Success) {
+                $status = "fail"
+                $errors += "Scenario 'base-setup-verify' failed: $($baseSetupRun.Error)"
+            }
+        } catch {
+            $status = "fail"
+            $errors += "Scenario 'base-setup-verify' failed: $($_.Exception.Message)"
+            $scenarioResults += [pscustomobject]@{
+                Scenario = "base-setup-verify"
+                Success = $false
+                Error = $_.Exception.Message
+            }
+        }
+    }
 
     foreach ($scenario in $cell.scenarios) {
         try {

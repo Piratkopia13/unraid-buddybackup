@@ -42,6 +42,238 @@ function Get-ObjectValue {
     return $null
 }
 
+function Resolve-NodeConnection {
+    param(
+        $Lab,
+        $Node
+    )
+
+    $defaultPort = if ($Lab.ssh -and $Lab.ssh.port) { [int]$Lab.ssh.port } else { 22 }
+    $defaultUser = if ($Lab.ssh -and $Lab.ssh.user) { [string]$Lab.ssh.user } else { "root" }
+    $defaultIdentityFile = if ($Lab.ssh -and $Lab.ssh.identityFile) { [string]$Lab.ssh.identityFile } else { $null }
+
+    $identityFile = Get-ObjectValue -Object $Node -Name "identityFile"
+    return [pscustomobject]@{
+        User = if (Get-ObjectValue -Object $Node -Name "user") { [string](Get-ObjectValue -Object $Node -Name "user") } else { $defaultUser }
+        Host = [string](Get-ObjectValue -Object $Node -Name "host")
+        Port = if (Get-ObjectValue -Object $Node -Name "port") { [int](Get-ObjectValue -Object $Node -Name "port") } else { $defaultPort }
+        IdentityFile = if ($identityFile) { [string]$identityFile } else { $defaultIdentityFile }
+    }
+}
+
+function Test-OutputHasWarningsOrErrors {
+    param([string[]]$OutputLines)
+
+    if (-not $OutputLines) {
+        return $false
+    }
+
+    $joined = ($OutputLines -join [Environment]::NewLine)
+    return ($joined -match '(?im)\b(error|warning)\b')
+}
+
+function Invoke-NodeSshCommand {
+    param(
+        $NodeConnection,
+        [string]$Command,
+        [string]$Label,
+        [switch]$DoExecute
+    )
+
+    $sshArgs = @(
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=8",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=NUL",
+        "-o", "GlobalKnownHostsFile=NUL",
+        "-p", ([string]$NodeConnection.Port)
+    )
+
+    if ($NodeConnection.IdentityFile) {
+        $identityPath = Resolve-TestLabPath ([string]$NodeConnection.IdentityFile)
+        $sshArgs += @("-i", $identityPath)
+    }
+
+    $sshArgs += @("$($NodeConnection.User)@$($NodeConnection.Host)", $Command)
+
+    if (-not $DoExecute) {
+        Write-Host "[dry-run][setup][$Label] ssh $($sshArgs -join ' ')"
+        return [pscustomobject]@{
+            label = $Label
+            success = $true
+            exitCode = 0
+            output = @("dry-run")
+            warningsOrErrorsDetected = $false
+        }
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $rawOutput = & ssh @sshArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $outputLines = @($rawOutput | ForEach-Object { [string]$_ })
+    return [pscustomobject]@{
+        label = $Label
+        success = ($exitCode -eq 0)
+        exitCode = $exitCode
+        output = $outputLines
+        warningsOrErrorsDetected = (Test-OutputHasWarningsOrErrors -OutputLines $outputLines)
+    }
+}
+
+function Invoke-NodeBaseSetup {
+    param(
+        $Lab,
+        $Node,
+        [string]$NodeName,
+        $NodeConnection,
+        [string]$PluginVersion,
+        [string]$PluginUrlTemplate,
+        [switch]$DoExecute
+    )
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $zfsCfg = Get-ObjectValue -Object $setupCfg -Name "zfs"
+    $buddyCfg = Get-ObjectValue -Object $setupCfg -Name "buddybackup"
+
+    $failOnInstallWarnings = $true
+    $buddyFailOnWarnings = Get-ObjectValue -Object $buddyCfg -Name "failOnWarningOrError"
+    if ($null -ne $buddyFailOnWarnings) {
+        $failOnInstallWarnings = [bool]$buddyFailOnWarnings
+    }
+
+    $poolName = [string](Get-ObjectValue -Object $zfsCfg -Name "poolName")
+    if ([string]::IsNullOrWhiteSpace($poolName)) {
+        $poolName = "bbpool"
+    }
+    $datasetRootName = [string](Get-ObjectValue -Object $zfsCfg -Name "datasetRoot")
+    if ([string]::IsNullOrWhiteSpace($datasetRootName)) {
+        $datasetRootName = "buddybackup"
+    }
+    $plainDatasetName = [string](Get-ObjectValue -Object $zfsCfg -Name "unencryptedDatasetName")
+    if ([string]::IsNullOrWhiteSpace($plainDatasetName)) {
+        $plainDatasetName = "plain"
+    }
+    $encDatasetName = [string](Get-ObjectValue -Object $zfsCfg -Name "encryptedDatasetName")
+    if ([string]::IsNullOrWhiteSpace($encDatasetName)) {
+        $encDatasetName = "secure"
+    }
+    $encryptionPassphrase = [string](Get-ObjectValue -Object $zfsCfg -Name "encryptedPassphrase")
+    if ([string]::IsNullOrWhiteSpace($encryptionPassphrase)) {
+        $encryptionPassphrase = "buddybackup-testlab-passphrase"
+    }
+
+    $datasetRoot = "$poolName/$datasetRootName"
+    $plainDataset = "$datasetRoot/$plainDatasetName"
+    $encryptedDataset = "$datasetRoot/$encDatasetName"
+
+    $results = @()
+
+    if ([string]::IsNullOrWhiteSpace($PluginVersion)) {
+        throw "Missing plugin version for node '$NodeName'. Set nodes.$NodeName.pluginVersion or setup.buddybackup.pluginVersion in lab config."
+    }
+    if ([string]::IsNullOrWhiteSpace($PluginUrlTemplate)) {
+        throw "Missing plugin URL template for BuddyBackup installation on node '$NodeName'."
+    }
+
+    $pluginUrl = if ($PluginUrlTemplate -match '\{version\}') {
+        $PluginUrlTemplate.Replace("{version}", $PluginVersion)
+    } else {
+        $PluginUrlTemplate
+    }
+
+    $pluginInstallResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command ("plugin install {0}" -f $pluginUrl) -Label "buddybackup-plugin-install" -DoExecute:$DoExecute
+    $results += $pluginInstallResult
+    if (-not $pluginInstallResult.success) {
+        throw "BuddyBackup plugin install failed on node '$NodeName'."
+    }
+    if ($failOnInstallWarnings -and $pluginInstallResult.warningsOrErrorsDetected) {
+        throw "BuddyBackup plugin install output on node '$NodeName' contained warning/error text."
+    }
+
+    $pluginVerifyResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command "plugin list | grep -i buddybackup" -Label "buddybackup-plugin-verify" -DoExecute:$DoExecute
+    $results += $pluginVerifyResult
+    if (-not $pluginVerifyResult.success) {
+        throw "BuddyBackup plugin did not appear in plugin list on node '$NodeName'."
+    }
+
+    $passphraseB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($encryptionPassphrase))
+    $zfsScript = @'
+passphrase_b64="$1"
+pool_name="$2"
+dataset_root="$3"
+plain_dataset="$4"
+encrypted_dataset="$5"
+
+set -euo pipefail
+
+if ! command -v zpool >/dev/null 2>&1 || ! command -v zfs >/dev/null 2>&1; then
+  echo "zpool/zfs commands are unavailable on this guest" >&2
+  exit 1
+fi
+
+disk_by_id="/dev/disk/by-id/virtio-buddybackup_data"
+if [ ! -b "$disk_by_id" ]; then
+  echo "Expected data disk not found: $disk_by_id" >&2
+  ls -la /dev/disk/by-id >&2 || true
+  exit 1
+fi
+
+if ! zpool list -H -o name "$pool_name" >/dev/null 2>&1; then
+  zpool create -f -o ashift=12 "$pool_name" "$disk_by_id"
+fi
+
+zpool set autoexpand=on "$pool_name" >/dev/null 2>&1 || true
+
+if ! zfs list -H -o name "$dataset_root" >/dev/null 2>&1; then
+  zfs create -o mountpoint=none "$dataset_root"
+fi
+
+if ! zfs list -H -o name "$plain_dataset" >/dev/null 2>&1; then
+  zfs create "$plain_dataset"
+fi
+
+if ! zfs list -H -o name "$encrypted_dataset" >/dev/null 2>&1; then
+  passphrase="$(printf '%s' "$passphrase_b64" | base64 -d)"
+  printf '%s\n' "$passphrase" | zfs create -o encryption=aes-256-gcm -o keyformat=passphrase -o keylocation=prompt "$encrypted_dataset"
+fi
+
+encryption_value="$(zfs get -H -o value encryption "$encrypted_dataset")"
+if [ "$encryption_value" = "off" ]; then
+  echo "Encrypted dataset has encryption=off: $encrypted_dataset" >&2
+  exit 1
+fi
+
+echo "pool=$pool_name"
+echo "dataset_root=$dataset_root"
+echo "plain_dataset=$plain_dataset"
+echo "encrypted_dataset=$encrypted_dataset"
+echo "encrypted_dataset_encryption=$encryption_value"
+'@
+    $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScript))
+    $zfsCommand = "printf '%s' '$zfsScriptB64' | base64 -d | bash -s -- '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
+    $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -DoExecute:$DoExecute
+    $results += $zfsSetupResult
+    if (-not $zfsSetupResult.success) {
+        throw "ZFS base setup failed on node '$NodeName'."
+    }
+
+    return [pscustomobject]@{
+        success = $true
+        poolName = $poolName
+        datasetRoot = $datasetRoot
+        unencryptedDataset = $plainDataset
+        encryptedDataset = $encryptedDataset
+        pluginVersion = $PluginVersion
+        actions = @($results)
+    }
+}
+
 function Stop-WslLabInstance {
     param(
         [string]$Distro,
@@ -84,8 +316,23 @@ $wslCfg = $lab.wslQemu
 $distro = if ($wslCfg -and $wslCfg.distro) { [string]$wslCfg.distro } else { "Ubuntu" }
 $cacheRoot = if ($wslCfg -and $wslCfg.cacheRoot) { [string]$wslCfg.cacheRoot } else { ".testlab/cache" }
 $imageSizeMB = if ($wslCfg -and $wslCfg.imageSizeMB) { [int]$wslCfg.imageSizeMB } else { 1024 }
+$dataDiskSizeGB = if ($wslCfg -and $wslCfg.dataDiskSizeGB) { [int]$wslCfg.dataDiskSizeGB } else { 24 }
 $bootWaitSeconds = if ($wslCfg -and $wslCfg.bootWaitSeconds) { [int]$wslCfg.bootWaitSeconds } else { 120 }
 $downloadUrlTemplate = if ($wslCfg -and $wslCfg.unraidDownloadUrlTemplate) { [string]$wslCfg.unraidDownloadUrlTemplate } else { $null }
+
+$setupCfg = Get-ObjectValue -Object $lab -Name "setup"
+$applyBaseSetup = $true
+$applyBaseSetupConfig = Get-ObjectValue -Object $setupCfg -Name "applyBaseConfigAfterSsh"
+if ($null -ne $applyBaseSetupConfig) {
+    $applyBaseSetup = [bool]$applyBaseSetupConfig
+}
+
+$buddyCfg = Get-ObjectValue -Object $setupCfg -Name "buddybackup"
+$defaultPluginVersion = [string](Get-ObjectValue -Object $buddyCfg -Name "pluginVersion")
+$defaultPluginUrlTemplate = [string](Get-ObjectValue -Object $buddyCfg -Name "pluginUrlTemplate")
+if ([string]::IsNullOrWhiteSpace($defaultPluginUrlTemplate) -and $lab.plugin -and $lab.plugin.plgUrlTemplate) {
+    $defaultPluginUrlTemplate = [string]$lab.plugin.plgUrlTemplate
+}
 
 $privateKeyPath = if ($wslCfg -and $wslCfg.sshPrivateKeyPath) {
     Resolve-TestLabPath ([string]$wslCfg.sshPrivateKeyPath)
@@ -158,6 +405,14 @@ try {
 
         $nodePayloadPath = Get-ObjectValue -Object $node -Name "payloadPath"
         $nodeNameValue = Get-ObjectValue -Object $node -Name "name"
+        $nodePluginVersion = [string](Get-ObjectValue -Object $node -Name "pluginVersion")
+        $nodePluginUrlTemplate = [string](Get-ObjectValue -Object $node -Name "pluginUrlTemplate")
+        if ([string]::IsNullOrWhiteSpace($nodePluginUrlTemplate)) {
+            $nodePluginUrlTemplate = $defaultPluginUrlTemplate
+        }
+        $pluginVersion = if ($nodePluginVersion) { $nodePluginVersion } else { $defaultPluginVersion }
+
+        $nodeConnection = Resolve-NodeConnection -Lab $lab -Node $node
 
         $payloadPath = if ($nodePayloadPath) {
             Resolve-TestLabPath ([string]$nodePayloadPath)
@@ -189,6 +444,7 @@ try {
             unraidVersion       = $version
             payloadPath         = $payloadPath
             instanceName        = $instanceName
+            pluginVersion       = $pluginVersion
             outputPath          = $outputPath
             statusPath          = $statusPath
             sshReady            = $false
@@ -196,12 +452,15 @@ try {
             monitorSocketPath   = "/tmp/buddybackup-qemu-$instanceName/qemu-monitor.sock"
             serialLogPath       = "/tmp/buddybackup-qemu-$instanceName/unraid-serial.log"
             wslWorkingRoot      = "/tmp/buddybackup-qemu-$instanceName"
+            dataDiskSizeGB      = $dataDiskSizeGB
+            baseSetupApplied    = $false
+            baseSetup           = $null
         }
 
         if ($Execute) {
             Stop-WslLabInstance -Distro $distro -InstanceName $instanceName -DoExecute
 
-            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
+            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
 
             if (-not (Test-Path -LiteralPath $statusPath)) {
                 throw "Probe status file was not written for node '$nodeName': $statusPath"
@@ -213,6 +472,7 @@ try {
             $nodeEntry.monitorSocketPath = [string]$nodeStatus.monitorSocketPath
             $nodeEntry.serialLogPath = [string]$nodeStatus.serialLogPath
             $nodeEntry.wslWorkingRoot = [string]$nodeStatus.wslWorkingRoot
+            $nodeEntry.dataDiskPath = [string]$nodeStatus.dataDiskPath
 
             if (-not $nodeStatus.success) {
                 throw "WSL/QEMU probe failed for node '$nodeName': $($nodeStatus.error)"
@@ -224,12 +484,22 @@ try {
                 throw "Configured host SSH port $desiredPort for node '$nodeName' is busy; the probe fell back to $($nodeStatus.selectedHostSshPort). Update the lab config or free the configured port."
             }
 
+            if ($applyBaseSetup) {
+                $baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute
+                $nodeEntry.baseSetupApplied = $true
+                $nodeEntry.baseSetup = $baseSetup
+            }
+
             $startedInstances += $instanceName
             Write-Host "[testlab] Local node $nodeName ready on 127.0.0.1:$desiredPort"
         } else {
             Write-Host "[dry-run] Would start local node $nodeName on 127.0.0.1:$desiredPort from payload $payloadPath"
             $nodeEntry.sshReady = $true
             $nodeEntry.selectedHostSshPort = $desiredPort
+            if ($applyBaseSetup) {
+                $nodeEntry.baseSetupApplied = $true
+                $nodeEntry.baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute:$false
+            }
         }
 
         $report.nodes += [pscustomobject]$nodeEntry

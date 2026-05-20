@@ -5,6 +5,7 @@ param(
     [string]$SshPrivateKeyPath = ".testlab/lab_key",
     [string]$InstanceName = "probe",
     [int]$ImageSizeMB = 1024,
+    [int]$DataDiskSizeGB = 24,
     [int]$BootWaitSeconds = 35,
     [int]$HostSshPort = 2222,
     [string]$OutputPath,
@@ -118,6 +119,9 @@ function Write-ProbeStatus {
 if ($ImageSizeMB -lt 512) {
     throw "ImageSizeMB must be at least 512 MB."
 }
+if ($DataDiskSizeGB -lt 4) {
+    throw "DataDiskSizeGB must be at least 4 GB."
+}
 if ($BootWaitSeconds -lt 5) {
     throw "BootWaitSeconds must be at least 5 seconds."
 }
@@ -194,6 +198,7 @@ $probeStatus = [ordered]@{
     monitorSocketPath    = $null
     serialLogPath        = $null
     wslWorkingRoot       = $null
+    dataDiskPath         = $null
     serialTail           = @()
 }
 
@@ -228,9 +233,11 @@ $wslWorkingRoot = "/tmp/buddybackup-qemu-$InstanceName"
 $monitorSocketPath = "$wslWorkingRoot/qemu-monitor.sock"
 $serialLogPath = "$wslWorkingRoot/unraid-serial.log"
 $pidFilePath = "$wslWorkingRoot/qemu.pid"
+$dataDiskPath = "$wslWorkingRoot/buddybackup-data.img"
 $probeStatus.monitorSocketPath = $monitorSocketPath
 $probeStatus.serialLogPath = $serialLogPath
 $probeStatus.wslWorkingRoot = $wslWorkingRoot
+$probeStatus.dataDiskPath = $dataDiskPath
 $selectedHostSshPort = Get-FreeLoopbackPort -PreferredPort $HostSshPort
 $probeStatus.selectedHostSshPort = $selectedHostSshPort
 if ($selectedHostSshPort -ne $HostSshPort) {
@@ -250,6 +257,7 @@ monitor_socket="$5"
 serial_log="$6"
 pid_file="$7"
 host_ssh_port="$8"
+data_disk_size_gb="$9"
 
 require_command() {
   command -v "$1" >/dev/null 2>&1
@@ -264,9 +272,11 @@ rm -rf "$work_root"
 mkdir -p "$work_root/mnt"
 
 image_path="$work_root/unraid-boot.img"
+data_image_path="$work_root/buddybackup-data.img"
 mount_dir="$work_root/mnt"
 
 truncate -s "${image_size_mb}M" "$image_path"
+truncate -s "${data_disk_size_gb}G" "$data_image_path"
 parted -s "$image_path" mklabel msdos
 parted -s "$image_path" mkpart primary fat32 1MiB 100%
 parted -s "$image_path" set 1 boot on
@@ -335,8 +345,10 @@ qemu-system-x86_64 \
   -smp 2 \
   -enable-kvm \
   -drive if=none,id=usbdisk,format=raw,file="$image_path" \
+    -drive if=none,id=datadisk,format=raw,file="$data_image_path" \
     -device qemu-xhci,id=xhci \
     -device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=1 \
+        -device virtio-blk-pci,drive=datadisk,serial=buddybackup_data \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${host_ssh_port}-:22 \
   -device e1000,netdev=net0 \
   -serial file:"$serial_log" \
@@ -350,6 +362,7 @@ echo "image_path=$image_path"
 echo "monitor_socket=$monitor_socket"
 echo "serial_log=$serial_log"
 echo "pid_file=$pid_file"
+echo "data_image_path=$data_image_path"
 '@
 
 $buildResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $buildScript -Arguments @(
@@ -360,7 +373,8 @@ $buildResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $buildScript -A
     $monitorSocketPath,
     $serialLogPath,
     $pidFilePath,
-    [string]$selectedHostSshPort
+    [string]$selectedHostSshPort,
+    [string]$DataDiskSizeGB
 )
 
 if ($buildResult.ExitCode -ne 0) {
