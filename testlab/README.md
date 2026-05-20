@@ -65,6 +65,8 @@ This initial implementation provides:
 - If automatic Unraid zip download fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
 - Base setup (`setup`) runs after SSH readiness and records testable action outputs in `.testlab/logs/local-provider-*.json`.
+- The local provider forwards each guest WebGUI to localhost and prints the HTTP/HTTPS URLs after provisioning for manual checks.
+- Manual WebGUI login defaults to `root` with the password from `setup.manualAccess.rootPassword`.
 - BuddyBackup plugin install is validated by both install exit status and `plugin list`; by default, install output containing `warning` or `error` fails setup.
 - ZFS base setup creates a standalone pool and two datasets per node: one unencrypted and one encrypted.
 - The lab intentionally does not try to register that disk as an Unraid-managed named pool on Main. Unraid's documented workflow is GUI-driven, and the internal emhttp update path behind it is not treated here as a stable automation surface across Unraid releases.

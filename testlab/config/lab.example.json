@@ -42,6 +42,9 @@
   "setup": {
     "applyBaseConfigAfterSsh": true,
     "verifyBaseConfigInMatrix": true,
+    "manualAccess": {
+      "rootPassword": "buddybackup-testlab"
+    },
     "buddybackup": {
       "pluginVersion": "2026.05.02",
       "pluginUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg",

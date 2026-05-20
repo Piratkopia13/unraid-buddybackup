@@ -8,6 +8,8 @@ param(
     [int]$DataDiskSizeGB = 3,
     [int]$BootWaitSeconds = 35,
     [int]$HostSshPort = 2222,
+    [int]$HostHttpPort = 8080,
+    [int]$HostHttpsPort = 8443,
     [string]$OutputPath,
     [string]$StatusPath,
     [switch]$LeaveRunning
@@ -18,9 +20,16 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "wsl-common.ps1")
 
 function Get-FreeLoopbackPort {
-    param([int]$PreferredPort)
+    param(
+        [int]$PreferredPort,
+        [int[]]$ExcludedPorts = @()
+    )
 
     foreach ($candidatePort in $PreferredPort..($PreferredPort + 99)) {
+        if ($ExcludedPorts -contains $candidatePort) {
+            continue
+        }
+
         $listener = $null
         try {
             $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidatePort)
@@ -191,6 +200,10 @@ $probeStatus = [ordered]@{
     screenshotExists     = $false
     screenshotIsValidPng = $false
     selectedHostSshPort  = $null
+    selectedHostHttpPort = $null
+    selectedHostHttpsPort = $null
+    webGuiHttpUrl        = $null
+    webGuiHttpsUrl       = $null
     sshReady             = $false
     sshExitCode          = $null
     sshOutput            = @()
@@ -239,9 +252,21 @@ $probeStatus.serialLogPath = $serialLogPath
 $probeStatus.wslWorkingRoot = $wslWorkingRoot
 $probeStatus.dataDiskPath = $dataDiskPath
 $selectedHostSshPort = Get-FreeLoopbackPort -PreferredPort $HostSshPort
+$selectedHostHttpPort = Get-FreeLoopbackPort -PreferredPort $HostHttpPort -ExcludedPorts @($selectedHostSshPort)
+$selectedHostHttpsPort = Get-FreeLoopbackPort -PreferredPort $HostHttpsPort -ExcludedPorts @($selectedHostSshPort, $selectedHostHttpPort)
 $probeStatus.selectedHostSshPort = $selectedHostSshPort
+$probeStatus.selectedHostHttpPort = $selectedHostHttpPort
+$probeStatus.selectedHostHttpsPort = $selectedHostHttpsPort
+$probeStatus.webGuiHttpUrl = "http://127.0.0.1:$selectedHostHttpPort"
+$probeStatus.webGuiHttpsUrl = "https://127.0.0.1:$selectedHostHttpsPort"
 if ($selectedHostSshPort -ne $HostSshPort) {
     Write-Host "[testlab] Host SSH port $HostSshPort is busy; using localhost:$selectedHostSshPort for this probe."
+}
+if ($selectedHostHttpPort -ne $HostHttpPort) {
+    Write-Host "[testlab] Host HTTP port $HostHttpPort is busy; using localhost:$selectedHostHttpPort for this probe."
+}
+if ($selectedHostHttpsPort -ne $HostHttpsPort) {
+    Write-Host "[testlab] Host HTTPS port $HostHttpsPort is busy; using localhost:$selectedHostHttpsPort for this probe."
 }
 
 Stop-WslProbeQemu -Distro $Distro -WslWorkingRoot $wslWorkingRoot
@@ -258,6 +283,8 @@ serial_log="$6"
 pid_file="$7"
 host_ssh_port="$8"
 data_disk_size_gb="$9"
+host_http_port="${10}"
+host_https_port="${11}"
 
 require_command() {
   command -v "$1" >/dev/null 2>&1
@@ -349,7 +376,7 @@ qemu-system-x86_64 \
     -device qemu-xhci,id=xhci \
     -device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=1 \
         -device virtio-blk-pci,drive=datadisk,serial=buddybackup_data \
-  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${host_ssh_port}-:22 \
+    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${host_ssh_port}-:22,hostfwd=tcp:127.0.0.1:${host_http_port}-:80,hostfwd=tcp:127.0.0.1:${host_https_port}-:443 \
   -device e1000,netdev=net0 \
   -serial file:"$serial_log" \
   -monitor unix:"$monitor_socket",server,nowait \
@@ -374,7 +401,9 @@ $buildResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $buildScript -A
     $serialLogPath,
     $pidFilePath,
     [string]$selectedHostSshPort,
-    [string]$DataDiskSizeGB
+    [string]$DataDiskSizeGB,
+    [string]$selectedHostHttpPort,
+    [string]$selectedHostHttpsPort
 )
 
 if ($buildResult.ExitCode -ne 0) {
@@ -443,6 +472,8 @@ try {
     Write-Host "[testlab] WSL monitor socket: $monitorSocketPath"
     Write-Host "[testlab] WSL serial log: $serialLogPath"
     Write-Host "[testlab] SSH ready on localhost:$selectedHostSshPort : $sshReady"
+    Write-Host "[testlab] WebGUI HTTP: http://127.0.0.1:$selectedHostHttpPort"
+    Write-Host "[testlab] WebGUI HTTPS: https://127.0.0.1:$selectedHostHttpsPort"
     if ($serialResult.Output.Count -gt 0) {
         Write-Host "[testlab] Serial tail:"
         $serialResult.Output | ForEach-Object { Write-Host $_ }

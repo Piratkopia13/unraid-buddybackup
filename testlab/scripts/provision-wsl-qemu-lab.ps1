@@ -126,6 +126,69 @@ function Invoke-NodeSshCommand {
     }
 }
 
+function Get-ManualAccessConfig {
+    param($Lab)
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $manualAccessCfg = Get-ObjectValue -Object $setupCfg -Name "manualAccess"
+    $rootPassword = [string](Get-ObjectValue -Object $manualAccessCfg -Name "rootPassword")
+    if ([string]::IsNullOrWhiteSpace($rootPassword)) {
+        $rootPassword = "buddybackup-testlab"
+    }
+
+    return [pscustomobject]@{
+        webGuiUser = "root"
+        webGuiPassword = $rootPassword
+    }
+}
+
+function Invoke-NodeManualAccessSetup {
+    param(
+        $Lab,
+        [string]$NodeName,
+        $NodeConnection,
+        [switch]$DoExecute
+    )
+
+    $manualAccess = Get-ManualAccessConfig -Lab $Lab
+    $passwordB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$manualAccess.webGuiPassword))
+    $manualAccessScript = @'
+password_b64="$1"
+
+set -euo pipefail
+
+if ! command -v chpasswd >/dev/null 2>&1; then
+  echo "chpasswd is unavailable on this guest" >&2
+  exit 1
+fi
+
+password="$(printf '%s' "$password_b64" | base64 -d)"
+printf 'root:%s\n' "$password" | chpasswd
+
+if [ -d /boot/config ] && [ -f /etc/shadow ]; then
+  cp /etc/shadow /boot/config/shadow 2>/dev/null || true
+fi
+
+sync || true
+
+echo "webgui_user=root"
+echo "webgui_password_configured=yes"
+'@
+    $manualAccessScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($manualAccessScript))
+    $manualAccessCommand = "printf '%s' '$manualAccessScriptB64' | base64 -d | bash -s -- '$passwordB64'"
+    $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -DoExecute:$DoExecute
+    if (-not $manualAccessResult.success) {
+        throw "WebGUI login setup failed on node '$NodeName'."
+    }
+
+    return [pscustomobject]@{
+        success = $true
+        webGuiUser = [string]$manualAccess.webGuiUser
+        webGuiPassword = [string]$manualAccess.webGuiPassword
+        actions = @($manualAccessResult)
+    }
+}
+
 function Invoke-NodeBaseSetup {
     param(
         $Lab,
@@ -375,11 +438,13 @@ $startedInstances = @()
 
 try {
     foreach ($entry in @(
-        @{ NodeName = "sender"; DefaultPort = 2222 },
-        @{ NodeName = "receiver"; DefaultPort = 2223 }
+        @{ NodeName = "sender"; DefaultPort = 2222; DefaultHttpPort = 8080; DefaultHttpsPort = 8443 },
+        @{ NodeName = "receiver"; DefaultPort = 2223; DefaultHttpPort = 8081; DefaultHttpsPort = 8444 }
     )) {
         $nodeName = [string]$entry["NodeName"]
         $defaultPort = [int]$entry["DefaultPort"]
+        $defaultHttpPort = [int]$entry["DefaultHttpPort"]
+        $defaultHttpsPort = [int]$entry["DefaultHttpsPort"]
         $node = Get-ObjectValue -Object $lab.nodes -Name $nodeName
         if (-not $node) {
             continue
@@ -397,6 +462,10 @@ try {
 
         $desiredPortValue = Get-ObjectValue -Object $node -Name "port"
         $desiredPort = if ($desiredPortValue) { [int]$desiredPortValue } else { $defaultPort }
+        $desiredHttpPortValue = Get-ObjectValue -Object $node -Name "webGuiHttpPort"
+        $desiredHttpPort = if ($desiredHttpPortValue) { [int]$desiredHttpPortValue } else { $defaultHttpPort }
+        $desiredHttpsPortValue = Get-ObjectValue -Object $node -Name "webGuiHttpsPort"
+        $desiredHttpsPort = if ($desiredHttpsPortValue) { [int]$desiredHttpsPortValue } else { $defaultHttpsPort }
         $instanceNameValue = Get-ObjectValue -Object $node -Name "instanceName"
         $instanceName = if ($instanceNameValue) { [string]$instanceNameValue } else { "lab-$nodeName" }
         if ($instanceName -notmatch '^[A-Za-z0-9._-]+$') {
@@ -449,10 +518,15 @@ try {
             statusPath          = $statusPath
             sshReady            = $false
             selectedHostSshPort = $null
+            selectedHostHttpPort = $desiredHttpPort
+            selectedHostHttpsPort = $desiredHttpsPort
+            webGuiHttpUrl       = "http://127.0.0.1:$desiredHttpPort"
+            webGuiHttpsUrl      = "https://127.0.0.1:$desiredHttpsPort"
             monitorSocketPath   = "/tmp/buddybackup-qemu-$instanceName/qemu-monitor.sock"
             serialLogPath       = "/tmp/buddybackup-qemu-$instanceName/unraid-serial.log"
             wslWorkingRoot      = "/tmp/buddybackup-qemu-$instanceName"
             dataDiskSizeGB      = $dataDiskSizeGB
+            manualAccess        = $null
             baseSetupApplied    = $false
             baseSetup           = $null
         }
@@ -460,7 +534,7 @@ try {
         if ($Execute) {
             Stop-WslLabInstance -Distro $distro -InstanceName $instanceName -DoExecute
 
-            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
+            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -HostHttpPort $desiredHttpPort -HostHttpsPort $desiredHttpsPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
 
             if (-not (Test-Path -LiteralPath $statusPath)) {
                 throw "Probe status file was not written for node '$nodeName': $statusPath"
@@ -469,6 +543,10 @@ try {
             $nodeStatus = Get-Json -Path $statusPath
             $nodeEntry.sshReady = [bool]$nodeStatus.sshReady
             $nodeEntry.selectedHostSshPort = [int]$nodeStatus.selectedHostSshPort
+            $nodeEntry.selectedHostHttpPort = [int]$nodeStatus.selectedHostHttpPort
+            $nodeEntry.selectedHostHttpsPort = [int]$nodeStatus.selectedHostHttpsPort
+            $nodeEntry.webGuiHttpUrl = [string]$nodeStatus.webGuiHttpUrl
+            $nodeEntry.webGuiHttpsUrl = [string]$nodeStatus.webGuiHttpsUrl
             $nodeEntry.monitorSocketPath = [string]$nodeStatus.monitorSocketPath
             $nodeEntry.serialLogPath = [string]$nodeStatus.serialLogPath
             $nodeEntry.wslWorkingRoot = [string]$nodeStatus.wslWorkingRoot
@@ -484,6 +562,9 @@ try {
                 throw "Configured host SSH port $desiredPort for node '$nodeName' is busy; the probe fell back to $($nodeStatus.selectedHostSshPort). Update the lab config or free the configured port."
             }
 
+            $manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute
+            $nodeEntry.manualAccess = $manualAccess
+
             if ($applyBaseSetup) {
                 $baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute
                 $nodeEntry.baseSetupApplied = $true
@@ -492,10 +573,14 @@ try {
 
             $startedInstances += $instanceName
             Write-Host "[testlab] Local node $nodeName ready on 127.0.0.1:$desiredPort"
+            Write-Host "[testlab] $nodeName WebGUI HTTP: $($nodeEntry.webGuiHttpUrl)"
+            Write-Host "[testlab] $nodeName WebGUI HTTPS: $($nodeEntry.webGuiHttpsUrl)"
+            Write-Host "[testlab] $nodeName WebGUI login: $($manualAccess.webGuiUser) / $($manualAccess.webGuiPassword)"
         } else {
             Write-Host "[dry-run] Would start local node $nodeName on 127.0.0.1:$desiredPort from payload $payloadPath"
             $nodeEntry.sshReady = $true
             $nodeEntry.selectedHostSshPort = $desiredPort
+            $nodeEntry.manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute:$false
             if ($applyBaseSetup) {
                 $nodeEntry.baseSetupApplied = $true
                 $nodeEntry.baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute:$false
