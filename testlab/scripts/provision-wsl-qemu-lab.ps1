@@ -72,6 +72,31 @@ function Test-OutputHasWarningsOrErrors {
     return ($joined -match '(?im)\b(error|warning)\b')
 }
 
+function Get-LocalSshIdentityFile {
+    param([string]$IdentityFile)
+
+    if ([string]::IsNullOrWhiteSpace($IdentityFile)) {
+        return $IdentityFile
+    }
+
+    $resolvedPath = Resolve-TestLabPath $IdentityFile
+    if (-not (Test-Path -LiteralPath $resolvedPath)) {
+        throw "SSH identity file not found: $resolvedPath"
+    }
+
+    $cacheRoot = Join-Path $env:LOCALAPPDATA "BuddyBackup\ssh-cache"
+    Ensure-Dir $cacheRoot
+
+    $pathHashBytes = [System.Text.Encoding]::UTF8.GetBytes($resolvedPath)
+    $pathHash = [System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::Create().ComputeHash($pathHashBytes))).Replace("-", "").ToLowerInvariant()
+    $fileName = "{0}-{1}" -f ([System.IO.Path]::GetFileName($resolvedPath)), $pathHash.Substring(0, 12)
+    $cachedPath = Join-Path $cacheRoot $fileName
+
+    Copy-Item -LiteralPath $resolvedPath -Destination $cachedPath -Force
+
+    return $cachedPath
+}
+
 function Invoke-NodeSshCommand {
     param(
         $NodeConnection,
@@ -81,8 +106,11 @@ function Invoke-NodeSshCommand {
     )
 
     $sshArgs = @(
+        "-F", "NUL",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=8",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "LogLevel=ERROR",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=NUL",
         "-o", "GlobalKnownHostsFile=NUL",
@@ -90,7 +118,7 @@ function Invoke-NodeSshCommand {
     )
 
     if ($NodeConnection.IdentityFile) {
-        $identityPath = Resolve-TestLabPath ([string]$NodeConnection.IdentityFile)
+        $identityPath = Get-LocalSshIdentityFile -IdentityFile ([string]$NodeConnection.IdentityFile)
         $sshArgs += @("-i", $identityPath)
     }
 
@@ -152,7 +180,7 @@ function Invoke-NodeManualAccessSetup {
 
     $manualAccess = Get-ManualAccessConfig -Lab $Lab
     $passwordB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$manualAccess.webGuiPassword))
-        $manualAccessCommand = @'
+        $manualAccessCommand = ((@'
 set -euo pipefail
 
 if ! command -v chpasswd >/dev/null 2>&1; then
@@ -171,7 +199,7 @@ sync || true
 
 echo "webgui_user=root"
 echo "webgui_password_configured=yes"
-'@ -f $passwordB64
+'@ -f $passwordB64) -replace "`r`n", "`n").Trim()
     $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -DoExecute:$DoExecute
     if (-not $manualAccessResult.success) {
                 $manualAccessOutput = (($manualAccessResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
@@ -260,10 +288,34 @@ function Invoke-NodeBaseSetup {
         throw "BuddyBackup plugin install output on node '$NodeName' contained warning/error text."
     }
 
-    $pluginVerifyResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command "plugin list | grep -i buddybackup" -Label "buddybackup-plugin-verify" -DoExecute:$DoExecute
+    $pluginVerifyCommand = ((@'
+set -eu
+
+if plugin list | grep -i buddybackup >/dev/null 2>&1; then
+  plugin list | grep -i buddybackup
+  exit 0
+fi
+
+if [ -f /boot/config/plugins/buddybackup/buddybackup.txz ] && [ -f /boot/config/plugins/buddybackup/buddybackup.cfg ] && [ -f /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php ]; then
+  echo "buddybackup verified via installed plugin files"
+  exit 0
+fi
+
+echo "buddybackup missing from plugin list and expected plugin files were not found" >&2
+plugin list || true
+ls -la /boot/config/plugins/buddybackup 2>/dev/null || true
+ls -la /usr/local/emhttp/plugins/buddybackup/scripts 2>/dev/null || true
+exit 1
+'@) -replace "`r`n", "`n").Trim()
+    $pluginVerifyResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $pluginVerifyCommand -Label "buddybackup-plugin-verify" -DoExecute:$DoExecute
     $results += $pluginVerifyResult
     if (-not $pluginVerifyResult.success) {
-        throw "BuddyBackup plugin did not appear in plugin list on node '$NodeName'."
+        $pluginVerifyOutput = (($pluginVerifyResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+        if ([string]::IsNullOrWhiteSpace($pluginVerifyOutput)) {
+            throw "BuddyBackup plugin verification failed on node '$NodeName'."
+        }
+
+        throw "BuddyBackup plugin verification failed on node '$NodeName': $pluginVerifyOutput"
     }
 
     $passphraseB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($encryptionPassphrase))
@@ -281,7 +333,21 @@ if ! command -v zpool >/dev/null 2>&1 || ! command -v zfs >/dev/null 2>&1; then
   exit 1
 fi
 
+if command -v modprobe >/dev/null 2>&1; then
+    modprobe zfs >/dev/null 2>&1 || true
+fi
+
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle >/dev/null 2>&1 || true
+fi
+
 disk_by_id="/dev/disk/by-id/virtio-buddybackup_data"
+attempts=15
+while [ ! -b "$disk_by_id" ] && [ "$attempts" -gt 0 ]; do
+    sleep 2
+    attempts=$((attempts - 1))
+done
+
 if [ ! -b "$disk_by_id" ]; then
   echo "Expected data disk not found: $disk_by_id" >&2
   ls -la /dev/disk/by-id >&2 || true
@@ -319,12 +385,18 @@ echo "plain_dataset=$plain_dataset"
 echo "encrypted_dataset=$encrypted_dataset"
 echo "encrypted_dataset_encryption=$encryption_value"
 '@
-    $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScript))
+    $zfsScriptNormalized = ($zfsScript -replace "`r`n", "`n").Trim()
+    $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScriptNormalized))
     $zfsCommand = "printf '%s' '$zfsScriptB64' | base64 -d | bash -s -- '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
     $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -DoExecute:$DoExecute
     $results += $zfsSetupResult
     if (-not $zfsSetupResult.success) {
-        throw "ZFS base setup failed on node '$NodeName'."
+        $zfsSetupOutput = (($zfsSetupResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+        if ([string]::IsNullOrWhiteSpace($zfsSetupOutput)) {
+            throw "ZFS base setup failed on node '$NodeName'."
+        }
+
+        throw "ZFS base setup failed on node '$NodeName': $zfsSetupOutput"
     }
 
     return [pscustomobject]@{
