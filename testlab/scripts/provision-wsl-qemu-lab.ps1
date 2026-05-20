@@ -152,33 +152,34 @@ function Invoke-NodeManualAccessSetup {
 
     $manualAccess = Get-ManualAccessConfig -Lab $Lab
     $passwordB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$manualAccess.webGuiPassword))
-    $manualAccessScript = @'
-password_b64="$1"
-
+        $manualAccessCommand = @'
 set -euo pipefail
 
 if ! command -v chpasswd >/dev/null 2>&1; then
-  echo "chpasswd is unavailable on this guest" >&2
-  exit 1
+    echo "chpasswd is unavailable on this guest" >&2
+    exit 1
 fi
 
-password="$(printf '%s' "$password_b64" | base64 -d)"
+password="$(printf '%s' '{0}' | base64 -d)"
 printf 'root:%s\n' "$password" | chpasswd
 
 if [ -d /boot/config ] && [ -f /etc/shadow ]; then
-  cp /etc/shadow /boot/config/shadow 2>/dev/null || true
+    cp /etc/shadow /boot/config/shadow 2>/dev/null || true
 fi
 
 sync || true
 
 echo "webgui_user=root"
 echo "webgui_password_configured=yes"
-'@
-    $manualAccessScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($manualAccessScript))
-    $manualAccessCommand = "printf '%s' '$manualAccessScriptB64' | base64 -d | bash -s -- '$passwordB64'"
+'@ -f $passwordB64
     $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -DoExecute:$DoExecute
     if (-not $manualAccessResult.success) {
-        throw "WebGUI login setup failed on node '$NodeName'."
+                $manualAccessOutput = (($manualAccessResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+                if ([string]::IsNullOrWhiteSpace($manualAccessOutput)) {
+                        throw "WebGUI login setup failed on node '$NodeName' with exit code $($manualAccessResult.exitCode)."
+                }
+
+                throw "WebGUI login setup failed on node '$NodeName' with exit code $($manualAccessResult.exitCode): $manualAccessOutput"
     }
 
     return [pscustomobject]@{
@@ -562,6 +563,7 @@ try {
                 throw "Configured host SSH port $desiredPort for node '$nodeName' is busy; the probe fell back to $($nodeStatus.selectedHostSshPort). Update the lab config or free the configured port."
             }
 
+            $startedInstances += $instanceName
             $manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute
             $nodeEntry.manualAccess = $manualAccess
 
@@ -571,7 +573,6 @@ try {
                 $nodeEntry.baseSetup = $baseSetup
             }
 
-            $startedInstances += $instanceName
             Write-Host "[testlab] Local node $nodeName ready on 127.0.0.1:$desiredPort"
             Write-Host "[testlab] $nodeName WebGUI HTTP: $($nodeEntry.webGuiHttpUrl)"
             Write-Host "[testlab] $nodeName WebGUI HTTPS: $($nodeEntry.webGuiHttpsUrl)"
