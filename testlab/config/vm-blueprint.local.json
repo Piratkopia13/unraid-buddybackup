@@ -1,0 +1,40 @@
+{
+  "provider": "windows-local",
+  "backend": "auto",
+  "hyperv": {
+    "switchName": "BuddyBackup-TestLab",
+    "vhdRoot": "C:\\VMs\\BuddyBackup",
+    "gatewayIP": "10.88.0.1",
+    "subnetPrefix": "10.88.0.0/24",
+    "natName": "BuddyBackupTestLabNAT",
+    "vmGeneration": 2,
+    "bootPartitionStyle": "gpt-efi",
+    "bootDiskFormat": "VHDX",
+    "bootDiskType": "fixed",
+    "dataDiskFormat": "VHDX",
+    "dataDiskType": "dynamic",
+    "sshTimeoutSeconds": 60
+  },
+  "vm": {
+    "cpu": 2,
+    "memoryMB": 4096,
+    "bootDiskGB": 2,
+    "dataDiskGB": 20
+  },
+  "sender": {
+    "name": "buddybackup-sender",
+    "ip": "10.88.0.101",
+    "unraidVersion": "7.2.6",
+    "unraidDownloadUrl": "https://releases.unraid.net/dl/stable/7.2.6/47e3458147ba122b3f0dbdb22f955fa1c25bea55b38ff749cfd7cb50b0ba3339/unRAIDServer-7.2.6-x86_64.zip",
+    "pluginVersion": "2026.05.02"
+  },
+  "receiver": {
+    "name": "buddybackup-receiver",
+    "ip": "10.88.0.102",
+    "unraidVersion": "7.2.6",
+    "unraidDownloadUrl": "https://releases.unraid.net/dl/stable/7.2.6/47e3458147ba122b3f0dbdb22f955fa1c25bea55b38ff749cfd7cb50b0ba3339/unRAIDServer-7.2.6-x86_64.zip",
+    "pluginVersion": "2026.05.02"
+  },
+  "sshPublicKeyPath": ".testlab/lab_key.pub",
+  "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip"
+}
