@@ -4,6 +4,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "testlab-logging.ps1")
+
 function Assert-Command {
     param([string]$Name)
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -41,23 +43,23 @@ $labKeyPubPath = "${labKeyPath}.pub"
 if (-not (Test-Path $labKeyPath)) {
     Write-Host "[testlab] Generating lab SSH keypair at $labKeyPath..."
     Assert-Command "ssh-keygen"
-    # On Windows, ssh-keygen needs the empty passphrase piped via stdin; -N """" is unreliable
-    $tmpIn = [System.IO.Path]::GetTempFileName()
-    "" | Set-Content -Path $tmpIn -Encoding ASCII
-            $tmpKey = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName())
-        & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $tmpKey -q -N """"
-        if ($LASTEXITCODE -eq 0) {
-            Move-Item $tmpKey $labKeyPath -Force
-            Move-Item "${tmpKey}.pub" $labKeyPubPath -Force
-        }
-    Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[testlab] WARNING: ssh-keygen failed. Generate a key manually:"
-        Write-Host "  ssh-keygen -t ed25519 -C buddybackup-testlab -f $labKeyPath"
-    } else {
+    # ssh-keygen cannot write directly to UNC paths on Windows; generate to a local temp dir
+    # and then copy the two files to the UNC destination.
+    $tmpDir = Join-Path $env:TEMP "buddybackup-testlab-key-$(New-Guid)"
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    $tmpKey = Join-Path $tmpDir "lab_key"
+    & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $tmpKey -N ""
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpKey)) {
+        Copy-Item -Path $tmpKey          -Destination $labKeyPath    -Force
+        Copy-Item -Path "${tmpKey}.pub"  -Destination $labKeyPubPath -Force
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "[testlab] Lab keypair ready:"
         Write-Host "  Private: $labKeyPath"
         Write-Host "  Public : $labKeyPubPath"
+    } else {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "[testlab] WARNING: ssh-keygen failed. Generate a key manually:"
+        Write-Host "  ssh-keygen -t ed25519 -C buddybackup-testlab -f `"$labKeyPath`""
     }
 } else {
     Write-Host "[testlab] Lab keypair already exists: $labKeyPath"

@@ -360,6 +360,23 @@ fi
 
 zpool set autoexpand=on "$pool_name" >/dev/null 2>&1 || true
 
+if [ -f /boot/config/go ] && ! grep -Fq "BuddyBackup testlab: import standalone zpool on every boot" /boot/config/go; then
+    cat >> /boot/config/go <<EOF
+
+# BuddyBackup testlab: import standalone zpool on every boot
+if command -v modprobe >/dev/null 2>&1; then
+    modprobe zfs >/dev/null 2>&1 || true
+fi
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle >/dev/null 2>&1 || true
+fi
+if ! zpool list -H -o name "$pool_name" >/dev/null 2>&1; then
+    zpool import -N -d /dev/disk/by-id "$pool_name" >/dev/null 2>&1 || true
+fi
+zfs mount "$plain_dataset" >/dev/null 2>&1 || true
+EOF
+fi
+
 if ! zfs list -H -o name "$dataset_root" >/dev/null 2>&1; then
   zfs create -o mountpoint=none "$dataset_root"
 fi
@@ -556,6 +573,8 @@ try {
 
         $nodeConnection = Resolve-NodeConnection -Lab $lab -Node $node
 
+        Write-Host "[testlab] Preparing local node $nodeName (Unraid $version, SSH localhost:$desiredPort)"
+
         $payloadPath = if ($nodePayloadPath) {
             Resolve-TestLabPath ([string]$nodePayloadPath)
         } elseif ($wslCfg -and $wslCfg.payloadPath) {
@@ -563,6 +582,8 @@ try {
         } else {
             Ensure-UnraidPayload -Version $version -CacheRoot $cacheRoot -UrlTemplate $downloadUrlTemplate -DoExecute:$Execute
         }
+
+        Write-Host ("[testlab] Payload for {0}: {1}" -f $nodeName, $payloadPath)
 
         if ($Execute) {
             if (-not (Test-Path -LiteralPath $privateKeyPath)) {
@@ -605,8 +626,10 @@ try {
         }
 
         if ($Execute) {
+            Write-Host "[testlab] Resetting local instance '$instanceName' for $nodeName"
             Stop-WslLabInstance -Distro $distro -InstanceName $instanceName -DoExecute
 
+            Write-Host "[testlab] Starting WSL/QEMU probe for $nodeName (boot wait ${bootWaitSeconds}s)"
             & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -HostHttpPort $desiredHttpPort -HostHttpsPort $desiredHttpsPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
 
             if (-not (Test-Path -LiteralPath $statusPath)) {
@@ -636,10 +659,12 @@ try {
             }
 
             $startedInstances += $instanceName
+            Write-Host "[testlab] Configuring manual WebGUI access on $nodeName"
             $manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute
             $nodeEntry.manualAccess = $manualAccess
 
             if ($applyBaseSetup) {
+                Write-Host "[testlab] Applying BuddyBackup and ZFS base setup on $nodeName"
                 $baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute
                 $nodeEntry.baseSetupApplied = $true
                 $nodeEntry.baseSetup = $baseSetup

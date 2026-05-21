@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "testlab-logging.ps1")
+
 function Resolve-TestLabPath {
     param([string]$Path)
 

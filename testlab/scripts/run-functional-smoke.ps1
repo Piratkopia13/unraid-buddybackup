@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "testlab-logging.ps1")
+
 function Get-Json {
     param([string]$Path)
     return Get-Content -Raw -Path $Path | ConvertFrom-Json
@@ -643,11 +645,14 @@ $report = [ordered]@{
 }
 
 try {
+    Write-Host "[testlab] Functional smoke starting: sender localhost:$($senderConnection.Port), receiver localhost:$($receiverConnection.Port)"
+    Write-Host "[testlab] Functional smoke: reading BuddyBackup public keys"
     $senderPublicKey = Get-NodeBuddyBackupPublicKey -NodeConnection $senderConnection -DoExecute:$Execute
     $receiverPublicKey = Get-NodeBuddyBackupPublicKey -NodeConnection $receiverConnection -DoExecute:$Execute
 
     $setupScript = New-FunctionalSetupScript
 
+    Write-Host "[testlab] Functional smoke: applying environment setup on sender and receiver"
     $senderSetup = Invoke-NodeBashScript -NodeConnection $senderConnection -ScriptContent $setupScript -Arguments @(
         "sender",
         $senderPlan.sourceDataset,
@@ -692,6 +697,7 @@ try {
     Add-ReportAction -Report $report -Result $receiverSetup
     Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "Functional setup failed on receiver."
 
+    Write-Host "[testlab] Functional smoke: validating BuddyBackup connectivity"
     foreach ($pair in @(
         @{ Connection = $senderConnection; Plan = $senderPlan; Label = "sender-test-connection" },
         @{ Connection = $receiverConnection; Plan = $receiverPlan; Label = "receiver-test-connection" }
@@ -704,6 +710,7 @@ try {
         }
     }
 
+    Write-Host "[testlab] Functional smoke: creating source snapshots"
     foreach ($snapshot in @(
         @{ Connection = $senderConnection; Snapshot = $senderPlan.sourceSnapshot; Label = "sender-create-source-snapshot" },
         @{ Connection = $receiverConnection; Snapshot = $receiverPlan.sourceSnapshot; Label = "receiver-create-source-snapshot" }
@@ -713,6 +720,7 @@ try {
         Assert-CommandSucceeded -Result $snapshotResult -FailureMessage "Failed to create source snapshot '$($snapshot.Snapshot)' on node '$($snapshot.Connection.NodeName)'."
     }
 
+    Write-Host "[testlab] Functional smoke: sending remote and local backups"
     foreach ($pair in @(
         @{ Connection = $senderConnection; Type = "remote"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Uid = $senderPlan.remoteBackupUid; Label = "sender-remote-send"; Action = "send_backup" },
         @{ Connection = $senderConnection; Type = "local"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Uid = $senderPlan.localBackupUid; Label = "sender-local-send"; Action = "send_local_backup" },
@@ -732,6 +740,7 @@ try {
         }
     }
 
+    Write-Host "[testlab] Functional smoke: verifying backup datasets"
     foreach ($check in @(
         @{ Connection = $senderConnection; Dataset = $senderPlan.localBackupDataset; Label = "sender-local-backup-dataset-check" },
         @{ Connection = $senderConnection; Dataset = $senderPlan.inboundRemoteDataset; Label = "sender-remote-backup-dataset-check" },
@@ -744,6 +753,7 @@ try {
     }
 
     $snapshotSelections = @{}
+    Write-Host "[testlab] Functional smoke: listing available snapshots"
     foreach ($query in @(
         @{ Connection = $senderConnection; Uid = $senderPlan.remoteBackupUid; Type = "remote"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Key = "sender-remote-snapshots" },
         @{ Connection = $senderConnection; Uid = $senderPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Key = "sender-local-snapshots" },
@@ -759,6 +769,7 @@ try {
         }
     }
 
+    Write-Host "[testlab] Functional smoke: restoring selected snapshots"
     foreach ($restore in @(
         @{ Connection = $senderConnection; Type = "remote"; DestinationHost = $senderPlan.remoteHost; Selection = $snapshotSelections["sender-remote-snapshots"]; Destination = $senderPlan.remoteRestoreDataset; Label = "sender-remote-restore" },
         @{ Connection = $senderConnection; Type = "local"; DestinationHost = ""; Selection = $snapshotSelections["sender-local-snapshots"]; Destination = $senderPlan.localRestoreDataset; Label = "sender-local-restore" },
@@ -775,6 +786,7 @@ try {
         Assert-CommandSucceeded -Result $restoreResult -FailureMessage "Restore failed for label '$($restore.Label)' on node '$($restore.Connection.NodeName)'."
     }
 
+    Write-Host "[testlab] Functional smoke: verifying restored datasets"
     foreach ($check in @(
         @{ Connection = $senderConnection; Dataset = $senderPlan.localRestoreDataset; Label = "sender-local-restore-dataset-check" },
         @{ Connection = $senderConnection; Dataset = $senderPlan.remoteRestoreDataset; Label = "sender-remote-restore-dataset-check" },
@@ -787,6 +799,7 @@ try {
     }
 
     $report.success = $true
+    Write-Host "[testlab] Functional smoke completed successfully"
 } catch {
     $report.error = ($_ | Out-String).Trim()
     throw

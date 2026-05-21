@@ -220,11 +220,13 @@ $payloadCachePath = Join-Path $windowsWorkingRoot "payload"
 $keyCachePath = Join-Path $windowsWorkingRoot "lab_key.pub"
 $privateKeyCachePath = Join-Path $windowsWorkingRoot "lab_key"
 New-Item -ItemType Directory -Path $windowsWorkingRoot -Force | Out-Null
+Write-Host "[testlab] Refreshing local WSL payload cache from $payloadSourcePath"
 if (Test-Path $payloadCachePath) {
     Remove-Item -Path $payloadCachePath -Recurse -Force
 }
 New-Item -ItemType Directory -Path $payloadCachePath -Force | Out-Null
 Copy-Item -Path (Join-Path $payloadSourcePath "*") -Destination $payloadCachePath -Recurse -Force
+Write-Host "[testlab] Payload cache ready at $payloadCachePath"
 
 $cachedPublicKeyPath = ""
 if ($publicKeySourcePath) {
@@ -286,15 +288,47 @@ data_disk_size_gb="$9"
 host_http_port="${10}"
 host_https_port="${11}"
 
+log_step() {
+    echo "$1"
+}
+
+run_quietly_allowing_geometry_warning() {
+    local geometry_message stderr_file stderr_text filtered_text
+
+    geometry_message="Could not get geometry of device (Inappropriate ioctl for device)"
+    stderr_file="$(mktemp)"
+
+    if "$@" >/dev/null 2>"$stderr_file"; then
+        stderr_text="$(cat "$stderr_file")"
+        filtered_text="$(printf '%s' "$stderr_text" | tr -d '\r\n')"
+        while [ "${filtered_text#"$geometry_message"}" != "$filtered_text" ]; do
+            filtered_text="${filtered_text#"$geometry_message"}"
+        done
+
+        if [ -n "${filtered_text//[[:space:]]/}" ]; then
+            printf '%s' "$stderr_text" >&2
+        fi
+
+        rm -f "$stderr_file"
+        return 0
+    fi
+
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 1
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
 if ! require_command qemu-system-x86_64 || ! require_command losetup || ! require_command parted || ! require_command mkfs.vfat || ! require_command socat || ! require_command pnmtopng; then
+    log_step "Installing required WSL/QEMU packages"
   apt-get update >/dev/null
   apt-get install -y qemu-system-x86 qemu-utils dosfstools parted netpbm socat >/dev/null
 fi
 
+log_step "Preparing WSL work root $work_root"
 rm -rf "$work_root"
 mkdir -p "$work_root/mnt"
 
@@ -302,8 +336,10 @@ image_path="$work_root/unraid-boot.img"
 data_image_path="$work_root/buddybackup-data.img"
 mount_dir="$work_root/mnt"
 
+log_step "Creating boot image (${image_size_mb} MB) and data disk (${data_disk_size_gb} GB)"
 truncate -s "${image_size_mb}M" "$image_path"
 truncate -s "${data_disk_size_gb}G" "$data_image_path"
+log_step "Partitioning and formatting the Unraid boot image"
 parted -s "$image_path" mklabel msdos
 parted -s "$image_path" mkpart primary fat32 1MiB 100%
 parted -s "$image_path" set 1 boot on
@@ -321,8 +357,10 @@ trap cleanup_loop EXIT
 
 mkfs.vfat -F 32 -n UNRAID "${loop_device}p1" >/dev/null
 mount "${loop_device}p1" "$mount_dir"
+log_step "Copying extracted Unraid payload into the boot image"
 cp -r "$payload_root"/. "$mount_dir"/
 
+log_step "Configuring persisted SSH access and boot parameters"
 mkdir -p "$mount_dir/config"
 ident_cfg="$mount_dir/config/ident.cfg"
 if [ -f "$ident_cfg" ]; then
@@ -337,19 +375,24 @@ fi
 if [ -n "$public_key_path" ] && [ -f "$public_key_path" ]; then
   mkdir -p "$mount_dir/config/ssh"
   cp "$public_key_path" "$mount_dir/config/ssh/authorized_keys"
-  cat >> "$mount_dir/config/go" <<'EOF'
+fi
 
-# BuddyBackup testlab: ensure SSH key is loaded on every boot
+cat >> "$mount_dir/config/go" <<'EOF'
+
+# BuddyBackup testlab: restore persisted SSH key and root password on every boot
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 cp /boot/config/ssh/authorized_keys /root/.ssh/authorized_keys 2>/dev/null || true
 chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
+if [ -f /boot/config/shadow ] && [ -f /etc/shadow ]; then
+    cp /boot/config/shadow /etc/shadow 2>/dev/null || true
+    chmod 600 /etc/shadow 2>/dev/null || true
+fi
 if [ -x /etc/rc.d/rc.sshd ]; then
     chmod +x /etc/rc.d/rc.sshd 2>/dev/null || true
     /etc/rc.d/rc.sshd start 2>/dev/null || true
 fi
 EOF
-fi
 
 if [ -f "$mount_dir/syslinux/syslinux.cfg" ]; then
     sed -Ei 's#^([[:space:]]*append[[:space:]]+initrd=[^[:cntrl:]]*)$#\1 unraidlabel=UNRAID console=tty0 console=ttyS0,115200n8 earlyprintk=serial,ttyS0,115200 earlycon=uart,io,0x3f8,115200n8 loglevel=7#' "$mount_dir/syslinux/syslinux.cfg"
@@ -358,15 +401,17 @@ fi
 sync
 umount "$mount_dir"
 
+log_step "Installing syslinux bootloader"
 chmod +x "$payload_root/syslinux/syslinux_linux"
-"$payload_root/syslinux/syslinux_linux" -f --install "${loop_device}p1" >/dev/null
+run_quietly_allowing_geometry_warning "$payload_root/syslinux/syslinux_linux" -f --install "${loop_device}p1"
 dd if="$payload_root/syslinux/mbr.bin" of="$loop_device" conv=notrunc status=none
-fsck.fat -a "${loop_device}p1" >/dev/null || true
+run_quietly_allowing_geometry_warning fsck.fat -a "${loop_device}p1" || true
 sync
 losetup -d "$loop_device"
 loop_device=""
 trap - EXIT
 
+log_step "Launching QEMU with localhost SSH forwarded to ${host_ssh_port}"
 qemu-system-x86_64 \
   -m 4096 \
   -smp 2 \
@@ -385,6 +430,7 @@ qemu-system-x86_64 \
   -pidfile "$pid_file" \
   -daemonize
 
+log_step "QEMU started"
 echo "image_path=$image_path"
 echo "monitor_socket=$monitor_socket"
 echo "serial_log=$serial_log"
@@ -404,7 +450,7 @@ $buildResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $buildScript -A
     [string]$DataDiskSizeGB,
     [string]$selectedHostHttpPort,
     [string]$selectedHostHttpsPort
-)
+) -StreamOutput -StreamLabel "wsl-build-$InstanceName"
 
 if ($buildResult.ExitCode -ne 0) {
     $probeStatus.error = (("WSL/QEMU probe setup failed with exit code {0}`n{1}" -f $buildResult.ExitCode, (($buildResult.Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)).Trim())
@@ -435,6 +481,34 @@ chmod 600 "$private_key_path"
 ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$private_key_path" -p "$host_ssh_port" root@127.0.0.1 "echo ready"
 '@
 
+function Test-WslSshReady {
+    param(
+        [string]$Distro,
+        [string]$ProbeScript,
+        [string]$PrivateKeyPath,
+        [int]$HostSshPort
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PrivateKeyPath)) {
+        return [pscustomobject]@{
+            Success = $false
+            ExitCode = $null
+            Output = @()
+        }
+    }
+
+    $probeResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $ProbeScript -Arguments @(
+        $PrivateKeyPath,
+        [string]$HostSshPort
+    )
+
+    return [pscustomobject]@{
+        Success = ($probeResult.ExitCode -eq 0)
+        ExitCode = $probeResult.ExitCode
+        Output = @($probeResult.Output | ForEach-Object { [string]$_ })
+    }
+}
+
 $serialResult = $null
 $sshReady = $false
 $sshExitCode = $null
@@ -442,10 +516,41 @@ $sshOutput = @()
 $startedQemu = $true
 
 try {
-    Start-Sleep -Seconds $BootWaitSeconds
+    Write-Host "[testlab] Waiting up to $BootWaitSeconds seconds for '$InstanceName' to boot"
+    $bootWaitStarted = Get-Date
+    $bootHeartbeatAt = $bootWaitStarted
+    $earlyBootDetected = $false
+    while ((New-TimeSpan -Start $bootWaitStarted -End (Get-Date)).TotalSeconds -lt $BootWaitSeconds) {
+        $remainingSeconds = [int][Math]::Ceiling($BootWaitSeconds - (New-TimeSpan -Start $bootWaitStarted -End (Get-Date)).TotalSeconds)
+        if ($remainingSeconds -le 0) {
+            break
+        }
 
+        Start-Sleep -Seconds ([Math]::Min(5, $remainingSeconds))
+
+        if ($wslPrivateKeyPath) {
+            $bootSshProbe = Test-WslSshReady -Distro $Distro -ProbeScript $sshProbeScript -PrivateKeyPath $wslPrivateKeyPath -HostSshPort $selectedHostSshPort
+            if ($bootSshProbe.Success) {
+                $sshReady = $true
+                $sshExitCode = $bootSshProbe.ExitCode
+                $sshOutput = @($bootSshProbe.Output)
+                $earlyBootDetected = $true
+                Write-Host "[testlab] '$InstanceName' reached early boot after $([int](New-TimeSpan -Start $bootWaitStarted -End (Get-Date)).TotalSeconds)s because SSH is already ready on localhost:$selectedHostSshPort"
+                break
+            }
+        }
+
+        $bootHeartbeatAt = Write-TestLabHeartbeat -Message "Still waiting for '$InstanceName' to reach early boot" -StartedAt $bootWaitStarted -LastHeartbeatAt $bootHeartbeatAt -IntervalSeconds 15 -TimeoutSeconds $BootWaitSeconds
+    }
+
+    if (-not $earlyBootDetected) {
+        Write-Host "[testlab] Boot wait elapsed for '$InstanceName'; continuing with screenshot and serial checks"
+    }
+
+    Write-Host "[testlab] Capturing QEMU console screenshot for '$InstanceName'"
     & (Join-Path $PSScriptRoot "capture-wsl-qemu-screen.ps1") -Distro $Distro -MonitorSocketPath $monitorSocketPath -OutputPath $resolvedOutputPath
 
+    Write-Host "[testlab] Reading QEMU serial log for '$InstanceName'"
     $serialResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $serialTailScript -Arguments @($serialLogPath)
     if ($serialResult.ExitCode -ne 0) {
         throw (("Failed to read QEMU serial log with exit code {0}`n{1}" -f $serialResult.ExitCode, (($serialResult.Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)).Trim())
@@ -453,13 +558,15 @@ try {
     $probeStatus.serialTail = @($serialResult.Output)
 
     if ($wslPrivateKeyPath) {
-        $sshResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $sshProbeScript -Arguments @(
-            $wslPrivateKeyPath,
-            [string]$selectedHostSshPort
-        )
-        $sshOutput = @($sshResult.Output | ForEach-Object { [string]$_ })
-        $sshExitCode = $sshResult.ExitCode
-        $sshReady = ($sshExitCode -eq 0)
+        if (-not $sshReady) {
+            Write-Host "[testlab] Probing SSH readiness on localhost:$selectedHostSshPort for '$InstanceName'"
+            $sshResult = Test-WslSshReady -Distro $Distro -ProbeScript $sshProbeScript -PrivateKeyPath $wslPrivateKeyPath -HostSshPort $selectedHostSshPort
+            $sshOutput = @($sshResult.Output)
+            $sshExitCode = $sshResult.ExitCode
+            $sshReady = $sshResult.Success
+        } else {
+            Write-Host "[testlab] Reusing early SSH readiness result for '$InstanceName'"
+        }
     }
     $probeStatus.sshReady = $sshReady
     $probeStatus.sshExitCode = $sshExitCode

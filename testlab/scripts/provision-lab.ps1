@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "testlab-logging.ps1")
+
 if (-not (Test-Path $LabConfig)) {
     throw "Missing lab config: $LabConfig"
 }

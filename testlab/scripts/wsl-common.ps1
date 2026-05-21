@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "testlab-logging.ps1")
+
 function Expand-LocalPath {
     param([string]$Path)
 
@@ -48,7 +50,9 @@ function Invoke-WslRootBash {
         [Parameter(Mandatory = $true)]
         [string]$ScriptContent,
         [string[]]$Arguments = @(),
-        [string]$Distro = "Ubuntu"
+        [string]$Distro = "Ubuntu",
+        [switch]$StreamOutput,
+        [string]$StreamLabel = "wsl"
     )
 
     $wslExe = (Get-Command wsl.exe -ErrorAction Stop).Source
@@ -82,7 +86,23 @@ function Invoke-WslRootBash {
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = "Continue"
-            $output = & $wslExe @argList 2>&1
+            if ($StreamOutput) {
+                $output = @(& $wslExe @argList 2>&1 | ForEach-Object {
+                    $chunk = [string]$_
+                    $lines = @($chunk -replace "`r", "" -split "`n")
+                    foreach ($rawLine in $lines) {
+                        $line = $rawLine.Trim()
+                        if ([string]::IsNullOrWhiteSpace($line)) {
+                            continue
+                        }
+
+                        Write-Host "[testlab][$StreamLabel] $line"
+                        $line
+                    }
+                })
+            } else {
+                $output = @(& $wslExe @argList 2>&1)
+            }
             $exitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
