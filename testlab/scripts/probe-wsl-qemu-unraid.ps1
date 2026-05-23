@@ -392,6 +392,25 @@ if [ -x /etc/rc.d/rc.sshd ]; then
     chmod +x /etc/rc.d/rc.sshd 2>/dev/null || true
     /etc/rc.d/rc.sshd start 2>/dev/null || true
 fi
+(
+    attempts=180
+    while [ "$attempts" -gt 0 ]; do
+        if [ -f /boot/config/shadow ] && [ -f /etc/shadow ]; then
+            runtime_hash="$(awk -F: '$1=="root" { print $2 }' /etc/shadow 2>/dev/null || true)"
+            persistent_hash="$(awk -F: '$1=="root" { print $2 }' /boot/config/shadow 2>/dev/null || true)"
+
+            if [ -n "$persistent_hash" ] && [ "$runtime_hash" = "$persistent_hash" ]; then
+                break
+            fi
+
+            cp /boot/config/shadow /etc/shadow 2>/dev/null || true
+            chmod 600 /etc/shadow 2>/dev/null || true
+        fi
+
+        sleep 2
+        attempts=$((attempts - 1))
+    done
+) >/dev/null 2>&1 &
 EOF
 
 if [ -f "$mount_dir/syslinux/syslinux.cfg" ]; then

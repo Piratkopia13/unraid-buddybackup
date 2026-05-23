@@ -100,7 +100,7 @@ function Write-Warning {
         $warningText = "warning"
     }
 
-    Microsoft.PowerShell.Utility\Write-Warning ("[{0}] {1}" -f (Get-TestLabTimestamp), $warningText)
+    Write-TestLabHostLine -Message ("WARNING: {0}" -f $warningText) -ForegroundColor Yellow
 }
 
 function Resolve-TestLabDateTime {

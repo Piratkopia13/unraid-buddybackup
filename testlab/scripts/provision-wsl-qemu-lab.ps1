@@ -97,6 +97,22 @@ function Get-LocalSshIdentityFile {
     return $cachedPath
 }
 
+function Convert-ToRemoteShellCommand {
+    param([string]$Command)
+
+    if ([string]::IsNullOrWhiteSpace($Command)) {
+        return $Command
+    }
+
+    if ($Command -notmatch "[`r`n]") {
+        return $Command
+    }
+
+    $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
+    $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
+    return "printf '%s' '$commandB64' | base64 -d | bash"
+}
+
 function Invoke-NodeSshCommand {
     param(
         $NodeConnection,
@@ -105,7 +121,7 @@ function Invoke-NodeSshCommand {
         [switch]$DoExecute
     )
 
-    $sshArgs = @(
+    $sshBaseArgs = @(
         "-F", "NUL",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=8",
@@ -119,13 +135,16 @@ function Invoke-NodeSshCommand {
 
     if ($NodeConnection.IdentityFile) {
         $identityPath = Get-LocalSshIdentityFile -IdentityFile ([string]$NodeConnection.IdentityFile)
-        $sshArgs += @("-i", $identityPath)
+        $sshBaseArgs += @("-i", $identityPath)
     }
 
-    $sshArgs += @("$($NodeConnection.User)@$($NodeConnection.Host)", $Command)
+    $sshTarget = "$($NodeConnection.User)@$($NodeConnection.Host)"
+    $remoteCommand = Convert-ToRemoteShellCommand -Command $Command
+    $sshArgs = @($sshBaseArgs + @($sshTarget, $remoteCommand))
 
     if (-not $DoExecute) {
-        Write-Host "[dry-run][setup][$Label] ssh $($sshArgs -join ' ')"
+        $previewArgs = @($sshBaseArgs + @($sshTarget, $Command))
+        Write-Host "[dry-run][setup][$Label] ssh $($previewArgs -join ' ')"
         return [pscustomobject]@{
             label = $Label
             success = $true
@@ -180,26 +199,108 @@ function Invoke-NodeManualAccessSetup {
 
     $manualAccess = Get-ManualAccessConfig -Lab $Lab
     $passwordB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$manualAccess.webGuiPassword))
-        $manualAccessCommand = ((@'
+    $manualAccessCommand = (((@'
 set -euo pipefail
+
+restore_script="/boot/config/plugins/buddybackup/manual-access-restore.sh"
+go_file="/boot/config/go"
+go_begin_marker="#BUDDYBACKUP_MANUAL_ACCESS_RESTORE_BEGIN"
+go_end_marker="#BUDDYBACKUP_MANUAL_ACCESS_RESTORE_END"
 
 if ! command -v chpasswd >/dev/null 2>&1; then
     echo "chpasswd is unavailable on this guest" >&2
     exit 1
 fi
 
-password="$(printf '%s' '{0}' | base64 -d)"
-printf 'root:%s\n' "$password" | chpasswd
+mkdir -p "$(dirname "$restore_script")"
 
-if [ -d /boot/config ] && [ -f /etc/shadow ]; then
-    cp /etc/shadow /boot/config/shadow 2>/dev/null || true
+cat > "$restore_script" <<'EOF_BUDDYBACKUP_MANUAL_ACCESS'
+#!/bin/bash
+set -euo pipefail
+
+password_b64="__BUDDYBACKUP_PASSWORD_B64__"
+use_php=0
+if command -v php >/dev/null 2>&1; then
+    use_php=1
 fi
+
+apply_password() {
+    password="$(printf '%s' "$password_b64" | base64 -d)"
+    printf 'root:%s\n' "$password" | chpasswd
+    if [ -f /etc/shadow ]; then
+        cp /etc/shadow /boot/config/shadow 2>/dev/null || true
+        chmod 600 /boot/config/shadow 2>/dev/null || true
+    fi
+    if [ -f /boot/config/shadow ]; then
+        cp /boot/config/shadow /etc/shadow 2>/dev/null || true
+        chmod 600 /etc/shadow 2>/dev/null || true
+    fi
+}
+
+attempts=180
+while [ "$attempts" -gt 0 ]; do
+    runtime_hash="$(awk -F: '$1=="root" { print $2 }' /etc/shadow 2>/dev/null || true)"
+    persistent_hash="$(awk -F: '$1=="root" { print $2 }' /boot/config/shadow 2>/dev/null || true)"
+
+    if [ "$use_php" -eq 1 ]; then
+        runtime_ok=1
+        persistent_ok=1
+
+        if [ -z "$runtime_hash" ] || ! BUDDYBACKUP_PASSWORD_B64="$password_b64" BUDDYBACKUP_HASH_TO_CHECK="$runtime_hash" php -r '$password=base64_decode(getenv("BUDDYBACKUP_PASSWORD_B64")); $hash=getenv("BUDDYBACKUP_HASH_TO_CHECK"); exit(($hash !== false && $hash !== "" && crypt($password, $hash) === $hash) ? 0 : 1);'; then
+            runtime_ok=0
+        fi
+
+        if [ -z "$persistent_hash" ] || ! BUDDYBACKUP_PASSWORD_B64="$password_b64" BUDDYBACKUP_HASH_TO_CHECK="$persistent_hash" php -r '$password=base64_decode(getenv("BUDDYBACKUP_PASSWORD_B64")); $hash=getenv("BUDDYBACKUP_HASH_TO_CHECK"); exit(($hash !== false && $hash !== "" && crypt($password, $hash) === $hash) ? 0 : 1);'; then
+            persistent_ok=0
+        fi
+
+        if [ "$runtime_ok" -eq 1 ] && [ "$persistent_ok" -eq 1 ]; then
+            exit 0
+        fi
+    else
+        if [ -n "$runtime_hash" ] && [ "$runtime_hash" = "$persistent_hash" ]; then
+            exit 0
+        fi
+    fi
+
+    apply_password
+    sleep 2
+    attempts=$((attempts - 1))
+done
+
+apply_password
+EOF_BUDDYBACKUP_MANUAL_ACCESS
+
+chmod 700 "$restore_script"
+
+tmp_go="$(mktemp)"
+if [ -f "$go_file" ]; then
+    awk -v begin="$go_begin_marker" -v end="$go_end_marker" '
+        $0 == begin { skip=1; next }
+        $0 == end { skip=0; next }
+        skip != 1 { print }
+    ' "$go_file" > "$tmp_go"
+else
+    : > "$tmp_go"
+fi
+
+cat >> "$tmp_go" <<'EOF_BUDDYBACKUP_GO'
+#BUDDYBACKUP_MANUAL_ACCESS_RESTORE_BEGIN
+if [ -f /boot/config/plugins/buddybackup/manual-access-restore.sh ]; then
+    bash /boot/config/plugins/buddybackup/manual-access-restore.sh >/dev/null 2>&1 &
+fi
+#BUDDYBACKUP_MANUAL_ACCESS_RESTORE_END
+EOF_BUDDYBACKUP_GO
+
+mv "$tmp_go" "$go_file"
+
+bash "$restore_script"
 
 sync || true
 
 echo "webgui_user=root"
 echo "webgui_password_configured=yes"
-'@ -f $passwordB64) -replace "`r`n", "`n").Trim()
+'@).Replace("__BUDDYBACKUP_PASSWORD_B64__", $passwordB64)) -replace "`r`n", "`n").Trim()
     $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -DoExecute:$DoExecute
     if (-not $manualAccessResult.success) {
                 $manualAccessOutput = (($manualAccessResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()

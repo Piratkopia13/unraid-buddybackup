@@ -93,6 +93,22 @@ function Get-LocalSshIdentityFile {
     return $cachedPath
 }
 
+function Convert-ToRemoteShellCommand {
+    param([string]$Command)
+
+    if ([string]::IsNullOrWhiteSpace($Command)) {
+        return $Command
+    }
+
+    if ($Command -notmatch "[`r`n]") {
+        return $Command
+    }
+
+    $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
+    $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
+    return "printf '%s' '$commandB64' | base64 -d | bash"
+}
+
 function Get-BuddyBackupPluginVerifyCommand {
     return ((@'
 set -eu
@@ -115,8 +131,29 @@ exit 1
 '@) -replace "`r`n", "`n").Trim()
 }
 
+function Get-ManualAccessConfig {
+    param($Lab)
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $manualAccessCfg = Get-ObjectValue -Object $setupCfg -Name "manualAccess"
+    $rootPassword = [string](Get-ObjectValue -Object $manualAccessCfg -Name "rootPassword")
+    if ([string]::IsNullOrWhiteSpace($rootPassword)) {
+        $rootPassword = "buddybackup-testlab"
+    }
+
+    return [pscustomobject]@{
+        webGuiUser = "root"
+        webGuiPassword = $rootPassword
+    }
+}
+
 function Get-ManualAccessVerifyCommand {
-        return ((@'
+    param($Lab)
+
+    $manualAccess = Get-ManualAccessConfig -Lab $Lab
+    $passwordB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$manualAccess.webGuiPassword))
+
+    return (((@'
 set -eu
 
 if [ ! -f /boot/config/shadow ]; then
@@ -141,13 +178,33 @@ case "$persistent_hash" in
         ;;
 esac
 
-if [ "$runtime_hash" != "$persistent_hash" ]; then
-    echo "root password hash differs between /etc/shadow and /boot/config/shadow" >&2
+if ! command -v php >/dev/null 2>&1; then
+    if [ "$runtime_hash" = "$persistent_hash" ]; then
+        echo "root password hash persisted"
+        exit 0
+    fi
+
+    echo "php is unavailable and runtime/persistent hashes differ" >&2
     exit 1
 fi
 
+if ! BUDDYBACKUP_PASSWORD_B64="__BUDDYBACKUP_PASSWORD_B64__" BUDDYBACKUP_HASH_TO_CHECK="$runtime_hash" php -r '$password=base64_decode(getenv("BUDDYBACKUP_PASSWORD_B64")); $hash=getenv("BUDDYBACKUP_HASH_TO_CHECK"); exit(($hash !== false && $hash !== "" && crypt($password, $hash) === $hash) ? 0 : 1);'; then
+    echo "configured root password does not match /etc/shadow" >&2
+    exit 1
+fi
+
+if ! BUDDYBACKUP_PASSWORD_B64="__BUDDYBACKUP_PASSWORD_B64__" BUDDYBACKUP_HASH_TO_CHECK="$persistent_hash" php -r '$password=base64_decode(getenv("BUDDYBACKUP_PASSWORD_B64")); $hash=getenv("BUDDYBACKUP_HASH_TO_CHECK"); exit(($hash !== false && $hash !== "" && crypt($password, $hash) === $hash) ? 0 : 1);'; then
+    echo "configured root password does not match /boot/config/shadow" >&2
+    exit 1
+fi
+
+if [ "$runtime_hash" != "$persistent_hash" ]; then
+    echo "root password persisted (runtime hash differs but matches configured password)"
+    exit 0
+fi
+
 echo "root password hash persisted"
-'@) -replace "`r`n", "`n").Trim()
+'@).Replace("__BUDDYBACKUP_PASSWORD_B64__", $passwordB64)) -replace "`r`n", "`n").Trim()
 }
 
 function Invoke-FunctionalSmokeScenario {
@@ -249,7 +306,7 @@ function Invoke-RemoteCommand {
     )
 
     $resolvedIdentity = Get-LocalSshIdentityFile -IdentityFile $IdentityFile
-    $sshArgs = @(
+    $sshBaseArgs = @(
         "-F", "NUL",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=8",
@@ -261,9 +318,11 @@ function Invoke-RemoteCommand {
         "-p", "$Port"
     )
     if ($resolvedIdentity) {
-        $sshArgs += @("-i", $resolvedIdentity)
+        $sshBaseArgs += @("-i", $resolvedIdentity)
     }
-    $sshArgs += @("$User@$TargetHost", $Command)
+    $sshTarget = "$User@$TargetHost"
+    $remoteCommand = Convert-ToRemoteShellCommand -Command $Command
+    $sshArgs = @($sshBaseArgs + @($sshTarget, $remoteCommand))
 
     if ($DoExecute) {
         $previousErrorActionPreference = $ErrorActionPreference
@@ -296,7 +355,8 @@ function Invoke-RemoteCommand {
             Success = ($exitCode -eq 0)
         }
     } else {
-        Write-Host "[dry-run][ssh][$Label] ssh $($sshArgs -join ' ')"
+        $previewArgs = @($sshBaseArgs + @($sshTarget, $Command))
+        Write-Host "[dry-run][ssh][$Label] ssh $($previewArgs -join ' ')"
         return [pscustomobject]@{
             Label = $Label
             Command = $Command
@@ -430,7 +490,9 @@ function Wait-ForRebootCycle {
         [string]$IdentityFile,
         [string]$PreviousBootId,
         [int]$TimeoutSeconds,
-        [int]$SettleSeconds
+        [int]$SettleSeconds,
+        [string]$ReadyCommand = $null,
+        [string]$ReadyLabel = "post-reboot-ready"
     )
 
     $started = Get-Date
@@ -455,21 +517,6 @@ function Wait-ForRebootCycle {
         }
     }
 
-    if ($SettleSeconds -gt 0) {
-        Write-Host "[testlab] Allowing ${SettleSeconds}s for services to settle on $targetLabel"
-        $settleStarted = Get-Date
-        $settleHeartbeatAt = $settleStarted
-        while ((New-TimeSpan -Start $settleStarted -End (Get-Date)).TotalSeconds -lt $SettleSeconds) {
-            $remainingSeconds = [int][Math]::Ceiling($SettleSeconds - (New-TimeSpan -Start $settleStarted -End (Get-Date)).TotalSeconds)
-            if ($remainingSeconds -le 0) {
-                break
-            }
-
-            Start-Sleep -Seconds ([Math]::Min(5, $remainingSeconds))
-            $settleHeartbeatAt = Write-TestLabHeartbeat -Message "Settling services on $targetLabel" -StartedAt $settleStarted -LastHeartbeatAt $settleHeartbeatAt -IntervalSeconds 15 -TimeoutSeconds $SettleSeconds
-        }
-    }
-
     $elapsedSeconds = [int](New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds
     $remainingSeconds = [Math]::Max($TimeoutSeconds - $elapsedSeconds, 1)
     if (-not (Wait-SshStable -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds $remainingSeconds)) {
@@ -477,20 +524,19 @@ function Wait-ForRebootCycle {
             Success = $false
             Error = "Host did not remain SSH-stable after reboot."
             BootId = $null
+            ReadyResult = $null
         }
     }
 
+    $confirmedBootId = $null
     $bootIdHeartbeatAt = Get-Date
     while ((New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds -lt $TimeoutSeconds) {
         $bootIdInfo = Get-RemoteBootId -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Label "boot-id-after-reboot" -DoExecute
         if ($bootIdInfo.Result.Success -and -not [string]::IsNullOrWhiteSpace($bootIdInfo.BootId)) {
             if ([string]::IsNullOrWhiteSpace($PreviousBootId) -or $bootIdInfo.BootId -ne $PreviousBootId) {
                 Write-Host "[testlab] Reboot confirmed on $targetLabel with boot_id $($bootIdInfo.BootId)"
-                return [pscustomobject]@{
-                    Success = $true
-                    Error = $null
-                    BootId = $bootIdInfo.BootId
-                }
+                $confirmedBootId = $bootIdInfo.BootId
+                break
             }
         }
 
@@ -498,10 +544,53 @@ function Wait-ForRebootCycle {
         Start-Sleep -Seconds 3
     }
 
+    if ([string]::IsNullOrWhiteSpace($confirmedBootId)) {
+        return [pscustomobject]@{
+            Success = $false
+            Error = "Host returned, but boot_id did not change after reboot."
+            BootId = $null
+            ReadyResult = $null
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ReadyCommand)) {
+        $elapsedSeconds = [int](New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds
+        $remainingSeconds = [Math]::Max($TimeoutSeconds - $elapsedSeconds, 1)
+        $readyResult = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $ReadyCommand -Label $ReadyLabel -TimeoutSeconds $remainingSeconds -IntervalSeconds 5
+        if (-not $readyResult.Success) {
+            $readyOutputText = if ($readyResult.Result -and $null -ne $readyResult.Result.Output) {
+                ([string]$readyResult.Result.Output).Trim()
+            } else {
+                ""
+            }
+
+            $readyError = if ([string]::IsNullOrWhiteSpace($readyOutputText)) {
+                "Remote check '$ReadyLabel' did not succeed after reboot."
+            } else {
+                "Remote check '$ReadyLabel' did not succeed after reboot. Last output: $readyOutputText"
+            }
+
+            return [pscustomobject]@{
+                Success = $false
+                Error = $readyError
+                BootId = $null
+                ReadyResult = $readyResult.Result
+            }
+        }
+
+        return [pscustomobject]@{
+            Success = $true
+            Error = $null
+            BootId = $confirmedBootId
+            ReadyResult = $readyResult.Result
+        }
+    }
+
     return [pscustomobject]@{
-        Success = $false
-        Error = "Host returned, but boot_id did not change after reboot."
-        BootId = $null
+        Success = $true
+        Error = $null
+        BootId = $confirmedBootId
+        ReadyResult = $null
     }
 }
 
@@ -538,7 +627,17 @@ function Wait-ForRemoteSuccess {
         Start-Sleep -Seconds $IntervalSeconds
     }
 
-    Write-Warning "Remote check '$Label' did not succeed on $targetLabel within $TimeoutSeconds seconds"
+    $lastOutputText = if ($lastResult -and $null -ne $lastResult.Output) {
+        ([string]$lastResult.Output).Trim()
+    } else {
+        ""
+    }
+
+    if ([string]::IsNullOrWhiteSpace($lastOutputText)) {
+        Write-Warning "Remote check '$Label' did not succeed on $targetLabel within $TimeoutSeconds seconds"
+    } else {
+        Write-Warning "Remote check '$Label' did not succeed on $targetLabel within $TimeoutSeconds seconds. Last output: $lastOutputText"
+    }
 
     return [pscustomobject]@{
         Success = $false
@@ -760,7 +859,7 @@ function Run-Scenario {
 
     $results = @()
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
-    $manualAccessVerifyCommand = Get-ManualAccessVerifyCommand
+    $manualAccessVerifyCommand = Get-ManualAccessVerifyCommand -Lab $Lab
 
     Write-Host "[testlab] Starting scenario '$Scenario' for cell $($Cell.id)"
 
@@ -787,6 +886,7 @@ function Run-Scenario {
                 [pscustomobject]@{ Name = "receiver"; Connection = $receiver }
             )) {
                 Write-Host "[testlab] Scenario 'post-reboot': validating reboot persistence on $($node.Name)"
+                $manualAccessLabel = "$($node.Name)-manual-access-check"
                 $beforeBootId = Get-RemoteBootId -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Label "$($node.Name)-boot-id-before-reboot" -DoExecute:$DoExecute
                 $results += $beforeBootId.Result
                 if ($DoExecute -and (-not $beforeBootId.Result.Success -or [string]::IsNullOrWhiteSpace($beforeBootId.BootId))) {
@@ -796,16 +896,17 @@ function Run-Scenario {
                 $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "reboot" -Label "$($node.Name)-reboot" -DoExecute:$DoExecute
 
                 if ($DoExecute) {
-                    $rebootCycle = Wait-ForRebootCycle -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -PreviousBootId $beforeBootId.BootId -TimeoutSeconds $timeout -SettleSeconds $rebootSettleSeconds
+                    $rebootCycle = Wait-ForRebootCycle -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -PreviousBootId $beforeBootId.BootId -TimeoutSeconds $timeout -SettleSeconds $rebootSettleSeconds -ReadyCommand $manualAccessVerifyCommand -ReadyLabel $manualAccessLabel
                     if (-not $rebootCycle.Success) {
                         throw "$($node.Name) reboot validation failed: $($rebootCycle.Error)"
                     }
 
+                    if ($rebootCycle.ReadyResult) {
+                        $results += $rebootCycle.ReadyResult
+                    }
+
                     $pluginCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $pluginVerifyCommand -Label "$($node.Name)-plugin-check" -TimeoutSeconds $timeout
                     $results += $pluginCheck.Result
-
-                    $manualAccessCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $manualAccessVerifyCommand -Label "$($node.Name)-manual-access-check" -TimeoutSeconds $timeout
-                    $results += $manualAccessCheck.Result
 
                     $zpoolCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zpool list -H -o name {0}" -f $zfsValues.PoolName) -Label "$($node.Name)-zpool-check" -TimeoutSeconds $timeout
                     $results += $zpoolCheck.Result
