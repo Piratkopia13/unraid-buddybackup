@@ -97,6 +97,42 @@ This initial implementation provides:
 
    To stop only one node, pass `-NodeNames sender` or `-NodeNames receiver`.
 
+## Default behavior
+
+- `provision-lab.ps1`, `run-matrix.ps1`, `run-functional-smoke.ps1`, and `teardown-wsl-qemu-lab.ps1` default to dry-run. Pass `-Execute` to make changes on live nodes.
+- `run-matrix.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and `-MatrixConfig testlab/config/matrix.small.json`.
+- `run-functional-smoke.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and operates against the already provisioned `sender` and `receiver` nodes from that lab config.
+- In the example lab config, `setup.applyBaseConfigAfterSsh` and `setup.verifyBaseConfigInMatrix` are both `true`, so local provisioning applies BuddyBackup and ZFS base setup by default and each matrix cell runs `base-setup-verify` before its listed scenarios.
+- Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
+
+## Test catalog
+
+- `base-setup-verify`: runs before each matrix cell when `setup.verifyBaseConfigInMatrix` is enabled. It verifies BuddyBackup is installed on both nodes, verifies the configured zpool exists, verifies the unencrypted dataset exists, and verifies the encrypted dataset exists with encryption enabled. On live local-provider runs it also cross-checks the latest local-provider report. Results are written to `scenario-base-setup-verify.json` in the cell artifact directory.
+- `fresh-install`: installs the matrix-selected BuddyBackup plugin version on both sender and receiver for that cell.
+- `post-reboot`: reboots both nodes one at a time, waits for SSH to drop and return, confirms a new `boot_id`, verifies the manual WebGUI password persisted, re-verifies BuddyBackup installation, and re-verifies the configured ZFS datasets.
+- `backup-smoke`: delegates to the functional smoke workflow and reports whether the backup-oriented actions succeeded.
+- `restore-smoke`: also delegates to the functional smoke workflow and reports whether the restore-oriented actions succeeded. If `backup-smoke` already ran in the same cell, the runner reuses the cached functional smoke result instead of re-running the full smoke workflow.
+- `run-functional-smoke.ps1`: can also be run directly against a live provisioned lab. It validates connectivity on both nodes, creates source snapshots on both nodes, runs remote and local backup flows on both nodes, lists available snapshots, restores selected snapshots, and verifies the restored datasets.
+
+## Default matrix
+
+- `testlab/config/matrix.small.json` is the default matrix file used by `run-matrix.ps1`.
+- It currently defines these cells:
+1. `cell-01`: sender and receiver both run Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `fresh-install`, `backup-smoke`, and `restore-smoke`.
+2. `cell-02`: sender runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, receiver runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
+3. `cell-03`: sender runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, receiver runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
+- Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
+
+## Backup direction coverage
+
+- Remote backup coverage is bidirectional in the functional smoke run.
+- The sender performs a remote backup to a dataset received on the receiver.
+- The receiver performs a remote backup to a dataset received on the sender.
+- After those remote sends, the smoke test verifies inbound remote datasets on both nodes, so each node is tested as both a remote sender and a remote receiver.
+- Connectivity checks are also bidirectional: `test_connection` is executed from both nodes against the opposite node before backups begin.
+- Local backup coverage is symmetric as well: both nodes run local backup, snapshot listing, and local restore flows.
+- Remote restore coverage is also symmetric: both nodes list remote snapshots and restore a selected remote snapshot into node-specific restore datasets.
+
 ## Notes
 
 - Scripts default to dry-run to avoid accidental VM reboot or remote changes.

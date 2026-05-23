@@ -10,7 +10,7 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 ### Testing lab bootstrap
 
-Initial reproducible test-lab scaffolding (matrix, lifecycle scenarios, and scripts) is in `testlab/`.
+Initial reproducible test-lab scaffolding is in `testlab/`; see `testlab/README.md` for the test catalog, default matrix behavior, and scenario coverage.
 
 ![Logo](src/usr/local/emhttp/plugins/buddybackup/images/buddybackup.png)
 
