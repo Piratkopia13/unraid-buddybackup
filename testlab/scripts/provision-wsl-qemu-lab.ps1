@@ -118,6 +118,7 @@ function Invoke-NodeSshCommand {
         $NodeConnection,
         [string]$Command,
         [string]$Label,
+        [string]$PreviewCommand = $null,
         [switch]$DoExecute
     )
 
@@ -143,7 +144,8 @@ function Invoke-NodeSshCommand {
     $sshArgs = @($sshBaseArgs + @($sshTarget, $remoteCommand))
 
     if (-not $DoExecute) {
-        $previewArgs = @($sshBaseArgs + @($sshTarget, $Command))
+        $commandPreview = if ([string]::IsNullOrWhiteSpace($PreviewCommand)) { $Command } else { $PreviewCommand }
+        $previewArgs = @($sshBaseArgs + @($sshTarget, $commandPreview))
         Write-Host "[dry-run][setup][$Label] ssh $($previewArgs -join ' ')"
         return [pscustomobject]@{
             label = $Label
@@ -301,7 +303,7 @@ sync || true
 echo "webgui_user=root"
 echo "webgui_password_configured=yes"
 '@).Replace("__BUDDYBACKUP_PASSWORD_B64__", $passwordB64)) -replace "`r`n", "`n").Trim()
-    $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -DoExecute:$DoExecute
+    $manualAccessResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $manualAccessCommand -Label "webgui-login-setup" -PreviewCommand "configure manual WebGUI access (password redacted)" -DoExecute:$DoExecute
     if (-not $manualAccessResult.success) {
                 $manualAccessOutput = (($manualAccessResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
                 if ([string]::IsNullOrWhiteSpace($manualAccessOutput)) {
@@ -314,7 +316,8 @@ echo "webgui_password_configured=yes"
     return [pscustomobject]@{
         success = $true
         webGuiUser = [string]$manualAccess.webGuiUser
-        webGuiPassword = [string]$manualAccess.webGuiPassword
+        passwordConfigured = $true
+        passwordSource = "setup.manualAccess.rootPassword"
         actions = @($manualAccessResult)
     }
 }
@@ -506,7 +509,7 @@ echo "encrypted_dataset_encryption=$encryption_value"
     $zfsScriptNormalized = ($zfsScript -replace "`r`n", "`n").Trim()
     $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScriptNormalized))
     $zfsCommand = "printf '%s' '$zfsScriptB64' | base64 -d | bash -s -- '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
-    $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -DoExecute:$DoExecute
+    $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -PreviewCommand "configure ZFS base setup (passphrase redacted)" -DoExecute:$DoExecute
     $results += $zfsSetupResult
     if (-not $zfsSetupResult.success) {
         $zfsSetupOutput = (($zfsSetupResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
@@ -774,7 +777,7 @@ try {
             Write-Host "[testlab] Local node $nodeName ready on 127.0.0.1:$desiredPort"
             Write-Host "[testlab] $nodeName WebGUI HTTP: $($nodeEntry.webGuiHttpUrl)"
             Write-Host "[testlab] $nodeName WebGUI HTTPS: $($nodeEntry.webGuiHttpsUrl)"
-            Write-Host "[testlab] $nodeName WebGUI login: $($manualAccess.webGuiUser) / $($manualAccess.webGuiPassword)"
+            Write-Host "[testlab] $nodeName WebGUI user: $($manualAccess.webGuiUser) (password from setup.manualAccess.rootPassword)"
         } else {
             Write-Host "[dry-run] Would start local node $nodeName on 127.0.0.1:$desiredPort from payload $payloadPath"
             $nodeEntry.sshReady = $true

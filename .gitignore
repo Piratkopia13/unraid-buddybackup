@@ -4,3 +4,4 @@
 .testlab/
 testlab/logs/
 testlab/config/lab.local.json
+testlab/config/vm-blueprint.local.json

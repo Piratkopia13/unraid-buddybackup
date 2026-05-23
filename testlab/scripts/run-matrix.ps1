@@ -207,6 +207,10 @@ echo "root password hash persisted"
 '@).Replace("__BUDDYBACKUP_PASSWORD_B64__", $passwordB64)) -replace "`r`n", "`n").Trim()
 }
 
+function Get-ManualAccessVerifyLoggedCommand {
+    return "verify manual WebGUI password persistence (password redacted)"
+}
+
 function Invoke-FunctionalSmokeScenario {
     param(
         [string]$LabConfigPath,
@@ -301,6 +305,7 @@ function Invoke-RemoteCommand {
         [int]$Port,
         [string]$IdentityFile,
         [string]$Command,
+        [string]$LoggedCommand = $null,
         [string]$Label = "remote",
         [switch]$DoExecute
     )
@@ -322,6 +327,7 @@ function Invoke-RemoteCommand {
     }
     $sshTarget = "$User@$TargetHost"
     $remoteCommand = Convert-ToRemoteShellCommand -Command $Command
+    $commandForLogs = if ([string]::IsNullOrWhiteSpace($LoggedCommand)) { $Command } else { $LoggedCommand }
     $sshArgs = @($sshBaseArgs + @($sshTarget, $remoteCommand))
 
     if ($DoExecute) {
@@ -349,17 +355,17 @@ function Invoke-RemoteCommand {
         $output = (@($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
         return [pscustomobject]@{
             Label = $Label
-            Command = $Command
+            Command = $commandForLogs
             ExitCode = $exitCode
             Output = $output
             Success = ($exitCode -eq 0)
         }
     } else {
-        $previewArgs = @($sshBaseArgs + @($sshTarget, $Command))
+        $previewArgs = @($sshBaseArgs + @($sshTarget, $commandForLogs))
         Write-Host "[dry-run][ssh][$Label] ssh $($previewArgs -join ' ')"
         return [pscustomobject]@{
             Label = $Label
-            Command = $Command
+            Command = $commandForLogs
             ExitCode = 0
             Output = "dry-run"
             Success = $true
@@ -492,6 +498,7 @@ function Wait-ForRebootCycle {
         [int]$TimeoutSeconds,
         [int]$SettleSeconds,
         [string]$ReadyCommand = $null,
+        [string]$ReadyLoggedCommand = $null,
         [string]$ReadyLabel = "post-reboot-ready"
     )
 
@@ -556,7 +563,7 @@ function Wait-ForRebootCycle {
     if (-not [string]::IsNullOrWhiteSpace($ReadyCommand)) {
         $elapsedSeconds = [int](New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds
         $remainingSeconds = [Math]::Max($TimeoutSeconds - $elapsedSeconds, 1)
-        $readyResult = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $ReadyCommand -Label $ReadyLabel -TimeoutSeconds $remainingSeconds -IntervalSeconds 5
+        $readyResult = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $ReadyCommand -LoggedCommand $ReadyLoggedCommand -Label $ReadyLabel -TimeoutSeconds $remainingSeconds -IntervalSeconds 5
         if (-not $readyResult.Success) {
             $readyOutputText = if ($readyResult.Result -and $null -ne $readyResult.Result.Output) {
                 ([string]$readyResult.Result.Output).Trim()
@@ -601,6 +608,7 @@ function Wait-ForRemoteSuccess {
         [int]$Port,
         [string]$IdentityFile,
         [string]$Command,
+        [string]$LoggedCommand = $null,
         [string]$Label,
         [int]$TimeoutSeconds,
         [int]$IntervalSeconds = 5
@@ -613,7 +621,7 @@ function Wait-ForRemoteSuccess {
     $lastHeartbeatAt = $started
 
     while ((New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds -lt $TimeoutSeconds) {
-        $lastResult = Invoke-RemoteCommand -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $Command -Label $Label -DoExecute
+        $lastResult = Invoke-RemoteCommand -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $Command -LoggedCommand $LoggedCommand -Label $Label -DoExecute
         if ($lastResult.Success) {
             $elapsedSeconds = [int](New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds
             Write-Host "[testlab] Remote check '$Label' passed on $targetLabel after ${elapsedSeconds}s"
@@ -860,6 +868,7 @@ function Run-Scenario {
     $results = @()
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
     $manualAccessVerifyCommand = Get-ManualAccessVerifyCommand -Lab $Lab
+    $manualAccessVerifyLoggedCommand = Get-ManualAccessVerifyLoggedCommand
 
     Write-Host "[testlab] Starting scenario '$Scenario' for cell $($Cell.id)"
 
@@ -896,7 +905,7 @@ function Run-Scenario {
                 $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "reboot" -Label "$($node.Name)-reboot" -DoExecute:$DoExecute
 
                 if ($DoExecute) {
-                    $rebootCycle = Wait-ForRebootCycle -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -PreviousBootId $beforeBootId.BootId -TimeoutSeconds $timeout -SettleSeconds $rebootSettleSeconds -ReadyCommand $manualAccessVerifyCommand -ReadyLabel $manualAccessLabel
+                    $rebootCycle = Wait-ForRebootCycle -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -PreviousBootId $beforeBootId.BootId -TimeoutSeconds $timeout -SettleSeconds $rebootSettleSeconds -ReadyCommand $manualAccessVerifyCommand -ReadyLoggedCommand $manualAccessVerifyLoggedCommand -ReadyLabel $manualAccessLabel
                     if (-not $rebootCycle.Success) {
                         throw "$($node.Name) reboot validation failed: $($rebootCycle.Error)"
                     }
@@ -918,7 +927,7 @@ function Run-Scenario {
                     $results += $encryptedDatasetCheck.Result
                 } else {
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $pluginVerifyCommand -Label "$($node.Name)-plugin-check" -DoExecute:$DoExecute
-                    $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $manualAccessVerifyCommand -Label "$($node.Name)-manual-access-check" -DoExecute:$DoExecute
+                    $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $manualAccessVerifyCommand -LoggedCommand $manualAccessVerifyLoggedCommand -Label "$($node.Name)-manual-access-check" -DoExecute:$DoExecute
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zpool list -H -o name {0}" -f $zfsValues.PoolName) -Label "$($node.Name)-zpool-check" -DoExecute:$DoExecute
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zfs list -H -o name {0}" -f $zfsValues.UnencryptedDataset) -Label "$($node.Name)-plain-dataset-check" -DoExecute:$DoExecute
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset) -Label "$($node.Name)-encrypted-dataset-check" -DoExecute:$DoExecute

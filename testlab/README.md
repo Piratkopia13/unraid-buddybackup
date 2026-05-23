@@ -55,12 +55,12 @@ This initial implementation provides:
    ```text
    [testlab] sender WebGUI HTTP: http://127.0.0.1:8080
    [testlab] sender WebGUI HTTPS: https://127.0.0.1:8443
-   [testlab] sender WebGUI login: root / buddybackup-testlab
+   [testlab] sender WebGUI user: root (password from setup.manualAccess.rootPassword)
    ```
 
-   The wrapper report at `.testlab/logs/provision-*.json` only records `providerReportPath`. The per-node WebGUI URLs and login info are stored in the provider report at `.testlab/logs/local-provider-*.json`.
+   The wrapper report at `.testlab/logs/provision-*.json` only records `providerReportPath`. The per-node WebGUI URLs and login user are stored in the provider report at `.testlab/logs/local-provider-*.json`; the password is not echoed or written to the report.
 
-6. Optional: inspect the latest local-provider report to get the actual WebGUI URLs and login info that were used for that run:
+6. Optional: inspect the latest local-provider report to get the actual WebGUI URLs and login user that were used for that run:
 
    ```powershell
    $report = Get-ChildItem .testlab/logs/local-provider-*.json |
@@ -71,8 +71,11 @@ This initial implementation provides:
 
    $report.nodes | Select-Object node, webGuiHttpUrl, webGuiHttpsUrl,
      @{Name='webGuiUser';Expression={$_.manualAccess.webGuiUser}},
-     @{Name='webGuiPassword';Expression={$_.manualAccess.webGuiPassword}}
+       @{Name='passwordConfigured';Expression={$_.manualAccess.passwordConfigured}},
+       @{Name='passwordSource';Expression={$_.manualAccess.passwordSource}}
    ```
+
+    The actual password is the value of `setup.manualAccess.rootPassword` in the lab config used for the run.
 
 7. Run matrix in dry-run mode (default):
 
@@ -102,7 +105,7 @@ This initial implementation provides:
 - SSH key-based access is expected for sender/receiver nodes.
 - The current local provider boots two Unraid guests (`sender` and `receiver`) through WSL/QEMU.
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
-- The `windows-local` provider now targets WSL2 plus QEMU/KVM rather than Hyper-V.
+- The `windows-local` provider targets WSL2 plus QEMU/KVM.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are sender `2222` / `8080` / `8443` and receiver `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.sender.webGuiHttpPort`, `nodes.sender.webGuiHttpsPort`, `nodes.receiver.webGuiHttpPort`, and `nodes.receiver.webGuiHttpsPort`.
 - If a preferred WebGUI port is already busy, the probe can fall back to another localhost port for that run. Use the console output or the latest `local-provider-*.json` report instead of assuming the default ports were used.
@@ -110,7 +113,7 @@ This initial implementation provides:
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
 - Base setup (`setup`) runs after SSH readiness and records testable action outputs in `.testlab/logs/local-provider-*.json`.
 - The local provider forwards each guest WebGUI to localhost and prints the HTTP/HTTPS URLs after real provisioning for manual checks.
-- Manual WebGUI login defaults to `root` with the password from `setup.manualAccess.rootPassword`.
+- Manual WebGUI login defaults to `root` with the password from `setup.manualAccess.rootPassword`, but that password is not echoed or written to testlab reports.
 - If you open both WebGUIs at the same time in the same browser profile, Unraid session cookies can collide because both are served from `127.0.0.1` on different ports. Use separate browser profiles or a private window if you need both open simultaneously.
 - BuddyBackup plugin install is validated by both install exit status and `plugin list`; by default, install output containing `warning` or `error` fails setup.
 - ZFS base setup creates a standalone pool and two datasets per node: one unencrypted and one encrypted.
