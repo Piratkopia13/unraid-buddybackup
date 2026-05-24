@@ -22,6 +22,13 @@
       "receiver": { "unraid": "7.1.0", "plugin": "2026.05.02" },
       "lifecycle": "post-reboot",
       "scenarios": ["post-reboot", "backup-smoke"]
+    },
+    {
+      "id": "cell-04",
+      "sender": { "unraid": "7.1.0", "plugin": "2026.05.02", "upgradeFromPlugin": "2025.09.13" },
+      "receiver": { "unraid": "7.1.0", "plugin": "2026.05.02", "upgradeFromPlugin": "2025.09.13" },
+      "lifecycle": "upgrade-preserves-config",
+      "scenarios": ["upgrade-preserves-config", "backup-smoke", "restore-smoke"]
     }
   ]
 }

@@ -28,6 +28,22 @@ function Ensure-TestLabReleaseMatrixDir {
     }
 }
 
+function Get-TestLabReleaseMatrixDefaultLab {
+    if ($script:TestLabReleaseMatrixDefaultLabLoaded) {
+        return $script:TestLabReleaseMatrixDefaultLab
+    }
+
+    $defaultLabPath = Join-Path $PSScriptRoot "..\config\lab.example.json"
+    if (Test-Path -LiteralPath $defaultLabPath) {
+        $script:TestLabReleaseMatrixDefaultLab = Get-Content -Raw -Path $defaultLabPath | ConvertFrom-Json
+    } else {
+        $script:TestLabReleaseMatrixDefaultLab = $null
+    }
+
+    $script:TestLabReleaseMatrixDefaultLabLoaded = $true
+    return $script:TestLabReleaseMatrixDefaultLab
+}
+
 function Get-TestLabReleaseMatrixConfigValue {
     param(
         $Lab,
@@ -35,7 +51,18 @@ function Get-TestLabReleaseMatrixConfigValue {
     )
 
     $releaseGateCfg = Get-TestLabReleaseMatrixObjectValue -Object $Lab -Name "releaseGate"
-    return Get-TestLabReleaseMatrixObjectValue -Object $releaseGateCfg -Name $Name
+    $value = Get-TestLabReleaseMatrixObjectValue -Object $releaseGateCfg -Name $Name
+    if ($null -ne $value -and (-not ($value -is [string]) -or -not [string]::IsNullOrWhiteSpace([string]$value))) {
+        return $value
+    }
+
+    $defaultLab = Get-TestLabReleaseMatrixDefaultLab
+    if ($null -eq $defaultLab) {
+        return $value
+    }
+
+    $defaultReleaseGateCfg = Get-TestLabReleaseMatrixObjectValue -Object $defaultLab -Name "releaseGate"
+    return Get-TestLabReleaseMatrixObjectValue -Object $defaultReleaseGateCfg -Name $Name
 }
 
 function New-TestLabReleaseMatrixCell {
@@ -43,24 +70,36 @@ function New-TestLabReleaseMatrixCell {
         [string]$Id,
         [string]$SenderUnraid,
         [string]$SenderPlugin,
+        [string]$SenderUpgradeFromPlugin,
         [string]$ReceiverUnraid,
         [string]$ReceiverPlugin,
+        [string]$ReceiverUpgradeFromPlugin,
         [string]$Lifecycle,
         [string[]]$Scenarios,
         [string[]]$Categories,
         [string]$Purpose
     )
 
+    $sender = [ordered]@{
+        unraid = $SenderUnraid
+        plugin = $SenderPlugin
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SenderUpgradeFromPlugin)) {
+        $sender.upgradeFromPlugin = $SenderUpgradeFromPlugin
+    }
+
+    $receiver = [ordered]@{
+        unraid = $ReceiverUnraid
+        plugin = $ReceiverPlugin
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReceiverUpgradeFromPlugin)) {
+        $receiver.upgradeFromPlugin = $ReceiverUpgradeFromPlugin
+    }
+
     return [ordered]@{
         id = $Id
-        sender = [ordered]@{
-            unraid = $SenderUnraid
-            plugin = $SenderPlugin
-        }
-        receiver = [ordered]@{
-            unraid = $ReceiverUnraid
-            plugin = $ReceiverPlugin
-        }
+        sender = $sender
+        receiver = $receiver
         lifecycle = $Lifecycle
         scenarios = $Scenarios
         categories = $Categories
@@ -101,13 +140,15 @@ function Get-TestLabReleaseMatrixDefinition {
         { $_ -in @("release-default", "default") } {
             return [ordered]@{
                 name = "release-default"
-                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup in both directions."
+                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup interoperability in both directions plus in-place upgrade preservation on both baselines."
                 mode = "report-only"
                 cells = @(
                     (New-TestLabReleaseMatrixCell -Id "prev-certified-prev-to-current" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the current candidate receiving backups."),
                     (New-TestLabReleaseMatrixCell -Id "prev-certified-current-to-prev" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the previous release receiving backups."),
                     (New-TestLabReleaseMatrixCell -Id "latest-supported-prev-to-current" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the current candidate receiving backups."),
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-to-prev" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the previous release receiving backups.")
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-to-prev" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the previous release receiving backups."),
+                    (New-TestLabReleaseMatrixCell -Id "prev-certified-upgrade-preserves-config" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version."),
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-upgrade-preserves-config" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.")
                 )
             }
         }

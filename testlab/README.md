@@ -113,6 +113,21 @@ This initial implementation provides:
 
    On successful clean execute runs, the wrapper also publishes a sanitized public summary into `testlab/release-history` so release coverage remains visible in the Git repository.
 
+11. To run a generated release profile against a published BuddyBackup release instead of the current workspace build, pass release-gate overrides on the command line:
+
+    ```powershell
+    ./testlab/scripts/run-release-gate.ps1 \
+       -LabConfig testlab/config/lab.local.json \
+       -MatrixProfile release-default \
+       -CurrentCandidatePlugin 2026.05.02 \
+       -PreviousReleaseVersion 2025.09.13 \
+       -PreviousCertifiedUnraidVersion 7.2.6 \
+       -LatestSupportedUnraidVersion 7.2.6 \
+       -Execute
+    ```
+
+    Any non-`workspace-build` plugin value is treated as a published release tag. Use this when you want the generated profile to validate a public release-to-release window instead of the current checkout.
+
 11. Tear down the local WSL/QEMU nodes when you are done:
 
    ```powershell
@@ -129,7 +144,8 @@ This initial implementation provides:
 - `run-functional-smoke.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and operates against the already provisioned `sender` and `receiver` nodes from that lab config.
 - In the example lab config, `setup.applyBaseConfigAfterSsh` and `setup.verifyBaseConfigInMatrix` are both `true`, so local provisioning applies BuddyBackup and ZFS base setup by default and each matrix cell runs `base-setup-verify` before its listed scenarios.
 - Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
-- `run-release-gate.ps1` fails immediately on any uncommitted or untracked git changes. `-AllowDirtyWorktree` exists only so the wrapper itself can be developed or debugged without weakening the default release policy.
+- `run-release-gate.ps1` still fails immediately on any uncommitted or untracked git changes when the selected matrix includes a `workspace-build` candidate, because the tested BuddyBackup artifact comes from the current checkout in that mode.
+- For release-tag-only matrices, dirty worktrees now warn instead of blocking because the installed BuddyBackup artifacts come from published release URLs. Those runs still are not treated as release evidence, and they do not publish repository history. `-AllowDirtyWorktree` remains available as an explicit override when you want to suppress the workspace-build cleanliness guard during harness development.
 - `run-release-gate.ps1` only publishes repository history for successful clean execute runs. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
 - Release-gate manifests now include `categoryRollups`, and published repository history shows per-category pass/fail columns such as `pluginCompatibility` and `unraidCompatibility` when the selected matrix defines categories.
 
@@ -138,6 +154,7 @@ This initial implementation provides:
 - `base-setup-verify`: runs before each matrix cell when `setup.verifyBaseConfigInMatrix` is enabled. It verifies BuddyBackup is installed on both nodes, verifies the configured zpool exists, verifies the unencrypted dataset exists, and verifies the encrypted dataset exists with encryption enabled. On live local-provider runs it also cross-checks the latest local-provider report. Results are written to `scenario-base-setup-verify.json` in the cell artifact directory.
 - `fresh-install`: installs the matrix-selected BuddyBackup plugin version on both sender and receiver for that cell.
 - `post-reboot`: reboots both nodes one at a time, waits for SSH to drop and return, confirms a new `boot_id`, verifies the manual WebGUI password persisted, re-verifies BuddyBackup installation, and re-verifies the configured ZFS datasets.
+- `upgrade-preserves-config`: installs the configured `upgradeFromPlugin` version on both nodes, seeds realistic BuddyBackup state (backup jobs, snapshot job, advanced settings, receive mode, SSH state), upgrades both nodes in place to the matrix-selected plugin version, captures normalized before/after state summaries, and fails if any preserved state changed unexpectedly.
 - `backup-smoke`: delegates to the functional smoke workflow and reports whether the backup-oriented actions succeeded.
 - `restore-smoke`: also delegates to the functional smoke workflow and reports whether the restore-oriented actions succeeded. If `backup-smoke` already ran in the same cell, the runner reuses the cached functional smoke result instead of re-running the full smoke workflow.
 - `run-functional-smoke.ps1`: can also be run directly against a live provisioned lab. It validates connectivity on both nodes, creates source snapshots on both nodes, runs remote and local backup flows on both nodes, lists available snapshots, restores selected snapshots, and verifies the restored datasets.
@@ -149,15 +166,18 @@ This initial implementation provides:
 1. `cell-01`: sender and receiver both run Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `fresh-install`, `backup-smoke`, and `restore-smoke`.
 2. `cell-02`: sender runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, receiver runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
 3. `cell-03`: sender runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, receiver runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
+4. `cell-04`: sender and receiver both run Unraid `7.1.0` with BuddyBackup `2026.05.02`, but each upgrades in place from `2025.09.13`; scenarios are `upgrade-preserves-config`, `backup-smoke`, and `restore-smoke`.
 - Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
 
 ## Release matrix profiles
 
 - `run-release-gate.ps1` accepts `-MatrixProfile` for release-oriented generated matrices.
-- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup in both sender/receiver directions.
+- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup in both sender/receiver directions plus one in-place `upgrade-preserves-config` cell on each Unraid baseline.
 - `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
 - `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
+- Current limitation: the existing providers provision one fixed sender guest and one fixed receiver guest from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.sender.unraidVersion` and `lab.nodes.receiver.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
+- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, or extend the harness later to reprovision between cells.
 - Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
 - Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
 
@@ -175,6 +195,7 @@ This initial implementation provides:
 - The testlab builds `buddybackup.txz` locally from `src/` into `.testlab/build-cache/workspace-<shortSha>/buddybackup.txz`, uploads that package plus the local dependency packages from `deps/`, installs them on the guest, and then runs `rc.buddybackup.php update`.
 - The active install source is written on the guest to `/boot/config/plugins/buddybackup/testlab-plugin-source.json`. Matrix artifact collection captures that file as `plugin-source.txt` so release and workspace-build provenance can be reviewed after a run.
 - `workspace-build` is intended for release-candidate validation. Because the current display version in `buddybackup.plg` can still match the last published release, use the recorded commit SHA and plugin-source metadata to distinguish a workspace candidate from a published tag.
+- Any other plugin string such as `2026.05.02` is treated as a published release tag and installed from `lab.plugin.plgUrlTemplate`.
 
 ## Backup direction coverage
 

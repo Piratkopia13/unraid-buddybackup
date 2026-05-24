@@ -22,6 +22,61 @@ function Get-Json {
     return Get-Content -Raw -Path $Path | ConvertFrom-Json
 }
 
+function Test-LabSupportsMatrixUnraidVersions {
+    param(
+        $Lab,
+        [object[]]$MatrixCells
+    )
+
+    $provider = [string](Get-ObjectValue -Object $Lab -Name 'provider')
+    $supportedProviders = @('windows-local', 'windows-wsl-qemu', 'manual')
+    if ($provider -notin $supportedProviders) {
+        return [pscustomobject]@{
+            Success = $true
+            Error = $null
+        }
+    }
+
+    $mismatches = @()
+    foreach ($nodeName in @('sender', 'receiver')) {
+        $labNode = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -Name $nodeName
+        $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
+        if ([string]::IsNullOrWhiteSpace($labVersion)) {
+            continue
+        }
+
+        $cellVersions = @($MatrixCells | ForEach-Object { [string](Get-ObjectValue -Object (Get-ObjectValue -Object $_ -Name $nodeName) -Name 'unraid') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique)
+
+        foreach ($cellVersion in $cellVersions) {
+            if ($cellVersion -ne $labVersion) {
+                $mismatches += [pscustomobject]@{
+                    node = $nodeName
+                    labVersion = $labVersion
+                    matrixVersion = $cellVersion
+                }
+            }
+        }
+    }
+
+    if ($mismatches.Count -eq 0) {
+        return [pscustomobject]@{
+            Success = $true
+            Error = $null
+        }
+    }
+
+    $details = @($mismatches | ForEach-Object {
+        "node=$($_.node) lab=$($_.labVersion) matrix=$($_.matrixVersion)"
+    }) -join '; '
+
+    return [pscustomobject]@{
+        Success = $false
+        Error = "This testlab run cannot vary Unraid versions per matrix cell. The current provider '$provider' uses the already provisioned lab node versions from the lab config, but the matrix requests different Unraid versions: $details. Provision nodes that match the matrix, or run separate release-gate executions per Unraid baseline instead of mixing them in one run."
+    }
+}
+
 function Ensure-Dir {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
@@ -91,6 +146,12 @@ function Get-LocalSshIdentityFile {
     $cachedPath = Join-Path $cacheRoot $fileName
 
     Copy-Item -LiteralPath $resolvedPath -Destination $cachedPath -Force
+
+    if ($env:OS -eq 'Windows_NT') {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        & icacls $cachedPath /inheritance:r /grant:r "${currentUser}:(F)" | Out-Null
+    }
+
     return $cachedPath
 }
 
@@ -929,6 +990,12 @@ function Get-LatestLocalProviderReport {
     param($Lab)
 
     $logsRoot = if ($Lab.logsRoot) { [string]$Lab.logsRoot } else { ".testlab/logs" }
+    $workspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    if ([System.IO.Path]::IsPathRooted($logsRoot)) {
+        $logsRoot = [System.IO.Path]::GetFullPath($logsRoot)
+    } else {
+        $logsRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot $logsRoot))
+    }
     $reports = Get-ChildItem -Path $logsRoot -Filter "local-provider-*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
     if (-not $reports -or $reports.Count -eq 0) {
         return $null
@@ -994,6 +1061,67 @@ function Get-SetupZfsValues {
         DatasetRoot = $root
         UnencryptedDataset = "$root/$plainDatasetName"
         EncryptedDataset = "$root/$encDatasetName"
+    }
+}
+
+function Get-FunctionalTestConfig {
+    param($Lab)
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $functionalCfg = Get-ObjectValue -Object $setupCfg -Name "functionalTests"
+
+    $hostGatewayIp = [string](Get-ObjectValue -Object $functionalCfg -Name "hostGatewayIp")
+    if ([string]::IsNullOrWhiteSpace($hostGatewayIp)) {
+        $hostGatewayIp = "10.0.2.2"
+    }
+
+    $senderAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "senderAliasIp")
+    if ([string]::IsNullOrWhiteSpace($senderAliasIp)) {
+        $senderAliasIp = "10.254.0.22"
+    }
+
+    $receiverAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "receiverAliasIp")
+    if ([string]::IsNullOrWhiteSpace($receiverAliasIp)) {
+        $receiverAliasIp = "10.254.0.23"
+    }
+
+    $allowUnencryptedRemoteBackups = "yes"
+    $allowUnencryptedValue = Get-ObjectValue -Object $functionalCfg -Name "allowUnencryptedRemoteBackups"
+    if ($null -ne $allowUnencryptedValue) {
+        $allowUnencryptedRemoteBackups = if ([bool]$allowUnencryptedValue) { "yes" } else { "no" }
+    }
+
+    return [pscustomobject]@{
+        hostGatewayIp = $hostGatewayIp
+        senderAliasIp = $senderAliasIp
+        receiverAliasIp = $receiverAliasIp
+        allowUnencryptedRemoteBackups = $allowUnencryptedRemoteBackups
+    }
+}
+
+function Get-UpgradeScenarioNodePlan {
+    param(
+        [string]$NodeName,
+        $Connection,
+        $ZfsValues,
+        $FunctionalCfg
+    )
+
+    $uidPrefix = if ($NodeName -eq "sender") { "s" } else { "r" }
+    $aliasIp = if ($NodeName -eq "sender") { $FunctionalCfg.senderAliasIp } else { $FunctionalCfg.receiverAliasIp }
+    $root = "$($ZfsValues.DatasetRoot)/upgrade/$NodeName"
+
+    return [pscustomobject]@{
+        NodeName = $NodeName
+        SourceDataset = "$root/source"
+        SourceMountpoint = "/mnt/buddybackup-upgrade/$NodeName-source"
+        LocalBackupDataset = "$root/local-backup"
+        ReceiveRootDataset = "$($ZfsValues.DatasetRoot)/upgrade/receive-$NodeName"
+        RemoteBackupUid = "${uidPrefix}upgrm01"
+        LocalBackupUid = "${uidPrefix}upglc01"
+        SnapshotUid = "${uidPrefix}upgsn01"
+        AliasIp = $aliasIp
+        Port = [int]$Connection.Port
     }
 }
 
@@ -1066,6 +1194,469 @@ function Run-BaseSetupVerification {
         Success = $true
         Error = $null
     }
+}
+
+function Get-RemoteFileValue {
+        param(
+                $NodeConnection,
+                [string]$Path,
+                [string]$Label,
+                [switch]$DoExecute
+        )
+
+        $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command ("cat {0}" -f $Path) -Label $Label -DoExecute:$DoExecute
+        return [pscustomobject]@{
+                Result = $result
+                Value = if ($result.Success -and -not [string]::IsNullOrWhiteSpace($result.Output)) { [string]$result.Output.Trim() } else { $null }
+        }
+}
+
+function New-UpgradePreservesConfigSetupScript {
+        $script = @'
+node_name="$1"
+source_dataset="$2"
+source_mountpoint="$3"
+local_backup_dataset="$4"
+receive_root_dataset="$5"
+remote_uid="$6"
+local_uid="$7"
+snapshot_uid="$8"
+remote_host="$9"
+remote_destination_dataset="${10}"
+allow_unencrypted="${11}"
+peer_public_key="${12}"
+host_gateway_ip="${13}"
+peer_port="${14}"
+peer_alias_ip="${15}"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+plugin_cfg="$plugin_root/buddybackup.cfg"
+backups_cfg="$plugin_root/backups.cfg"
+snapshots_cfg="$plugin_root/snapshots.cfg"
+
+set_ini_value() {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+    local escaped
+    escaped=$(printf '%s' "$value" | sed 's/[&|\\]/\\&/g')
+
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=\"${escaped}\"|" "$file"
+    else
+        printf '%s="%s"\n' "$key" "$value" >> "$file"
+    fi
+}
+
+ensure_dataset_absent() {
+    local dataset="$1"
+    if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
+        zfs destroy -r "$dataset"
+    fi
+}
+
+if command -v modprobe >/dev/null 2>&1; then
+    modprobe zfs >/dev/null 2>&1 || true
+fi
+
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle >/dev/null 2>&1 || true
+fi
+
+mkdir -p "$plugin_root"
+ensure_dataset_absent "$source_dataset"
+ensure_dataset_absent "$local_backup_dataset"
+ensure_dataset_absent "$receive_root_dataset"
+
+mkdir -p "$(dirname "$source_mountpoint")"
+zfs create -p -o mountpoint="$source_mountpoint" "$source_dataset"
+zfs create -p -o mountpoint=none "$local_backup_dataset"
+zfs create -p -o mountpoint=none "$receive_root_dataset"
+printf 'node=%s\nstage=upgrade-preserves-config\n' "$node_name" > "$source_mountpoint/payload.txt"
+sync || true
+
+touch "$plugin_cfg"
+set_ini_value "ReceiveBackups" "enable" "$plugin_cfg"
+set_ini_value "ReceiveDestinationDataset" "$receive_root_dataset" "$plugin_cfg"
+set_ini_value "DestinationPubSSHKey" "$peer_public_key" "$plugin_cfg"
+set_ini_value "ReceiveDestinationRententionHourly" "4" "$plugin_cfg"
+set_ini_value "ReceiveDestinationRententionDaily" "8" "$plugin_cfg"
+set_ini_value "ReceiveDestinationRententionWeekly" "5" "$plugin_cfg"
+set_ini_value "ReceiveDestinationRententionMonthly" "6" "$plugin_cfg"
+set_ini_value "ReceiveDestinationRententionYearly" "2" "$plugin_cfg"
+set_ini_value "BackupDaysAgoWarning" "5" "$plugin_cfg"
+set_ini_value "BackupDaysAgoCritical" "11" "$plugin_cfg"
+set_ini_value "BuddysBackupDaysAgoWarning" "9" "$plugin_cfg"
+set_ini_value "BuddysBackupDaysAgoCritical" "19" "$plugin_cfg"
+set_ini_value "UtcTimezone" "yes" "$plugin_cfg"
+set_ini_value "AllowUnencryptedRemoteBackups" "$allow_unencrypted" "$plugin_cfg"
+
+cat > "$backups_cfg" <<EOF
+[${remote_uid}]
+enable="yes"
+source_dataset="${source_dataset}"
+recursive="yes"
+backup_cron="17 3 * * *"
+type="remote"
+destination_host="${remote_host}"
+destination_dataset="${remote_destination_dataset}"
+
+[${local_uid}]
+enable="yes"
+source_dataset="${source_dataset}"
+recursive="no"
+backup_cron="43 5 * * 1"
+type="local"
+destination_host=""
+destination_dataset="${local_backup_dataset}"
+EOF
+
+cat > "$snapshots_cfg" <<EOF
+[${snapshot_uid}]
+dataset="${source_dataset}"
+hourly="6"
+daily="4"
+weekly="3"
+monthly="2"
+yearly="1"
+autosnap="yes"
+autoprune="yes"
+recursive="yes"
+process_children_only="no"
+trigger="${remote_uid}"
+EOF
+
+if [[ "$peer_port" != "22" ]]; then
+    if ! command -v iptables >/dev/null 2>&1; then
+        echo "iptables is unavailable, cannot map ${peer_alias_ip}:22 to ${host_gateway_ip}:${peer_port}" >&2
+        exit 1
+    fi
+
+    iptables -t nat -C OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}" >/dev/null 2>&1 || \
+        iptables -t nat -A OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}"
+fi
+
+/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
+
+echo "seeded_node=${node_name}"
+echo "seeded_remote_host=${remote_host}"
+echo "seeded_receive_root=${receive_root_dataset}"
+'@
+
+        return $script
+}
+
+function Get-UpgradeStateSummaryScript {
+        $script = @'
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+plugin_cfg="$plugin_root/buddybackup.cfg"
+backups_cfg="$plugin_root/backups.cfg"
+snapshots_cfg="$plugin_root/snapshots.cfg"
+managed_known_hosts="$plugin_root/buddybackup_known_hosts"
+sender_key="$plugin_root/buddybackup_sender_key"
+authorized_keys="/home/buddybackup/.ssh/authorized_keys"
+sanoid_conf="$plugin_root/sanoid.conf"
+sshd_config="/etc/ssh/sshd_config"
+if [ -f /boot/config/ssh/sshd_config ]; then
+    sshd_config="/boot/config/ssh/sshd_config"
+fi
+
+hash_or_empty() {
+    local path="$1"
+    if [ -f "$path" ]; then
+        sha256sum "$path" | awk '{print $1}'
+    fi
+}
+
+line_or_empty() {
+    local key="$1"
+    local path="$2"
+    if [ -f "$path" ]; then
+        awk -F= -v expected="$key" '$1==expected {print $0}' "$path" | tail -n 1
+    fi
+}
+
+emit_sections() {
+    local path="$1"
+    local label="$2"
+    if [ -f "$path" ]; then
+        awk '/^\[.*\]$/{gsub(/^\[|\]$/, "", $0); print}' "$path" | sort | while IFS= read -r value; do
+            [ -n "$value" ] && echo "${label}=${value}"
+        done
+    fi
+}
+
+echo "plugin_cfg_sha256=$(hash_or_empty "$plugin_cfg")"
+echo "backups_cfg_sha256=$(hash_or_empty "$backups_cfg")"
+echo "snapshots_cfg_sha256=$(hash_or_empty "$snapshots_cfg")"
+echo "sender_key_sha256=$(hash_or_empty "$sender_key")"
+echo "known_hosts_sha256=$(hash_or_empty "$managed_known_hosts")"
+echo "authorized_keys_sha256=$(hash_or_empty "$authorized_keys")"
+echo "sanoid_conf_sha256=$(hash_or_empty "$sanoid_conf")"
+
+for key in \
+    ReceiveBackups \
+    ReceiveDestinationDataset \
+    ReceiveDestinationRententionHourly \
+    ReceiveDestinationRententionDaily \
+    ReceiveDestinationRententionWeekly \
+    ReceiveDestinationRententionMonthly \
+    ReceiveDestinationRententionYearly \
+    BackupDaysAgoWarning \
+    BackupDaysAgoCritical \
+    BuddysBackupDaysAgoWarning \
+    BuddysBackupDaysAgoCritical \
+    UtcTimezone \
+    AllowUnencryptedRemoteBackups; do
+    line=$(line_or_empty "$key" "$plugin_cfg")
+    if [ -n "$line" ]; then
+        echo "plugin_cfg_line=$line"
+    fi
+done
+
+emit_sections "$backups_cfg" "backup_section"
+emit_sections "$snapshots_cfg" "snapshot_section"
+
+for cron in "$plugin_root"/backup-*.cron; do
+    [ -f "$cron" ] && basename "$cron"
+done | sort | while IFS= read -r value; do
+    [ -n "$value" ] && echo "backup_cron=$value"
+done
+
+known_hosts_lines=0
+if [ -f "$managed_known_hosts" ]; then
+    known_hosts_lines=$(grep -cve '^[[:space:]]*$' "$managed_known_hosts" || true)
+fi
+echo "known_hosts_line_count=$known_hosts_lines"
+
+buddybackup_user_present=no
+if id buddybackup >/dev/null 2>&1; then
+    buddybackup_user_present=yes
+fi
+echo "buddybackup_user_present=$buddybackup_user_present"
+
+allow_users_contains_buddybackup=no
+if [ -f "$sshd_config" ] && grep -Eq '^AllowUsers .*buddybackup([[:space:]]|$)' "$sshd_config"; then
+    allow_users_contains_buddybackup=yes
+fi
+echo "allow_users_contains_buddybackup=$allow_users_contains_buddybackup"
+
+match_user_buddybackup=no
+if [ -f "$sshd_config" ] && grep -Fq 'Match User buddybackup' "$sshd_config"; then
+    match_user_buddybackup=yes
+fi
+echo "match_user_buddybackup=$match_user_buddybackup"
+
+receive_dataset=""
+if [ -f "$plugin_cfg" ]; then
+    receive_dataset=$(awk -F= '$1=="ReceiveDestinationDataset" {value=$2; gsub(/^"|"$/, "", value); print value}' "$plugin_cfg" | tail -n 1)
+fi
+
+sanoid_conf_contains_receive_dataset=no
+if [ -n "$receive_dataset" ] && [ -f "$sanoid_conf" ] && grep -Fq "[$receive_dataset]" "$sanoid_conf"; then
+    sanoid_conf_contains_receive_dataset=yes
+fi
+echo "sanoid_conf_contains_receive_dataset=$sanoid_conf_contains_receive_dataset"
+'@
+
+        return $script
+}
+
+function ConvertFrom-UpgradeStateOutput {
+        param([string]$Output)
+
+        $snapshot = [ordered]@{
+                pluginCfgSha256 = ""
+                backupsCfgSha256 = ""
+                snapshotsCfgSha256 = ""
+                senderKeySha256 = ""
+                knownHostsSha256 = ""
+                knownHostsLineCount = 0
+                authorizedKeysSha256 = ""
+                sanoidConfSha256 = ""
+                sanoidConfContainsReceiveDataset = "no"
+                buddybackupUserPresent = "no"
+                allowUsersContainsBuddybackup = "no"
+                matchUserBuddybackup = "no"
+                pluginCfgLines = @()
+                backupSections = @()
+                snapshotSections = @()
+                backupCrons = @()
+        }
+
+        $lines = @($Output -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        foreach ($line in $lines) {
+                $parts = $line -split '=', 2
+                $name = [string]$parts[0]
+                $value = if ($parts.Count -gt 1) { [string]$parts[1] } else { "" }
+
+                switch ($name) {
+                        "plugin_cfg_sha256" { $snapshot.pluginCfgSha256 = $value }
+                        "backups_cfg_sha256" { $snapshot.backupsCfgSha256 = $value }
+                        "snapshots_cfg_sha256" { $snapshot.snapshotsCfgSha256 = $value }
+                        "sender_key_sha256" { $snapshot.senderKeySha256 = $value }
+                        "known_hosts_sha256" { $snapshot.knownHostsSha256 = $value }
+                        "known_hosts_line_count" { $snapshot.knownHostsLineCount = if ([string]::IsNullOrWhiteSpace($value)) { 0 } else { [int]$value } }
+                        "authorized_keys_sha256" { $snapshot.authorizedKeysSha256 = $value }
+                        "sanoid_conf_sha256" { $snapshot.sanoidConfSha256 = $value }
+                        "sanoid_conf_contains_receive_dataset" { $snapshot.sanoidConfContainsReceiveDataset = $value }
+                        "buddybackup_user_present" { $snapshot.buddybackupUserPresent = $value }
+                        "allow_users_contains_buddybackup" { $snapshot.allowUsersContainsBuddybackup = $value }
+                        "match_user_buddybackup" { $snapshot.matchUserBuddybackup = $value }
+                        "plugin_cfg_line" { $snapshot.pluginCfgLines += $value }
+                        "backup_section" { $snapshot.backupSections += $value }
+                        "snapshot_section" { $snapshot.snapshotSections += $value }
+                        "backup_cron" { $snapshot.backupCrons += $value }
+                }
+        }
+
+        $snapshot.pluginCfgLines = @($snapshot.pluginCfgLines | Sort-Object -Unique)
+        $snapshot.backupSections = @($snapshot.backupSections | Sort-Object -Unique)
+        $snapshot.snapshotSections = @($snapshot.snapshotSections | Sort-Object -Unique)
+        $snapshot.backupCrons = @($snapshot.backupCrons | Sort-Object -Unique)
+
+        return [pscustomobject]$snapshot
+}
+
+function Get-UpgradeStateSnapshot {
+        param(
+                [string]$NodeName,
+                $NodeConnection,
+                [switch]$DoExecute
+        )
+
+        $script = Get-UpgradeStateSummaryScript
+        $command = Convert-ToRemoteBashScriptCommand -Script $script -Arguments @()
+        $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $command -LoggedCommand "capture BuddyBackup upgrade state summary" -Label "${NodeName}-upgrade-state-snapshot" -DoExecute:$DoExecute
+
+        return [pscustomobject]@{
+                Result = $result
+                Snapshot = if ($result.Success -and $DoExecute) { ConvertFrom-UpgradeStateOutput -Output $result.Output } elseif (-not $DoExecute) { [pscustomobject]@{ dryRun = $true } } else { $null }
+        }
+}
+
+function Test-UpgradeStateSnapshot {
+        param(
+                [string]$NodeName,
+                $Snapshot,
+                $Plan,
+                [string]$AllowUnencryptedRemoteBackups
+        )
+
+        $errors = @()
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.pluginCfgSha256)) {
+                $errors += "plugin cfg hash is missing"
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.backupsCfgSha256)) {
+                $errors += "backups cfg hash is missing"
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.snapshotsCfgSha256)) {
+                $errors += "snapshots cfg hash is missing"
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$Snapshot.senderKeySha256)) {
+                $errors += "sender key hash is missing"
+        }
+        if ($Snapshot.buddybackupUserPresent -ne "yes") {
+                $errors += "buddybackup user is missing"
+        }
+        if ($Snapshot.allowUsersContainsBuddybackup -ne "yes") {
+                $errors += "sshd_config AllowUsers does not include buddybackup"
+        }
+        if ($Snapshot.matchUserBuddybackup -ne "yes") {
+                $errors += "sshd_config Match User buddybackup block is missing"
+        }
+        if ($Snapshot.sanoidConfContainsReceiveDataset -ne "yes") {
+                $errors += "sanoid.conf does not contain the receive dataset"
+        }
+
+        $expectedPluginLines = @(
+                'ReceiveBackups="enable"',
+                ('ReceiveDestinationDataset="{0}"' -f $Plan.ReceiveRootDataset),
+                'UtcTimezone="yes"',
+                ('AllowUnencryptedRemoteBackups="{0}"' -f $AllowUnencryptedRemoteBackups)
+        )
+        foreach ($expectedLine in $expectedPluginLines) {
+                if ($Snapshot.pluginCfgLines -notcontains $expectedLine) {
+                        $errors += "missing plugin cfg line $expectedLine"
+                }
+        }
+
+        foreach ($expectedSection in @($Plan.RemoteBackupUid, $Plan.LocalBackupUid)) {
+                if ($Snapshot.backupSections -notcontains $expectedSection) {
+                        $errors += "missing backup section $expectedSection"
+                }
+        }
+        if ($Snapshot.snapshotSections -notcontains $Plan.SnapshotUid) {
+                $errors += "missing snapshot section $($Plan.SnapshotUid)"
+        }
+
+        foreach ($expectedCron in @("backup-$($Plan.RemoteBackupUid).cron", "backup-$($Plan.LocalBackupUid).cron")) {
+                if ($Snapshot.backupCrons -notcontains $expectedCron) {
+                        $errors += "missing cron file $expectedCron"
+                }
+        }
+
+        return [pscustomobject]@{
+                Success = ($errors.Count -eq 0)
+                Error = if ($errors.Count -eq 0) { $null } else { $errors -join '; ' }
+        }
+}
+
+function Compare-UpgradeStateSnapshots {
+        param(
+                [string]$NodeName,
+                $Before,
+                $After
+        )
+
+        $differences = @()
+        $properties = @(
+                'pluginCfgSha256',
+                'backupsCfgSha256',
+                'snapshotsCfgSha256',
+                'senderKeySha256',
+                'knownHostsSha256',
+                'knownHostsLineCount',
+                'authorizedKeysSha256',
+                'sanoidConfSha256',
+                'sanoidConfContainsReceiveDataset',
+                'buddybackupUserPresent',
+                'allowUsersContainsBuddybackup',
+                'matchUserBuddybackup',
+                'pluginCfgLines',
+                'backupSections',
+                'snapshotSections',
+                'backupCrons'
+        )
+
+        foreach ($propertyName in $properties) {
+                $beforeValue = $Before.$propertyName
+                $afterValue = $After.$propertyName
+
+                if ($beforeValue -is [System.Array] -or $afterValue -is [System.Array]) {
+                        $beforeText = (@($beforeValue) | Sort-Object) -join ', '
+                        $afterText = (@($afterValue) | Sort-Object) -join ', '
+                        if ($beforeText -ne $afterText) {
+                                $differences += "${propertyName}: before=[$beforeText] after=[$afterText]"
+                        }
+                        continue
+                }
+
+                $beforeText = [string]$beforeValue
+                $afterText = [string]$afterValue
+                if ($beforeText -ne $afterText) {
+                        $differences += "${propertyName}: before=[$beforeText] after=[$afterText]"
+                }
+        }
+
+        return [pscustomobject]@{
+                Success = ($differences.Count -eq 0)
+                Error = if ($differences.Count -eq 0) { $null } else { $differences -join '; ' }
+        }
 }
 
 function Install-Plugin {
@@ -1164,6 +1755,180 @@ function Run-Scenario {
         "fresh-install" {
             $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.senderPluginRequest -DoExecute:$DoExecute
             $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.receiverPluginRequest -DoExecute:$DoExecute
+        }
+        "upgrade-preserves-config" {
+            $senderUpgradeFromRequest = if ($Cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { $Cell.senderUpgradeFromPluginRequest } else { $null }
+            $receiverUpgradeFromRequest = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { $Cell.receiverUpgradeFromPluginRequest } else { $null }
+            if ($null -eq $senderUpgradeFromRequest -or $null -eq $receiverUpgradeFromRequest) {
+                throw "Scenario 'upgrade-preserves-config' requires sender.upgradeFromPlugin and receiver.upgradeFromPlugin in cell $($Cell.id)."
+            }
+
+            $functionalCfg = Get-FunctionalTestConfig -Lab $Lab
+            $zfsValues = Get-SetupZfsValues -Lab $Lab
+            $senderPlan = Get-UpgradeScenarioNodePlan -NodeName "sender" -Connection $sender -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
+            $receiverPlan = Get-UpgradeScenarioNodePlan -NodeName "receiver" -Connection $receiver -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
+            $senderPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($receiverPlan.ReceiveRootDataset)/from-sender" -Force
+            $senderPlan | Add-Member -NotePropertyName RemoteHost -NotePropertyValue $(if ($receiver.Port -eq 22) { $receiver.Host } else { $receiverPlan.AliasIp }) -Force
+            $senderPlan | Add-Member -NotePropertyName PeerAliasIp -NotePropertyValue $receiverPlan.AliasIp -Force
+            $receiverPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($senderPlan.ReceiveRootDataset)/from-receiver" -Force
+            $receiverPlan | Add-Member -NotePropertyName RemoteHost -NotePropertyValue $(if ($sender.Port -eq 22) { $sender.Host } else { $senderPlan.AliasIp }) -Force
+            $receiverPlan | Add-Member -NotePropertyName PeerAliasIp -NotePropertyValue $senderPlan.AliasIp -Force
+
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $senderUpgradeFromRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $receiverUpgradeFromRequest -DoExecute:$DoExecute
+
+            $senderKeyInfo = Get-RemoteFileValue -NodeConnection $sender -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "sender-upgrade-public-key" -DoExecute:$DoExecute
+            $receiverKeyInfo = Get-RemoteFileValue -NodeConnection $receiver -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "receiver-upgrade-public-key" -DoExecute:$DoExecute
+            $results += $senderKeyInfo.Result
+            $results += $receiverKeyInfo.Result
+
+            $setupScript = New-UpgradePreservesConfigSetupScript
+            if (-not $DoExecute -or (($senderKeyInfo.Result.Success -and $senderKeyInfo.Value) -and ($receiverKeyInfo.Result.Success -and $receiverKeyInfo.Value))) {
+                $senderSetupCommand = Convert-ToRemoteBashScriptCommand -Script $setupScript -Arguments @(
+                    'sender',
+                    [string]$senderPlan.SourceDataset,
+                    [string]$senderPlan.SourceMountpoint,
+                    [string]$senderPlan.LocalBackupDataset,
+                    [string]$senderPlan.ReceiveRootDataset,
+                    [string]$senderPlan.RemoteBackupUid,
+                    [string]$senderPlan.LocalBackupUid,
+                    [string]$senderPlan.SnapshotUid,
+                    [string]$senderPlan.RemoteHost,
+                    [string]$senderPlan.RemoteDestinationDataset,
+                    [string]$functionalCfg.allowUnencryptedRemoteBackups,
+                    [string]$(if ($receiverKeyInfo.Value) { $receiverKeyInfo.Value } else { 'dry-run' }),
+                    [string]$functionalCfg.hostGatewayIp,
+                    [string]$receiver.Port,
+                    [string]$senderPlan.PeerAliasIp
+                )
+                $receiverSetupCommand = Convert-ToRemoteBashScriptCommand -Script $setupScript -Arguments @(
+                    'receiver',
+                    [string]$receiverPlan.SourceDataset,
+                    [string]$receiverPlan.SourceMountpoint,
+                    [string]$receiverPlan.LocalBackupDataset,
+                    [string]$receiverPlan.ReceiveRootDataset,
+                    [string]$receiverPlan.RemoteBackupUid,
+                    [string]$receiverPlan.LocalBackupUid,
+                    [string]$receiverPlan.SnapshotUid,
+                    [string]$receiverPlan.RemoteHost,
+                    [string]$receiverPlan.RemoteDestinationDataset,
+                    [string]$functionalCfg.allowUnencryptedRemoteBackups,
+                    [string]$(if ($senderKeyInfo.Value) { $senderKeyInfo.Value } else { 'dry-run' }),
+                    [string]$functionalCfg.hostGatewayIp,
+                    [string]$sender.Port,
+                    [string]$receiverPlan.PeerAliasIp
+                )
+                $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $senderSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on sender" -Label "sender-upgrade-seed" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command $receiverSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on receiver" -Label "receiver-upgrade-seed" -DoExecute:$DoExecute
+            } else {
+                $results += [pscustomobject]@{
+                    Label = 'upgrade-seed-prerequisites'
+                    Command = 'read BuddyBackup sender public keys'
+                    ExitCode = 1
+                    Output = 'Failed to read the BuddyBackup sender public keys needed to seed pre-upgrade state.'
+                    Success = $false
+                }
+            }
+
+            $senderBefore = Get-UpgradeStateSnapshot -NodeName 'sender' -NodeConnection $sender -DoExecute:$DoExecute
+            $receiverBefore = Get-UpgradeStateSnapshot -NodeName 'receiver' -NodeConnection $receiver -DoExecute:$DoExecute
+            $results += $senderBefore.Result
+            $results += $receiverBefore.Result
+
+            if ($DoExecute) {
+                if ($senderBefore.Snapshot) {
+                    $senderBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'sender-upgrade-state-before.json')
+                    $senderBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'sender' -Snapshot $senderBefore.Snapshot -Plan $senderPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
+                    $results += [pscustomobject]@{
+                        Label = 'sender-upgrade-before-sanity'
+                        Command = 'verify seeded pre-upgrade BuddyBackup state'
+                        ExitCode = if ($senderBeforeCheck.Success) { 0 } else { 1 }
+                        Output = if ($senderBeforeCheck.Success) { 'Seeded pre-upgrade state is present.' } else { $senderBeforeCheck.Error }
+                        Success = $senderBeforeCheck.Success
+                    }
+                }
+
+                if ($receiverBefore.Snapshot) {
+                    $receiverBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'receiver-upgrade-state-before.json')
+                    $receiverBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'receiver' -Snapshot $receiverBefore.Snapshot -Plan $receiverPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
+                    $results += [pscustomobject]@{
+                        Label = 'receiver-upgrade-before-sanity'
+                        Command = 'verify seeded pre-upgrade BuddyBackup state'
+                        ExitCode = if ($receiverBeforeCheck.Success) { 0 } else { 1 }
+                        Output = if ($receiverBeforeCheck.Success) { 'Seeded pre-upgrade state is present.' } else { $receiverBeforeCheck.Error }
+                        Success = $receiverBeforeCheck.Success
+                    }
+                }
+            } else {
+                $results += [pscustomobject]@{
+                    Label = 'sender-upgrade-before-sanity'
+                    Command = 'verify seeded pre-upgrade BuddyBackup state'
+                    ExitCode = 0
+                    Output = 'dry-run'
+                    Success = $true
+                }
+                $results += [pscustomobject]@{
+                    Label = 'receiver-upgrade-before-sanity'
+                    Command = 'verify seeded pre-upgrade BuddyBackup state'
+                    ExitCode = 0
+                    Output = 'dry-run'
+                    Success = $true
+                }
+            }
+
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.senderPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.receiverPluginRequest -DoExecute:$DoExecute
+
+            $senderAfter = Get-UpgradeStateSnapshot -NodeName 'sender' -NodeConnection $sender -DoExecute:$DoExecute
+            $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'receiver' -NodeConnection $receiver -DoExecute:$DoExecute
+            $results += $senderAfter.Result
+            $results += $receiverAfter.Result
+
+            if ($DoExecute) {
+                if ($senderAfter.Snapshot) {
+                    $senderAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'sender-upgrade-state-after.json')
+                }
+                if ($receiverAfter.Snapshot) {
+                    $receiverAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'receiver-upgrade-state-after.json')
+                }
+
+                if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
+                    $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'sender' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                    $results += [pscustomobject]@{
+                        Label = 'sender-upgrade-state-compare'
+                        Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
+                        ExitCode = if ($senderCompare.Success) { 0 } else { 1 }
+                        Output = if ($senderCompare.Success) { 'BuddyBackup state was preserved across the upgrade.' } else { $senderCompare.Error }
+                        Success = $senderCompare.Success
+                    }
+                }
+
+                if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
+                    $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'receiver' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                    $results += [pscustomobject]@{
+                        Label = 'receiver-upgrade-state-compare'
+                        Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
+                        ExitCode = if ($receiverCompare.Success) { 0 } else { 1 }
+                        Output = if ($receiverCompare.Success) { 'BuddyBackup state was preserved across the upgrade.' } else { $receiverCompare.Error }
+                        Success = $receiverCompare.Success
+                    }
+                }
+            } else {
+                $results += [pscustomobject]@{
+                    Label = 'sender-upgrade-state-compare'
+                    Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
+                    ExitCode = 0
+                    Output = 'dry-run'
+                    Success = $true
+                }
+                $results += [pscustomobject]@{
+                    Label = 'receiver-upgrade-state-compare'
+                    Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
+                    ExitCode = 0
+                    Output = 'dry-run'
+                    Success = $true
+                }
+            }
         }
         "post-reboot" {
             $timeout = 300
@@ -1277,10 +2042,21 @@ $matrix = Get-Json -Path $MatrixConfig
 $matrixCells = @($matrix.cells)
 $totalCells = $matrixCells.Count
 
+$matrixUnraidSupport = Test-LabSupportsMatrixUnraidVersions -Lab $lab -MatrixCells $matrixCells
+if (-not $matrixUnraidSupport.Success) {
+    throw $matrixUnraidSupport.Error
+}
+
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $artifactsRoot = $lab.artifactsRoot
 if (-not $artifactsRoot) {
     $artifactsRoot = ".testlab/artifacts"
+}
+$workspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+if ([System.IO.Path]::IsPathRooted([string]$artifactsRoot)) {
+    $artifactsRoot = [System.IO.Path]::GetFullPath([string]$artifactsRoot)
+} else {
+    $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot ([string]$artifactsRoot)))
 }
 Ensure-Dir -Path $artifactsRoot
 $runDir = Join-Path $artifactsRoot $runId
@@ -1296,6 +2072,14 @@ foreach ($cell in $matrixCells) {
     $receiverPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string]$cell.receiver.plugin)
     $cell | Add-Member -NotePropertyName senderPluginRequest -NotePropertyValue $senderPluginRequest -Force
     $cell | Add-Member -NotePropertyName receiverPluginRequest -NotePropertyValue $receiverPluginRequest -Force
+    $senderUpgradeFromPlugin = [string](Get-ObjectValue -Object $cell.sender -Name 'upgradeFromPlugin')
+    if (-not [string]::IsNullOrWhiteSpace($senderUpgradeFromPlugin)) {
+        $cell | Add-Member -NotePropertyName senderUpgradeFromPluginRequest -NotePropertyValue (Resolve-LabPluginRequest -Lab $lab -RequestedValue $senderUpgradeFromPlugin) -Force
+    }
+    $receiverUpgradeFromPlugin = [string](Get-ObjectValue -Object $cell.receiver -Name 'upgradeFromPlugin')
+    if (-not [string]::IsNullOrWhiteSpace($receiverUpgradeFromPlugin)) {
+        $cell | Add-Member -NotePropertyName receiverUpgradeFromPluginRequest -NotePropertyValue (Resolve-LabPluginRequest -Lab $lab -RequestedValue $receiverUpgradeFromPlugin) -Force
+    }
     Write-Host "[testlab] Running cell $($cell.id) ($cellIndex/$totalCells) lifecycle=$($cell.lifecycle)"
     $status = "pass"
     $errors = @()
@@ -1379,10 +2163,14 @@ foreach ($cell in $matrixCells) {
         senderPluginRequested = $senderPluginRequest.requestedValue
         senderPluginResolved = $senderPluginRequest.displayVersion
         senderPluginSource = $senderPluginRequest.sourceType
+        senderUpgradeFromPluginRequested = if ($cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { [string]$cell.senderUpgradeFromPluginRequest.requestedValue } else { $null }
+        senderUpgradeFromPluginResolved = if ($cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { [string]$cell.senderUpgradeFromPluginRequest.displayVersion } else { $null }
         receiverPlugin = $receiverPluginRequest.displayVersion
         receiverPluginRequested = $receiverPluginRequest.requestedValue
         receiverPluginResolved = $receiverPluginRequest.displayVersion
         receiverPluginSource = $receiverPluginRequest.sourceType
+        receiverUpgradeFromPluginRequested = if ($cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { [string]$cell.receiverUpgradeFromPluginRequest.requestedValue } else { $null }
+        receiverUpgradeFromPluginResolved = if ($cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { [string]$cell.receiverUpgradeFromPluginRequest.displayVersion } else { $null }
         categories = @((Get-ObjectValue -Object $cell -Name "categories") | Where-Object { $null -ne $_ })
         purpose = [string](Get-ObjectValue -Object $cell -Name "purpose")
         lifecycle = $cell.lifecycle

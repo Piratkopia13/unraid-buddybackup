@@ -32,6 +32,10 @@ function ConvertTo-TestLabPublicHistoryCell {
     $receiverPluginRequested = if ($Cell.PSObject.Properties['receiverPluginRequested']) { [string]$Cell.receiverPluginRequested } else { [string]$Cell.receiverPlugin }
     $senderPluginResolved = if ($Cell.PSObject.Properties['senderPluginResolved']) { [string]$Cell.senderPluginResolved } else { [string]$Cell.senderPlugin }
     $receiverPluginResolved = if ($Cell.PSObject.Properties['receiverPluginResolved']) { [string]$Cell.receiverPluginResolved } else { [string]$Cell.receiverPlugin }
+    $senderUpgradeFromPluginRequested = if ($Cell.PSObject.Properties['senderUpgradeFromPluginRequested']) { [string]$Cell.senderUpgradeFromPluginRequested } else { $null }
+    $receiverUpgradeFromPluginRequested = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginRequested']) { [string]$Cell.receiverUpgradeFromPluginRequested } else { $null }
+    $senderUpgradeFromPluginResolved = if ($Cell.PSObject.Properties['senderUpgradeFromPluginResolved']) { [string]$Cell.senderUpgradeFromPluginResolved } else { $null }
+    $receiverUpgradeFromPluginResolved = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginResolved']) { [string]$Cell.receiverUpgradeFromPluginResolved } else { $null }
 
     return [pscustomobject]@{
         cellId = [string]$Cell.cellId
@@ -44,12 +48,16 @@ function ConvertTo-TestLabPublicHistoryCell {
             pluginRequested = $senderPluginRequested
             pluginResolved = $senderPluginResolved
             pluginSource = $senderPluginSource
+            upgradeFromPluginRequested = $senderUpgradeFromPluginRequested
+            upgradeFromPluginResolved = $senderUpgradeFromPluginResolved
         }
         receiver = [pscustomobject]@{
             unraid = [string]$Cell.receiverUnraid
             pluginRequested = $receiverPluginRequested
             pluginResolved = $receiverPluginResolved
             pluginSource = $receiverPluginSource
+            upgradeFromPluginRequested = $receiverUpgradeFromPluginRequested
+            upgradeFromPluginResolved = $receiverUpgradeFromPluginResolved
         }
     }
 }

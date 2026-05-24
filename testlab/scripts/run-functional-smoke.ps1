@@ -175,6 +175,12 @@ function Get-LocalSshIdentityFile {
     $cachedPath = Join-Path $cacheRoot $fileName
 
     Copy-Item -LiteralPath $resolvedPath -Destination $cachedPath -Force
+
+    if ($env:OS -eq 'Windows_NT') {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        & icacls $cachedPath /inheritance:r /grant:r "${currentUser}:(F)" | Out-Null
+    }
+
     return $cachedPath
 }
 

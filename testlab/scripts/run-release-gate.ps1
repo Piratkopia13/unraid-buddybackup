@@ -3,6 +3,10 @@ param(
     [string]$MatrixConfig = "testlab/config/matrix.small.json",
     [string]$MatrixProfile,
     [string]$HistoryRoot,
+    [string]$CurrentCandidatePlugin,
+    [string]$PreviousReleaseVersion,
+    [string]$PreviousCertifiedUnraidVersion,
+    [string]$LatestSupportedUnraidVersion,
     [switch]$Execute,
     [switch]$AllowDirtyWorktree,
     [switch]$SkipProvision,
@@ -64,6 +68,80 @@ function Get-WorkspaceRoot {
     return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 }
 
+function Get-SafeHostWorkingDirectory {
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path -LiteralPath $env:TEMP)) {
+        return [System.IO.Path]::GetFullPath($env:TEMP)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -and (Test-Path -LiteralPath $env:LOCALAPPDATA)) {
+        return [System.IO.Path]::GetFullPath($env:LOCALAPPDATA)
+    }
+
+    return [System.IO.Path]::GetPathRoot($env:SystemRoot)
+}
+
+function Get-TestLabPerlPath {
+    $perlCommand = Get-Command -Name "perl.exe" -ErrorAction SilentlyContinue
+    if (-not $perlCommand) {
+        $perlCommand = Get-Command -Name "perl" -ErrorAction SilentlyContinue
+    }
+    if ($perlCommand) {
+        return [string]$perlCommand.Source
+    }
+
+    $gitPerlPath = Join-Path ${env:ProgramFiles} "Git\usr\bin\perl.exe"
+    if (Test-Path -LiteralPath $gitPerlPath) {
+        return $gitPerlPath
+    }
+
+    throw "Unable to find perl.exe. Install Perl or Git for Windows so t/restrict_zfs.t can run."
+}
+
+function Invoke-RestrictZfsPreflight {
+    param([string]$WorkspaceRoot)
+
+    $testPath = Join-Path $WorkspaceRoot "t/restrict_zfs.t"
+    Require-File -Path $testPath
+
+    $perlPath = Get-TestLabPerlPath
+    $started = Get-Date
+    $previousErrorActionPreference = $ErrorActionPreference
+    $hadNativeCommandPreference = Test-Path Variable:\PSNativeCommandUseErrorActionPreference
+    if ($hadNativeCommandPreference) {
+        $previousNativeCommandUseErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+    }
+
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($hadNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+
+        $rawOutput = & $perlPath $testPath 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($hadNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandUseErrorActionPreference
+        }
+    }
+
+    $completedAt = Get-Date
+    $output = (@($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).TrimEnd()
+
+    return [pscustomobject]@{
+        name = "restrict_zfs"
+        testPath = $testPath
+        perlPath = $perlPath
+        startedAt = $started.ToString("o")
+        completedAt = $completedAt.ToString("o")
+        durationSeconds = [math]::Round((New-TimeSpan -Start $started -End $completedAt).TotalSeconds, 2)
+        exitCode = $exitCode
+        success = ($exitCode -eq 0)
+        output = $output
+    }
+}
+
 function Resolve-WorkspacePath {
     param([string]$Path)
 
@@ -84,7 +162,8 @@ function Invoke-GitCommand {
         [switch]$AllowFailure
     )
 
-    $output = (& git @Arguments 2>&1 | Out-String).TrimEnd()
+    $workspaceRoot = Get-WorkspaceRoot
+    $output = (& git -C $workspaceRoot @Arguments 2>&1 | Out-String).TrimEnd()
     $exitCode = $LASTEXITCODE
 
     if (-not $AllowFailure -and $exitCode -ne 0) {
@@ -98,14 +177,10 @@ function Invoke-GitCommand {
 }
 
 function Get-GitPreflight {
-    param([switch]$AllowDirty)
+    param()
 
     $status = Invoke-GitCommand -Arguments @("status", "--porcelain", "--untracked-files=all")
     $statusLines = @($status.Output -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($statusLines.Count -gt 0 -and -not $AllowDirty) {
-        $details = $statusLines -join [Environment]::NewLine
-        throw "Release gate requires a clean worktree. Commit, stash, or discard local changes before running tests.`n$details"
-    }
 
     $head = Invoke-GitCommand -Arguments @("rev-parse", "HEAD")
     $shortHead = Invoke-GitCommand -Arguments @("rev-parse", "--short", "HEAD")
@@ -129,6 +204,45 @@ function Get-GitPreflight {
     }
 }
 
+function Get-DirtyWorktreeAssessment {
+    param(
+        $Matrix,
+        $GitInfo,
+        [switch]$AllowDirty
+    )
+
+    $usesWorkspaceBuild = Test-MatrixUsesWorkspaceBuild -Matrix $Matrix
+    $assessment = [ordered]@{
+        usesWorkspaceBuildCandidate = $usesWorkspaceBuild
+        requiresCleanWorktree = $usesWorkspaceBuild
+        shouldBlock = $false
+        status = "pass"
+        message = $null
+    }
+
+    if ($GitInfo.clean) {
+        return [pscustomobject]$assessment
+    }
+
+    if ($AllowDirty) {
+        $assessment.status = "warning"
+        $assessment.message = "Dirty worktree override is enabled. This run should not be treated as release evidence."
+        return [pscustomobject]$assessment
+    }
+
+    if ($usesWorkspaceBuild) {
+        $details = @($GitInfo.dirtyEntries) -join [Environment]::NewLine
+        $assessment.status = "fail"
+        $assessment.shouldBlock = $true
+        $assessment.message = "Release gate requires a clean worktree when the selected matrix includes workspace-build candidates. Commit, stash, or discard local changes before running tests.`n$details"
+        return [pscustomobject]$assessment
+    }
+
+    $assessment.status = "warning"
+    $assessment.message = "Dirty worktree detected, but the selected matrix installs published BuddyBackup releases only. The run will continue, but it will not be treated as release evidence or publish repository history."
+    return [pscustomobject]$assessment
+}
+
 function Get-HistoryRoot {
     param(
         [string]$ConfiguredHistoryRoot,
@@ -150,6 +264,69 @@ function Get-HistoryRoot {
     }
 
     return Join-Path $env:LOCALAPPDATA "BuddyBackup\TestlabHistory"
+}
+
+function Set-ObjectValue {
+    param(
+        $Object,
+        [string]$Name,
+        $Value
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        $Object[$Name] = $Value
+        return
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        $property.Value = $Value
+        return
+    }
+
+    $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+}
+
+function Ensure-ReleaseGateConfig {
+    param($Lab)
+
+    $releaseGateCfg = Get-ObjectValue -Object $Lab -Name "releaseGate"
+    if ($null -ne $releaseGateCfg) {
+        return $releaseGateCfg
+    }
+
+    $releaseGateCfg = [pscustomobject]@{}
+    Set-ObjectValue -Object $Lab -Name "releaseGate" -Value $releaseGateCfg
+    return $releaseGateCfg
+}
+
+function Apply-ReleaseGateOverrides {
+    param(
+        $Lab,
+        [string]$CurrentCandidatePlugin,
+        [string]$PreviousReleaseVersion,
+        [string]$PreviousCertifiedUnraidVersion,
+        [string]$LatestSupportedUnraidVersion
+    )
+
+    $releaseGateCfg = Ensure-ReleaseGateConfig -Lab $Lab
+
+    if (-not [string]::IsNullOrWhiteSpace($CurrentCandidatePlugin)) {
+        Set-ObjectValue -Object $releaseGateCfg -Name "currentCandidatePlugin" -Value $CurrentCandidatePlugin
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PreviousReleaseVersion)) {
+        Set-ObjectValue -Object $releaseGateCfg -Name "previousReleaseVersion" -Value $PreviousReleaseVersion
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PreviousCertifiedUnraidVersion)) {
+        Set-ObjectValue -Object $releaseGateCfg -Name "previousCertifiedUnraidVersion" -Value $PreviousCertifiedUnraidVersion
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LatestSupportedUnraidVersion)) {
+        Set-ObjectValue -Object $releaseGateCfg -Name "latestSupportedUnraidVersion" -Value $LatestSupportedUnraidVersion
+    }
 }
 
 function Get-VersionPolicyMode {
@@ -178,6 +355,62 @@ function Test-MatrixUsesWorkspaceBuild {
     }
 
     return $false
+}
+
+function Test-LabSupportsMatrixUnraidVersions {
+    param(
+        $Lab,
+        $Matrix
+    )
+
+    $provider = [string](Get-ObjectValue -Object $Lab -Name 'provider')
+    $supportedProviders = @('windows-local', 'windows-wsl-qemu', 'manual')
+    if ($provider -notin $supportedProviders) {
+        return [pscustomobject]@{
+            Success = $true
+            Error = $null
+        }
+    }
+
+    $cells = @($Matrix.cells)
+    $mismatches = @()
+    foreach ($nodeName in @('sender', 'receiver')) {
+        $labNode = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -Name $nodeName
+        $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
+        if ([string]::IsNullOrWhiteSpace($labVersion)) {
+            continue
+        }
+
+        $cellVersions = @($cells | ForEach-Object { [string](Get-ObjectValue -Object (Get-ObjectValue -Object $_ -Name $nodeName) -Name 'unraid') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -Unique)
+
+        foreach ($cellVersion in $cellVersions) {
+            if ($cellVersion -ne $labVersion) {
+                $mismatches += [pscustomobject]@{
+                    node = $nodeName
+                    labVersion = $labVersion
+                    matrixVersion = $cellVersion
+                }
+            }
+        }
+    }
+
+    if ($mismatches.Count -eq 0) {
+        return [pscustomobject]@{
+            Success = $true
+            Error = $null
+        }
+    }
+
+    $details = @($mismatches | ForEach-Object {
+        "node=$($_.node) lab=$($_.labVersion) matrix=$($_.matrixVersion)"
+    }) -join '; '
+
+    return [pscustomobject]@{
+        Success = $false
+        Error = "This release-gate run cannot vary Unraid versions per matrix cell. The current provider '$provider' uses the already provisioned lab node versions from the lab config, but the matrix requests different Unraid versions: $details. Provision nodes that match the matrix, or run separate release-gate executions per Unraid baseline instead of mixing them in one run."
+    }
 }
 
 function Get-VersionPolicyAssessment {
@@ -308,11 +541,15 @@ function Get-ResultCellSummary {
             senderPluginRequested = if ($_.PSObject.Properties['senderPluginRequested']) { [string]$_.senderPluginRequested } else { [string]$_.senderPlugin }
             senderPluginResolved = if ($_.PSObject.Properties['senderPluginResolved']) { [string]$_.senderPluginResolved } else { [string]$_.senderPlugin }
             senderPluginSource = if ($_.PSObject.Properties['senderPluginSource']) { [string]$_.senderPluginSource } else { "release-tag" }
+            senderUpgradeFromPluginRequested = if ($_.PSObject.Properties['senderUpgradeFromPluginRequested']) { [string]$_.senderUpgradeFromPluginRequested } else { $null }
+            senderUpgradeFromPluginResolved = if ($_.PSObject.Properties['senderUpgradeFromPluginResolved']) { [string]$_.senderUpgradeFromPluginResolved } else { $null }
             receiverUnraid = [string]$_.receiverUnraid
             receiverPlugin = [string]$_.receiverPlugin
             receiverPluginRequested = if ($_.PSObject.Properties['receiverPluginRequested']) { [string]$_.receiverPluginRequested } else { [string]$_.receiverPlugin }
             receiverPluginResolved = if ($_.PSObject.Properties['receiverPluginResolved']) { [string]$_.receiverPluginResolved } else { [string]$_.receiverPlugin }
             receiverPluginSource = if ($_.PSObject.Properties['receiverPluginSource']) { [string]$_.receiverPluginSource } else { "release-tag" }
+            receiverUpgradeFromPluginRequested = if ($_.PSObject.Properties['receiverUpgradeFromPluginRequested']) { [string]$_.receiverUpgradeFromPluginRequested } else { $null }
+            receiverUpgradeFromPluginResolved = if ($_.PSObject.Properties['receiverUpgradeFromPluginResolved']) { [string]$_.receiverUpgradeFromPluginResolved } else { $null }
             categories = if ($_.PSObject.Properties['categories']) { @($_.categories) } else { @() }
             purpose = if ($_.PSObject.Properties['purpose']) { [string]$_.purpose } else { $null }
             lifecycle = [string]$_.lifecycle
@@ -426,6 +663,7 @@ Require-File -Path $provisionScript
 Require-File -Path $matrixScript
 
 $lab = Get-Json -Path $resolvedLabConfig
+Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePlugin -PreviousReleaseVersion $PreviousReleaseVersion -PreviousCertifiedUnraidVersion $PreviousCertifiedUnraidVersion -LatestSupportedUnraidVersion $LatestSupportedUnraidVersion
 $resolvedMatrixProfile = $null
 if (-not [string]::IsNullOrWhiteSpace($MatrixProfile)) {
     $generatedMatrix = Write-TestLabReleaseMatrixFile -WorkspaceRoot $workspaceRoot -Lab $lab -ProfileName $MatrixProfile
@@ -442,10 +680,11 @@ $historyDir = $null
 $releaseGateRunId = $null
 $manifestPath = $null
 
-Push-Location $workspaceRoot
+$safeWorkingDirectory = Get-SafeHostWorkingDirectory
+Push-Location $safeWorkingDirectory
 try {
     $startedAt = Get-Date
-    $gitInfo = Get-GitPreflight -AllowDirty:$AllowDirtyWorktree
+    $gitInfo = Get-GitPreflight
     $historyRootPath = Get-HistoryRoot -ConfiguredHistoryRoot $HistoryRoot -Lab $lab
     Ensure-Dir -Path $historyRootPath
 
@@ -461,11 +700,19 @@ try {
     if ([string]::IsNullOrWhiteSpace($resolvedMatrixProfile)) {
         $resolvedMatrixProfile = $matrixProfile
     }
+    $matrixUnraidSupport = Test-LabSupportsMatrixUnraidVersions -Lab $lab -Matrix $matrix
+    if (-not $matrixUnraidSupport.Success) {
+        throw $matrixUnraidSupport.Error
+    }
+    $dirtyWorktreeAssessment = Get-DirtyWorktreeAssessment -Matrix $matrix -GitInfo $gitInfo -AllowDirty:$AllowDirtyWorktree
     $versionPolicyAssessment = Get-VersionPolicyAssessment -Lab $lab -Matrix $matrix -PluginDisplayVersion $pluginDisplayVersion -GitInfo $gitInfo -DoExecute:$Execute -AllowDirty:$AllowDirtyWorktree
 
     Write-Host "[testlab] Release gate preflight passed for commit $($gitInfo.shortSha) on branch $($gitInfo.branch)"
-    if (-not $gitInfo.clean) {
-        Write-Warning "Dirty worktree override is enabled. This run should not be treated as a release candidate."
+    if ($dirtyWorktreeAssessment.status -eq "warning") {
+        Write-Warning $dirtyWorktreeAssessment.message
+    }
+    if ($dirtyWorktreeAssessment.shouldBlock) {
+        throw $dirtyWorktreeAssessment.message
     }
     if ($versionPolicyAssessment.status -eq "warning") {
         Write-Warning $versionPolicyAssessment.message
@@ -474,6 +721,14 @@ try {
         throw $versionPolicyAssessment.message
     }
     Write-Host "[testlab] History root: $historyRootPath"
+
+    Write-Host "[testlab] Running restrict_zfs preflight"
+    $restrictZfsPreflight = Invoke-RestrictZfsPreflight -WorkspaceRoot $workspaceRoot
+    $restrictZfsPreflightPath = Join-Path $historyDir "restrict-zfs-preflight.json"
+    $restrictZfsPreflight | ConvertTo-Json -Depth 6 | Set-Content -Path $restrictZfsPreflightPath
+    if (-not $restrictZfsPreflight.success) {
+        throw "restrict_zfs preflight failed. Review $restrictZfsPreflightPath"
+    }
 
     $provisionStartedAt = $null
     $matrixStartedAt = $null
@@ -619,10 +874,21 @@ try {
             displayVersion = $pluginDisplayVersion
         }
         versionPolicy = $versionPolicyAssessment
+        dirtyWorktreePolicy = $dirtyWorktreeAssessment
+        preflight = [ordered]@{
+            restrictZfs = $restrictZfsPreflight
+            restrictZfsPath = $restrictZfsPreflightPath
+        }
         inputs = [ordered]@{
             labConfig = $resolvedLabConfig
             matrixConfig = $resolvedMatrixConfig
             matrixProfile = $resolvedMatrixProfile
+            releaseGateOverrides = [ordered]@{
+                currentCandidatePlugin = $CurrentCandidatePlugin
+                previousReleaseVersion = $PreviousReleaseVersion
+                previousCertifiedUnraidVersion = $PreviousCertifiedUnraidVersion
+                latestSupportedUnraidVersion = $LatestSupportedUnraidVersion
+            }
         }
         outputs = [ordered]@{
             provisionReportPath = $provisionReportPath

@@ -95,6 +95,11 @@ function Get-LocalSshIdentityFile {
 
     Copy-Item -LiteralPath $resolvedPath -Destination $cachedPath -Force
 
+    if ($env:OS -eq 'Windows_NT') {
+        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        & icacls $cachedPath /inheritance:r /grant:r "${currentUser}:(F)" | Out-Null
+    }
+
     return $cachedPath
 }
 
@@ -808,6 +813,49 @@ echo "encrypted_dataset_encryption=$encryption_value"
     }
 }
 
+function Invoke-PostProvisionNodeSshCheck {
+    param(
+        [string]$NodeName,
+        $NodeConnection,
+        [int]$Attempts = 10,
+        [int]$RetryDelaySeconds = 3,
+        [switch]$DoExecute
+    )
+
+    $attemptCount = [Math]::Max($Attempts, 1)
+    $attemptResults = @()
+    for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
+        $probeResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command "echo probe-ok; uname -a" -Label "post-provision-ssh-check" -PreviewCommand "post-provision SSH reachability check" -DoExecute:$DoExecute
+        $attemptResults += [pscustomobject]@{
+            attempt = $attempt
+            success = $probeResult.success
+            exitCode = $probeResult.exitCode
+            output = @($probeResult.output)
+        }
+
+        if ($probeResult.success) {
+            return [pscustomobject]@{
+                success = $true
+                exitCode = $probeResult.exitCode
+                output = @($probeResult.output)
+                attempts = @($attemptResults)
+            }
+        }
+
+        if ($DoExecute -and $attempt -lt $attemptCount) {
+            Start-Sleep -Seconds $RetryDelaySeconds
+        }
+    }
+
+    $lastAttempt = $attemptResults[-1]
+    return [pscustomobject]@{
+        success = $false
+        exitCode = $lastAttempt.exitCode
+        output = @($lastAttempt.output)
+        attempts = @($attemptResults)
+    }
+}
+
 function Stop-WslLabInstance {
     param(
         [string]$Distro,
@@ -1007,6 +1055,7 @@ try {
             manualAccess        = $null
             baseSetupApplied    = $false
             baseSetup           = $null
+            postProvisionSshCheck = $null
         }
 
         if ($Execute) {
@@ -1070,6 +1119,33 @@ try {
         }
 
         $report.nodes += [pscustomobject]$nodeEntry
+    }
+
+    if ($Execute) {
+        foreach ($nodeReport in @($report.nodes)) {
+            $nodeName = [string]$nodeReport.node
+            $node = Get-ObjectValue -Object $lab.nodes -Name $nodeName
+            if (-not $node) {
+                continue
+            }
+
+            $nodeConnection = Resolve-NodeConnection -Lab $lab -Node $node
+            Write-Host "[testlab] Rechecking SSH stability on $nodeName"
+            $postProvisionSshCheck = Invoke-PostProvisionNodeSshCheck -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute
+            $nodeReport.postProvisionSshCheck = $postProvisionSshCheck
+            if ($postProvisionSshCheck.success) {
+                Write-Host "[testlab] Node $nodeName remained reachable after local provisioning"
+                continue
+            }
+
+            $attemptSummary = @($postProvisionSshCheck.attempts | ForEach-Object { "attempt=$($_.attempt) exit=$($_.exitCode)" }) -join '; '
+            $probeOutput = (($postProvisionSshCheck.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+            if ([string]::IsNullOrWhiteSpace($probeOutput)) {
+                throw "Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary"
+            }
+
+            throw "Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary`n$probeOutput"
+        }
     }
 
     $report.success = $true

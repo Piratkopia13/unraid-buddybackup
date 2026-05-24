@@ -497,7 +497,7 @@ if ! command -v ssh >/dev/null 2>&1; then
 fi
 
 chmod 600 "$private_key_path"
-ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$private_key_path" -p "$host_ssh_port" root@127.0.0.1 "echo ready"
+ssh -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i "$private_key_path" -p "$host_ssh_port" root@127.0.0.1 "echo ready"
 '@
 
 function Test-WslSshReady {

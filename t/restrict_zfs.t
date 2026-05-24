@@ -1,17 +1,43 @@
 use strict;
 use warnings;
 
+use Cwd qw(getcwd);
+use File::Basename qw(dirname);
 use File::Spec;
 use FindBin qw($Bin);
 use IPC::Open3 qw(open3);
 use Symbol qw(gensym);
 use Test::More;
 
-my $script = File::Spec->rel2abs(File::Spec->catfile(
-    $Bin, '..', 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'deps', 'restrict_zfs'
-));
+my @repo_root_candidates;
+for my $anchor (
+    dirname(File::Spec->rel2abs($0)),
+    File::Spec->rel2abs($Bin),
+    getcwd(),
+) {
+    next if !defined $anchor || $anchor eq q{};
+
+    for my $candidate_root ($anchor, dirname($anchor)) {
+        next if !defined $candidate_root || $candidate_root eq q{};
+        next if grep { $_ eq $candidate_root } @repo_root_candidates;
+        push @repo_root_candidates, $candidate_root;
+    }
+}
+
+my $script;
+for my $candidate_root (@repo_root_candidates) {
+    my $candidate_script = File::Spec->catfile(
+        $candidate_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'deps', 'restrict_zfs'
+    );
+    if (-f $candidate_script) {
+        $script = $candidate_script;
+        last;
+    }
+}
 
 ok(-f $script, 'restrict_zfs script exists');
+
+BAIL_OUT('Unable to locate restrict_zfs script from test path or current working directory') if !$script;
 
 my $script_source = do {
     open my $fh, '<', $script or die "Unable to read $script: $!";
