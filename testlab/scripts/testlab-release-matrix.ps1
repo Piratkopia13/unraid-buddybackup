@@ -152,6 +152,18 @@ function Get-TestLabReleaseMatrixDefinition {
                 )
             }
         }
+        { $_ -in @("release-mixed-unraid", "mixed-unraid") } {
+            return [ordered]@{
+                name = "release-mixed-unraid"
+                description = "Optional mixed-version release profile pairing the previous certified Unraid version on the sender lab slot with the latest supported Unraid version on the receiver lab slot, while still exercising BuddyBackup interoperability and upgrade preservation within that fixed slot pair."
+                mode = "report-only"
+                cells = @(
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-prev-to-current" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the previous release on the sender lab slot and the current candidate on the receiver lab slot."),
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-current-to-prev" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the current candidate on the sender lab slot and the previous release on the receiver lab slot."),
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-upgrade-preserves-config" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair where both lab slots upgrade in place from the previous release and then still pass backup and restore smoke.")
+                )
+            }
+        }
         { $_ -in @("release-latest-unraid-isolation", "latest-isolation") } {
             return [ordered]@{
                 name = "release-latest-unraid-isolation"
@@ -185,7 +197,7 @@ function Get-TestLabReleaseMatrixDefinition {
             }
         }
         default {
-            throw "Unknown release matrix profile '$ProfileName'. Supported profiles: release-default, release-latest-unraid-isolation, release-post-reboot, release-extended."
+            throw "Unknown release matrix profile '$ProfileName'. Supported profiles: release-default, release-mixed-unraid, release-latest-unraid-isolation, release-post-reboot, release-extended."
         }
     }
 }

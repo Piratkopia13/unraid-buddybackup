@@ -173,12 +173,13 @@ This initial implementation provides:
 
 - `run-release-gate.ps1` accepts `-MatrixProfile` for release-oriented generated matrices.
 - `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup in both sender/receiver directions plus one in-place `upgrade-preserves-config` cell on each Unraid baseline.
+- `release-mixed-unraid`: an optional mixed-version profile. It keeps the previous certified Unraid version on the sender lab slot and the latest supported Unraid version on the receiver lab slot, then runs previous/current BuddyBackup interoperability plus mixed-pair `upgrade-preserves-config` coverage within that fixed slot pairing.
 - `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
 - `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
 - The matrix schema still names the two lab slots `sender` and `receiver`, but those are stable provisioning labels rather than exclusive backup-direction roles.
 - Current limitation: the existing providers provision one fixed sender lab slot and one fixed receiver lab slot from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.sender.unraidVersion` and `lab.nodes.receiver.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
-- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, or extend the harness later to reprovision between cells.
+- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, use `release-mixed-unraid` when your lab already provisions different versions on the two fixed slots, or extend the harness later to reprovision between cells.
 - Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
 - Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
 
