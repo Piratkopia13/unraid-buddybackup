@@ -1,7 +1,9 @@
 # Release Test History
 
-Successful clean execute release-gate runs are recorded here so the public repository shows which BuddyBackup and Unraid compatibility combinations have been exercised.
+Successful execute release-gate runs are recorded here when they either use a clean worktree or install published BuddyBackup releases only.
 
 ## Runs
 
-No successful clean execute release-gate runs have been published yet.
+| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Coverage | Unraid Coverage | Detail |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 20260524-214246-3317e40 | 2026.05.02 | 3317e40 | release-default | pass | pass | 2025.09.13 (release-tag) -> 2026.05.02 (release-tag); 2026.05.02 (release-tag) -> 2025.09.13 (release-tag); 2026.05.02 (release-tag) -> 2026.05.02 (release-tag) | 7.2.6 -> 7.2.6 | [detail](runs/20260524-214246-3317e40.json) |

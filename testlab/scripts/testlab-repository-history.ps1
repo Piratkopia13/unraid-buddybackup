@@ -119,14 +119,14 @@ function Write-TestLabRepositoryHistoryReadme {
     $lines = @(
         "# Release Test History",
         "",
-        "Successful clean execute release-gate runs are recorded here so the public repository shows which BuddyBackup and Unraid compatibility combinations have been exercised.",
+        "Successful execute release-gate runs are recorded here when they either use a clean worktree or install published BuddyBackup releases only.",
         "",
         "## Runs",
         ""
     )
 
     if ($sortedEntries.Count -eq 0) {
-        $lines += "No successful clean execute release-gate runs have been published yet."
+        $lines += "No successful publishable execute release-gate runs have been recorded yet."
     } else {
         $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Coverage | Unraid Coverage | Detail |"
         $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"

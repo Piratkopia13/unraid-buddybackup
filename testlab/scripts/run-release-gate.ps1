@@ -239,7 +239,7 @@ function Get-DirtyWorktreeAssessment {
     }
 
     $assessment.status = "warning"
-    $assessment.message = "Dirty worktree detected, but the selected matrix installs published BuddyBackup releases only. The run will continue, but it will not be treated as release evidence or publish repository history."
+    $assessment.message = "Dirty worktree detected, but the selected matrix installs published BuddyBackup releases only. The run will continue, and a successful execute run may still publish repository history because the installed BuddyBackup artifacts come from published release URLs."
     return [pscustomobject]$assessment
 }
 
@@ -845,10 +845,15 @@ try {
         $overallStatus = "fail"
     }
 
-    $publishRepositoryHistory = ($overallStatus -eq "pass" -and $Execute -and $gitInfo.clean -and -not $AllowDirtyWorktree)
+    $publishRepositoryHistory = (
+        $overallStatus -eq "pass" -and
+        $Execute -and
+        -not $AllowDirtyWorktree -and
+        ($gitInfo.clean -or -not $dirtyWorktreeAssessment.requiresCleanWorktree)
+    )
     $repositoryHistory = [ordered]@{
         published = $false
-        reason = if ($publishRepositoryHistory) { $null } else { "Repository history is only published for successful clean execute runs." }
+        reason = if ($publishRepositoryHistory) { $null } else { "Repository history is only published for successful execute runs that do not use the dirty-worktree override and either use a clean worktree or install published BuddyBackup releases only." }
         readmePath = $null
         indexPath = $null
         detailPath = $null

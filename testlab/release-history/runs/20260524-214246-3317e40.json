@@ -1,4 +1,5 @@
 {
+    "schemaVersion":  1,
     "releaseGateRunId":  "20260524-214246-3317e40",
     "startedAt":  "2026-05-24T21:42:46.5268628+02:00",
     "completedAt":  "2026-05-24T21:45:02.6448067+02:00",
@@ -7,47 +8,48 @@
     "commitSha":  "3317e4051662d233f8e9d8e16f3bf0b5719ff84a",
     "shortSha":  "3317e40",
     "branch":  "testlab/main",
-    "totalCells":  6,
-    "passCells":  6,
-    "failCells":  0,
-    "categoryRollups":  [
-                            {
-                                "category":  "pluginCompatibility",
-                                "totalCells":  6,
-                                "passCells":  6,
-                                "failCells":  0,
-                                "status":  "pass",
-                                "cellIds":  [
-                                                "prev-certified-prev-to-current",
-                                                "prev-certified-current-to-prev",
-                                                "latest-supported-prev-to-current",
-                                                "latest-supported-current-to-prev",
-                                                "prev-certified-upgrade-preserves-config",
-                                                "latest-supported-upgrade-preserves-config"
-                                            ]
-                            },
-                            {
-                                "category":  "unraidCompatibility",
-                                "totalCells":  3,
-                                "passCells":  3,
-                                "failCells":  0,
-                                "status":  "pass",
-                                "cellIds":  [
-                                                "latest-supported-prev-to-current",
-                                                "latest-supported-current-to-prev",
-                                                "latest-supported-upgrade-preserves-config"
-                                            ]
-                            }
-                        ],
-    "pluginCoverage":  [
-                           "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
-                           "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
-                           "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
-                       ],
-    "unraidCoverage":  [
-                           "7.2.6 -\u003e 7.2.6"
-                       ],
-    "detailPath":  "runs/20260524-214246-3317e40.json",
+    "summary":  {
+                    "totalCells":  6,
+                    "passCells":  6,
+                    "failCells":  0,
+                    "categoryRollups":  [
+                                            {
+                                                "category":  "pluginCompatibility",
+                                                "totalCells":  6,
+                                                "passCells":  6,
+                                                "failCells":  0,
+                                                "status":  "pass",
+                                                "cellIds":  [
+                                                                "prev-certified-prev-to-current",
+                                                                "prev-certified-current-to-prev",
+                                                                "latest-supported-prev-to-current",
+                                                                "latest-supported-current-to-prev",
+                                                                "prev-certified-upgrade-preserves-config",
+                                                                "latest-supported-upgrade-preserves-config"
+                                                            ]
+                                            },
+                                            {
+                                                "category":  "unraidCompatibility",
+                                                "totalCells":  3,
+                                                "passCells":  3,
+                                                "failCells":  0,
+                                                "status":  "pass",
+                                                "cellIds":  [
+                                                                "latest-supported-prev-to-current",
+                                                                "latest-supported-current-to-prev",
+                                                                "latest-supported-upgrade-preserves-config"
+                                                            ]
+                                            }
+                                        ],
+                    "pluginCoverage":  [
+                                           "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
+                                           "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
+                                           "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
+                                       ],
+                    "unraidCoverage":  [
+                                           "7.2.6 -\u003e 7.2.6"
+                                       ]
+                },
     "cells":  [
                   {
                       "cellId":  "prev-certified-prev-to-current",

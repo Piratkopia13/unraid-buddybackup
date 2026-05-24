@@ -111,7 +111,7 @@ This initial implementation provides:
 
    The release gate refuses to start if the git worktree is dirty. It records the tested commit SHA, branch, matrix profile, and copied run summaries under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory` unless you override `releaseGate.historyRoot` in the lab config or pass `-HistoryRoot`.
 
-   On successful clean execute runs, the wrapper also publishes a sanitized public summary into `testlab/release-history` so release coverage remains visible in the Git repository.
+   On successful execute runs, the wrapper also publishes a sanitized public summary into `testlab/release-history` when the run either uses a clean worktree or installs published BuddyBackup releases only.
 
 11. To run a generated release profile against a published BuddyBackup release instead of the current workspace build, pass release-gate overrides on the command line:
 
@@ -145,8 +145,8 @@ This initial implementation provides:
 - In the example lab config, `setup.applyBaseConfigAfterSsh` and `setup.verifyBaseConfigInMatrix` are both `true`, so local provisioning applies BuddyBackup and ZFS base setup by default and each matrix cell runs `base-setup-verify` before its listed scenarios.
 - Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
 - `run-release-gate.ps1` still fails immediately on any uncommitted or untracked git changes when the selected matrix includes a `workspace-build` candidate, because the tested BuddyBackup artifact comes from the current checkout in that mode.
-- For release-tag-only matrices, dirty worktrees now warn instead of blocking because the installed BuddyBackup artifacts come from published release URLs. Those runs still are not treated as release evidence, and they do not publish repository history. `-AllowDirtyWorktree` remains available as an explicit override when you want to suppress the workspace-build cleanliness guard during harness development.
-- `run-release-gate.ps1` only publishes repository history for successful clean execute runs. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
+- For release-tag-only matrices, dirty worktrees now warn instead of blocking because the installed BuddyBackup artifacts come from published release URLs. Successful execute runs in that mode still publish repository history. `-AllowDirtyWorktree` remains available as an explicit override when you want to suppress the workspace-build cleanliness guard during harness development.
+- `run-release-gate.ps1` only publishes repository history for successful execute runs that do not use `-AllowDirtyWorktree` and either have a clean worktree or install published BuddyBackup releases only. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
 - Release-gate manifests now include `categoryRollups`, and published repository history shows per-category pass/fail columns such as `pluginCompatibility` and `unraidCompatibility` when the selected matrix defines categories.
 
 ## Test catalog
@@ -217,7 +217,7 @@ This initial implementation provides:
 - The current local provider boots two Unraid guests (`sender` and `receiver`) through WSL/QEMU.
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
 - Release-gate history is written outside the workspace by default under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory`, so results can persist across multiple release cycles even if `.testlab` is cleaned.
-- Public release history is written inside the repository under `testlab/release-history` only after successful clean execute release-gate runs.
+- Public release history is written inside the repository under `testlab/release-history` only after successful execute release-gate runs that either have a clean worktree or install published BuddyBackup releases only.
 - Public release history includes category-level compatibility status columns when the release matrix annotates cells with categories.
 - The `windows-local` provider targets WSL2 plus QEMU/KVM.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
