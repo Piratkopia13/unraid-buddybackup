@@ -1383,6 +1383,8 @@ foreach ($cell in $matrixCells) {
         receiverPluginRequested = $receiverPluginRequest.requestedValue
         receiverPluginResolved = $receiverPluginRequest.displayVersion
         receiverPluginSource = $receiverPluginRequest.sourceType
+        categories = @((Get-ObjectValue -Object $cell -Name "categories") | Where-Object { $null -ne $_ })
+        purpose = [string](Get-ObjectValue -Object $cell -Name "purpose")
         lifecycle = $cell.lifecycle
         status = $status
         errors = $errors

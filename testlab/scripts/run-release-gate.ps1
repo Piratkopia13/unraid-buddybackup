@@ -1,6 +1,7 @@
 param(
     [string]$LabConfig = "testlab/config/lab.local.json",
     [string]$MatrixConfig = "testlab/config/matrix.small.json",
+    [string]$MatrixProfile,
     [string]$HistoryRoot,
     [switch]$Execute,
     [switch]$AllowDirtyWorktree,
@@ -13,6 +14,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "testlab-logging.ps1")
 . (Join-Path $PSScriptRoot "testlab-plugin-source.ps1")
 . (Join-Path $PSScriptRoot "testlab-repository-history.ps1")
+. (Join-Path $PSScriptRoot "testlab-release-matrix.ps1")
 
 function Require-File {
     param([string]$Path)
@@ -150,6 +152,101 @@ function Get-HistoryRoot {
     return Join-Path $env:LOCALAPPDATA "BuddyBackup\TestlabHistory"
 }
 
+function Get-VersionPolicyMode {
+    param($Lab)
+
+    $releaseGateCfg = Get-ObjectValue -Object $Lab -Name "releaseGate"
+    $versionPolicyCfg = Get-ObjectValue -Object $releaseGateCfg -Name "versionPolicy"
+    $mode = [string](Get-ObjectValue -Object $versionPolicyCfg -Name "mode")
+    if ([string]::IsNullOrWhiteSpace($mode)) {
+        return "require"
+    }
+
+    return $mode.Trim().ToLowerInvariant()
+}
+
+function Test-MatrixUsesWorkspaceBuild {
+    param($Matrix)
+
+    $cells = @($Matrix.cells)
+    foreach ($cell in $cells) {
+        $senderPlugin = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $cell -Name "sender") -Name "plugin")
+        $receiverPlugin = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $cell -Name "receiver") -Name "plugin")
+        if ($senderPlugin -match '^(?i)(workspace-build|current-commit)$' -or $receiverPlugin -match '^(?i)(workspace-build|current-commit)$') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-VersionPolicyAssessment {
+    param(
+        $Lab,
+        $Matrix,
+        [string]$PluginDisplayVersion,
+        $GitInfo,
+        [switch]$DoExecute,
+        [switch]$AllowDirty
+    )
+
+    $releaseGateCfg = Get-ObjectValue -Object $Lab -Name "releaseGate"
+    $previousReleaseVersion = [string](Get-ObjectValue -Object $releaseGateCfg -Name "previousReleaseVersion")
+    $mode = Get-VersionPolicyMode -Lab $Lab
+    $usesWorkspaceBuild = Test-MatrixUsesWorkspaceBuild -Matrix $Matrix
+    $enforcementActive = ([bool]$DoExecute -and [bool]$GitInfo.clean -and -not [bool]$AllowDirty)
+
+    $assessment = [ordered]@{
+        mode = $mode
+        enforcementActive = $enforcementActive
+        usesWorkspaceBuildCandidate = $usesWorkspaceBuild
+        previousReleaseVersion = $previousReleaseVersion
+        currentDisplayVersion = $PluginDisplayVersion
+        isVersionBumped = $null
+        status = "not-applicable"
+        message = $null
+        shouldBlock = $false
+    }
+
+    if (-not $usesWorkspaceBuild) {
+        $assessment.status = "not-applicable"
+        $assessment.message = "Version bump policy is not applicable because the selected matrix does not include a workspace-build candidate."
+        return [pscustomobject]$assessment
+    }
+
+    if ([string]::IsNullOrWhiteSpace($previousReleaseVersion)) {
+        $assessment.status = "warning"
+        $assessment.message = "Version bump policy could not compare the current candidate because lab.releaseGate.previousReleaseVersion is not configured."
+        return [pscustomobject]$assessment
+    }
+
+    $isVersionBumped = ($PluginDisplayVersion -ne $previousReleaseVersion)
+    $assessment.isVersionBumped = $isVersionBumped
+    if ($isVersionBumped) {
+        $assessment.status = "pass"
+        $assessment.message = "Current candidate display version $PluginDisplayVersion differs from previous release version $previousReleaseVersion."
+        return [pscustomobject]$assessment
+    }
+
+    switch ($mode) {
+        "ignore" {
+            $assessment.status = "ignored"
+            $assessment.message = "Current candidate display version matches previous release version $previousReleaseVersion, but version policy mode is ignore."
+        }
+        "warn" {
+            $assessment.status = "warning"
+            $assessment.message = "Current candidate display version still matches previous release version $previousReleaseVersion. Bump buddybackup.plg before a real release if you want a distinct release identity."
+        }
+        default {
+            $assessment.status = if ($enforcementActive) { "fail" } else { "warning" }
+            $assessment.message = "Current candidate display version still matches previous release version $previousReleaseVersion. Clean execute release-gate runs require buddybackup.plg to be bumped or releaseGate.versionPolicy.mode to be relaxed."
+            $assessment.shouldBlock = $enforcementActive
+        }
+    }
+
+    return [pscustomobject]$assessment
+}
+
 function Get-LatestMatchingFile {
     param(
         [string]$Directory,
@@ -216,10 +313,61 @@ function Get-ResultCellSummary {
             receiverPluginRequested = if ($_.PSObject.Properties['receiverPluginRequested']) { [string]$_.receiverPluginRequested } else { [string]$_.receiverPlugin }
             receiverPluginResolved = if ($_.PSObject.Properties['receiverPluginResolved']) { [string]$_.receiverPluginResolved } else { [string]$_.receiverPlugin }
             receiverPluginSource = if ($_.PSObject.Properties['receiverPluginSource']) { [string]$_.receiverPluginSource } else { "release-tag" }
+            categories = if ($_.PSObject.Properties['categories']) { @($_.categories) } else { @() }
+            purpose = if ($_.PSObject.Properties['purpose']) { [string]$_.purpose } else { $null }
             lifecycle = [string]$_.lifecycle
             artifactDir = [string]$_.artifactDir
         }
     })
+}
+
+function Get-CategoryRollups {
+    param([object[]]$Cells)
+
+    $categoryIndex = [ordered]@{}
+    foreach ($cell in @($Cells)) {
+        $cellCategories = @()
+        if ($cell.PSObject.Properties['categories']) {
+            $cellCategories = @($cell.categories | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        }
+
+        foreach ($categoryName in $cellCategories) {
+            $normalizedName = [string]$categoryName
+            if (-not $categoryIndex.Contains($normalizedName)) {
+                $categoryIndex[$normalizedName] = [ordered]@{
+                    category = $normalizedName
+                    totalCells = 0
+                    passCells = 0
+                    failCells = 0
+                    status = "not-run"
+                    cellIds = @()
+                }
+            }
+
+            $entry = $categoryIndex[$normalizedName]
+            $entry.totalCells += 1
+            $entry.cellIds += [string]$cell.cellId
+            if (([string]$cell.status).ToLowerInvariant() -eq "pass") {
+                $entry.passCells += 1
+            } else {
+                $entry.failCells += 1
+            }
+        }
+    }
+
+    foreach ($entry in $categoryIndex.Values) {
+        if ($entry.totalCells -eq 0) {
+            $entry.status = "not-run"
+        } elseif ($entry.failCells -gt 0) {
+            $entry.status = "fail"
+        } elseif ($entry.passCells -eq $entry.totalCells) {
+            $entry.status = "pass"
+        } else {
+            $entry.status = "partial"
+        }
+    }
+
+    return @($categoryIndex.Values | ForEach-Object { [pscustomobject]$_ })
 }
 
 function Update-HistoryIndex {
@@ -269,16 +417,25 @@ function Update-HistoryIndex {
 
 $workspaceRoot = Get-WorkspaceRoot
 $resolvedLabConfig = Resolve-WorkspacePath -Path $LabConfig
-$resolvedMatrixConfig = Resolve-WorkspacePath -Path $MatrixConfig
+$resolvedMatrixConfig = $null
 $provisionScript = Join-Path $PSScriptRoot "provision-lab.ps1"
 $matrixScript = Join-Path $PSScriptRoot "run-matrix.ps1"
 
 Require-File -Path $resolvedLabConfig
-Require-File -Path $resolvedMatrixConfig
 Require-File -Path $provisionScript
 Require-File -Path $matrixScript
 
 $lab = Get-Json -Path $resolvedLabConfig
+$resolvedMatrixProfile = $null
+if (-not [string]::IsNullOrWhiteSpace($MatrixProfile)) {
+    $generatedMatrix = Write-TestLabReleaseMatrixFile -WorkspaceRoot $workspaceRoot -Lab $lab -ProfileName $MatrixProfile
+    $resolvedMatrixConfig = $generatedMatrix.filePath
+    $resolvedMatrixProfile = $generatedMatrix.profileName
+} else {
+    $resolvedMatrixConfig = Resolve-WorkspacePath -Path $MatrixConfig
+    Require-File -Path $resolvedMatrixConfig
+}
+
 $matrix = Get-Json -Path $resolvedMatrixConfig
 $historyRootPath = $null
 $historyDir = $null
@@ -301,10 +458,20 @@ try {
     if ([string]::IsNullOrWhiteSpace($matrixProfile)) {
         $matrixProfile = [System.IO.Path]::GetFileNameWithoutExtension($resolvedMatrixConfig)
     }
+    if ([string]::IsNullOrWhiteSpace($resolvedMatrixProfile)) {
+        $resolvedMatrixProfile = $matrixProfile
+    }
+    $versionPolicyAssessment = Get-VersionPolicyAssessment -Lab $lab -Matrix $matrix -PluginDisplayVersion $pluginDisplayVersion -GitInfo $gitInfo -DoExecute:$Execute -AllowDirty:$AllowDirtyWorktree
 
     Write-Host "[testlab] Release gate preflight passed for commit $($gitInfo.shortSha) on branch $($gitInfo.branch)"
     if (-not $gitInfo.clean) {
         Write-Warning "Dirty worktree override is enabled. This run should not be treated as a release candidate."
+    }
+    if ($versionPolicyAssessment.status -eq "warning") {
+        Write-Warning $versionPolicyAssessment.message
+    }
+    if ($versionPolicyAssessment.shouldBlock) {
+        throw $versionPolicyAssessment.message
     }
     Write-Host "[testlab] History root: $historyRootPath"
 
@@ -412,6 +579,8 @@ try {
     $passCount = @($matrixResults | Where-Object { ([string]$_.status).ToLowerInvariant() -eq "pass" }).Count
     $failCount = @($matrixResults | Where-Object { ([string]$_.status).ToLowerInvariant() -ne "pass" }).Count
     $totalCells = $matrixResults.Count
+    $cellSummary = Get-ResultCellSummary -MatrixResults $matrixResults
+    $categoryRollups = Get-CategoryRollups -Cells $cellSummary
 
     if ($totalCells -eq 0 -and [string]::IsNullOrWhiteSpace($failureMessage)) {
         $overallStatus = "unknown"
@@ -449,9 +618,11 @@ try {
         plugin = [ordered]@{
             displayVersion = $pluginDisplayVersion
         }
+        versionPolicy = $versionPolicyAssessment
         inputs = [ordered]@{
             labConfig = $resolvedLabConfig
             matrixConfig = $resolvedMatrixConfig
+            matrixProfile = $resolvedMatrixProfile
         }
         outputs = [ordered]@{
             provisionReportPath = $provisionReportPath
@@ -463,8 +634,9 @@ try {
             totalCells = $totalCells
             passCells = $passCount
             failCells = $failCount
-            cells = Get-ResultCellSummary -MatrixResults $matrixResults
+            cells = $cellSummary
         }
+        categoryRollups = $categoryRollups
         repositoryHistory = $repositoryHistory
     }
 

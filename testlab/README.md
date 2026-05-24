@@ -97,6 +97,12 @@ This initial implementation provides:
 
    By default this runs in dry-run mode, just like the underlying scripts.
 
+   For release-oriented runs, you can use a named generated profile instead of a hand-written matrix file:
+
+   ```powershell
+   ./testlab/scripts/run-release-gate.ps1 -LabConfig testlab/config/lab.local.json -MatrixProfile release-default
+   ```
+
 10. Execute the release gate for real:
 
    ```powershell
@@ -125,6 +131,7 @@ This initial implementation provides:
 - Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
 - `run-release-gate.ps1` fails immediately on any uncommitted or untracked git changes. `-AllowDirtyWorktree` exists only so the wrapper itself can be developed or debugged without weakening the default release policy.
 - `run-release-gate.ps1` only publishes repository history for successful clean execute runs. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
+- Release-gate manifests now include `categoryRollups`, and published repository history shows per-category pass/fail columns such as `pluginCompatibility` and `unraidCompatibility` when the selected matrix defines categories.
 
 ## Test catalog
 
@@ -143,6 +150,24 @@ This initial implementation provides:
 2. `cell-02`: sender runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, receiver runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
 3. `cell-03`: sender runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, receiver runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
 - Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
+
+## Release matrix profiles
+
+- `run-release-gate.ps1` accepts `-MatrixProfile` for release-oriented generated matrices.
+- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup in both sender/receiver directions.
+- `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
+- `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
+- `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
+- Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
+- Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
+
+## Version bump policy
+
+- `run-release-gate.ps1` evaluates the current `buddybackup.plg` display version against `lab.releaseGate.previousReleaseVersion` whenever the selected matrix includes a `workspace-build` candidate.
+- The default policy is `lab.releaseGate.versionPolicy.mode = require`.
+- In `require` mode, clean execute release-gate runs are blocked if the current candidate still reports the same display version as the previous release.
+- Dry-runs still continue in `require` mode, but they emit a warning so you can validate the rest of the flow before deciding to cut a release.
+- Alternative modes are `warn` and `ignore` if you need to relax the policy for a special case.
 
 ## Workspace-build source
 
@@ -172,6 +197,7 @@ This initial implementation provides:
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
 - Release-gate history is written outside the workspace by default under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory`, so results can persist across multiple release cycles even if `.testlab` is cleaned.
 - Public release history is written inside the repository under `testlab/release-history` only after successful clean execute release-gate runs.
+- Public release history includes category-level compatibility status columns when the release matrix annotates cells with categories.
 - The `windows-local` provider targets WSL2 plus QEMU/KVM.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are sender `2222` / `8080` / `8443` and receiver `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.sender.webGuiHttpPort`, `nodes.sender.webGuiHttpsPort`, `nodes.receiver.webGuiHttpPort`, and `nodes.receiver.webGuiHttpsPort`.

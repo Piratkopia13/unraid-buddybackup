@@ -28,6 +28,17 @@
     "plgUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg",
     "buildCacheRoot": ".testlab/build-cache"
   },
+  "releaseGate": {
+    "historyRoot": "%LOCALAPPDATA%/BuddyBackup/TestlabHistory",
+    "defaultMatrixProfile": "release-default",
+    "currentCandidatePlugin": "workspace-build",
+    "previousReleaseVersion": "2026.05.02",
+    "previousCertifiedUnraidVersion": "7.2.6",
+    "latestSupportedUnraidVersion": "7.2.6",
+    "versionPolicy": {
+      "mode": "require"
+    }
+  },
   "timeouts": {
     "sshReadySeconds": 300,
     "rebootSettleSeconds": 30

@@ -37,6 +37,8 @@ function ConvertTo-TestLabPublicHistoryCell {
         cellId = [string]$Cell.cellId
         lifecycle = [string]$Cell.lifecycle
         status = [string]$Cell.status
+        categories = if ($Cell.PSObject.Properties['categories']) { @($Cell.categories) } else { @() }
+        purpose = if ($Cell.PSObject.Properties['purpose']) { [string]$Cell.purpose } else { $null }
         sender = [pscustomobject]@{
             unraid = [string]$Cell.senderUnraid
             pluginRequested = $senderPluginRequested
@@ -75,6 +77,7 @@ function ConvertTo-TestLabRepositoryHistoryEntry {
         totalCells = [int]$Manifest.summary.totalCells
         passCells = [int]$Manifest.summary.passCells
         failCells = [int]$Manifest.summary.failCells
+        categoryRollups = @($Manifest.categoryRollups)
         pluginCoverage = $pluginCoverage
         unraidCoverage = $unraidCoverage
         detailPath = ("runs/{0}.json" -f $Manifest.releaseGateRunId)
@@ -82,8 +85,24 @@ function ConvertTo-TestLabRepositoryHistoryEntry {
     }
 }
 
+function Get-TestLabRepositoryHistoryCategoryStatus {
+    param(
+        $Entry,
+        [string]$CategoryName
+    )
+
+    foreach ($rollup in @($Entry.categoryRollups)) {
+        if ([string]$rollup.category -eq $CategoryName) {
+            return [string]$rollup.status
+        }
+    }
+
+    return "-"
+}
+
 function Write-TestLabRepositoryHistoryReadme {
     param(
+        [Alias("OutputPath")]
         [string]$ReadmePath,
         [object[]]$Entries
     )
@@ -101,15 +120,17 @@ function Write-TestLabRepositoryHistoryReadme {
     if ($sortedEntries.Count -eq 0) {
         $lines += "No successful clean execute release-gate runs have been published yet."
     } else {
-        $lines += "| Run | Plugin | Commit | Matrix | BuddyBackup Coverage | Unraid Coverage | Detail |"
-        $lines += "| --- | --- | --- | --- | --- | --- | --- |"
+        $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Coverage | Unraid Coverage | Detail |"
+        $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         foreach ($entry in $sortedEntries) {
             $detailPath = ([string]$entry.detailPath).Replace('\\', '/')
-            $lines += "| {0} | {1} | {2} | {3} | {4} | {5} | [detail]({6}) |" -f `
+            $lines += "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | [detail]({8}) |" -f `
                 $entry.releaseGateRunId, `
                 $entry.pluginDisplayVersion, `
                 $entry.shortSha, `
                 $entry.matrixProfile, `
+                (Get-TestLabRepositoryHistoryCategoryStatus -Entry $entry -CategoryName "pluginCompatibility"), `
+                (Get-TestLabRepositoryHistoryCategoryStatus -Entry $entry -CategoryName "unraidCompatibility"), `
                 (Join-TestLabRepositoryHistoryValues -Values $entry.pluginCoverage), `
                 (Join-TestLabRepositoryHistoryValues -Values $entry.unraidCoverage), `
                 $detailPath
@@ -149,6 +170,7 @@ function Write-TestLabRepositoryHistory {
             totalCells = $entry.totalCells
             passCells = $entry.passCells
             failCells = $entry.failCells
+            categoryRollups = $entry.categoryRollups
             pluginCoverage = $entry.pluginCoverage
             unraidCoverage = $entry.unraidCoverage
         }
