@@ -176,7 +176,8 @@ This initial implementation provides:
 - `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
 - `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
-- Current limitation: the existing providers provision one fixed sender guest and one fixed receiver guest from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.sender.unraidVersion` and `lab.nodes.receiver.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
+- The matrix schema still names the two lab slots `sender` and `receiver`, but those are stable provisioning labels rather than exclusive backup-direction roles.
+- Current limitation: the existing providers provision one fixed sender lab slot and one fixed receiver lab slot from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.sender.unraidVersion` and `lab.nodes.receiver.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
 - Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, or extend the harness later to reprovision between cells.
 - Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
 - Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
@@ -199,6 +200,7 @@ This initial implementation provides:
 
 ## Backup direction coverage
 
+- The matrix and reports still label the two fixed lab slots as `sender` and `receiver`, but those names do not mean only one node sends backups and only one node receives them.
 - Remote backup coverage is bidirectional in the functional smoke run.
 - The sender performs a remote backup to a dataset received on the receiver.
 - The receiver performs a remote backup to a dataset received on the sender.
@@ -213,12 +215,12 @@ This initial implementation provides:
 - `provision-lab.ps1` without `-Execute` does not boot the local Unraid nodes. It only writes reports and dry-run actions.
 - `teardown-wsl-qemu-lab.ps1` also defaults to dry-run; keep `-Execute` when you actually want to stop the local nodes.
 - `run-release-gate.ps1` is the intended entrypoint for pre-release runs. It is strict about git cleanliness by default because release evidence should always map to one exact commit.
-- SSH key-based access is expected for sender/receiver nodes.
-- The current local provider boots two Unraid guests (`sender` and `receiver`) through WSL/QEMU.
+- SSH key-based access is expected for both lab nodes.
+- The current local provider boots two Unraid guests in fixed `sender` and `receiver` lab slots through WSL/QEMU.
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
 - Release-gate history is written outside the workspace by default under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory`, so results can persist across multiple release cycles even if `.testlab` is cleaned.
 - Public release history is written inside the repository under `testlab/release-history` only after successful execute release-gate runs that either have a clean worktree or install published BuddyBackup releases only.
-- Public release history includes category-level compatibility status columns when the release matrix annotates cells with categories.
+- Public release history includes category-level compatibility status columns plus BuddyBackup and Unraid pair-coverage columns when the release matrix annotates cells with categories.
 - The `windows-local` provider targets WSL2 plus QEMU/KVM.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are sender `2222` / `8080` / `8443` and receiver `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.sender.webGuiHttpPort`, `nodes.sender.webGuiHttpsPort`, `nodes.receiver.webGuiHttpPort`, and `nodes.receiver.webGuiHttpsPort`.

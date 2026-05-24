@@ -120,6 +120,7 @@ function Write-TestLabRepositoryHistoryReadme {
         "# Release Test History",
         "",
         "Successful execute release-gate runs are recorded here when they either use a clean worktree or install published BuddyBackup releases only.",
+        "Coverage columns record the version pairs assigned to the two fixed lab slots for each run. The functional smoke still exercises remote backup and restore in both directions within that slot pairing.",
         "",
         "## Runs",
         ""
@@ -128,7 +129,7 @@ function Write-TestLabRepositoryHistoryReadme {
     if ($sortedEntries.Count -eq 0) {
         $lines += "No successful publishable execute release-gate runs have been recorded yet."
     } else {
-        $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Coverage | Unraid Coverage | Detail |"
+        $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Pair Coverage | Unraid Pair Coverage | Detail |"
         $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         foreach ($entry in $sortedEntries) {
             $detailPath = ([string]$entry.detailPath).Replace('\\', '/')
