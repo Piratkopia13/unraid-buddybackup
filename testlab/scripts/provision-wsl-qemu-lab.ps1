@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "unraid-payload-cache.ps1")
 . (Join-Path $PSScriptRoot "wsl-common.ps1")
+. (Join-Path $PSScriptRoot "testlab-plugin-source.ps1")
 
 function Get-Json {
     param([string]$Path)
@@ -113,6 +114,53 @@ function Convert-ToRemoteShellCommand {
     return "printf '%s' '$commandB64' | base64 -d | bash"
 }
 
+function Convert-ToRemoteSingleQuotedArgument {
+    param([string]$Value)
+
+    return "'{0}'" -f (($Value -replace "'", "'\\''"))
+}
+
+function Convert-ToRemoteBashScriptCommand {
+    param(
+        [string]$Script,
+        [string[]]$Arguments
+    )
+
+    $normalizedScript = ($Script -replace "`r`n", "`n").Trim()
+    $scriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedScript))
+    $quotedArguments = @($Arguments | ForEach-Object { Convert-ToRemoteSingleQuotedArgument -Value ([string]$_) })
+    if ($quotedArguments.Count -gt 0) {
+        return "printf '%s' '$scriptB64' | base64 -d | bash -s -- $($quotedArguments -join ' ')"
+    }
+
+    return "printf '%s' '$scriptB64' | base64 -d | bash"
+}
+
+function Get-SetupPluginBuildCacheRoot {
+    param($Lab)
+
+    $setupCfg = Get-ObjectValue -Object $Lab -Name "setup"
+    $buddyCfg = Get-ObjectValue -Object $setupCfg -Name "buddybackup"
+    $buildCacheRoot = [string](Get-ObjectValue -Object $buddyCfg -Name "buildCacheRoot")
+    if (-not [string]::IsNullOrWhiteSpace($buildCacheRoot)) {
+        return $buildCacheRoot
+    }
+
+    $pluginCfg = Get-ObjectValue -Object $Lab -Name "plugin"
+    return [string](Get-ObjectValue -Object $pluginCfg -Name "buildCacheRoot")
+}
+
+function Resolve-SetupPluginRequest {
+    param(
+        $Lab,
+        [string]$RequestedValue
+    )
+
+    $workspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    $buildCacheRoot = Get-SetupPluginBuildCacheRoot -Lab $Lab
+    return Resolve-TestLabPluginRequest -RequestedValue $RequestedValue -WorkspaceRoot $workspaceRoot -ConfiguredBuildCacheRoot $buildCacheRoot
+}
+
 function Invoke-NodeSshCommand {
     param(
         $NodeConnection,
@@ -173,6 +221,222 @@ function Invoke-NodeSshCommand {
         output = $outputLines
         warningsOrErrorsDetected = (Test-OutputHasWarningsOrErrors -OutputLines $outputLines)
     }
+}
+
+function Invoke-NodeUpload {
+    param(
+        $NodeConnection,
+        [string[]]$LocalPaths,
+        [string]$RemoteDirectory,
+        [string]$Label,
+        [switch]$DoExecute
+    )
+
+    $pathsToUpload = @($LocalPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($pathsToUpload.Count -eq 0) {
+        throw "Remote upload '$Label' was called without any local paths."
+    }
+
+    $scpBaseArgs = @(
+        "-F", "NUL",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=8",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "LogLevel=ERROR",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=NUL",
+        "-o", "GlobalKnownHostsFile=NUL",
+        "-P", ([string]$NodeConnection.Port)
+    )
+
+    if ($NodeConnection.IdentityFile) {
+        $identityPath = Get-LocalSshIdentityFile -IdentityFile ([string]$NodeConnection.IdentityFile)
+        $scpBaseArgs += @("-i", $identityPath)
+    }
+
+    $target = "{0}@{1}:{2}/" -f $NodeConnection.User, $NodeConnection.Host, $RemoteDirectory
+    if (-not $DoExecute) {
+        $previewArgs = @($scpBaseArgs + $pathsToUpload + @($target))
+        Write-Host "[dry-run][upload][$Label] scp $($previewArgs -join ' ')"
+        return [pscustomobject]@{
+            label = $Label
+            success = $true
+            exitCode = 0
+            output = @("dry-run")
+            warningsOrErrorsDetected = $false
+        }
+    }
+
+    $ensureDirResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command ("mkdir -p {0}" -f $RemoteDirectory) -Label ("{0}-mkdir" -f $Label) -DoExecute
+    if (-not $ensureDirResult.success) {
+        return [pscustomobject]@{
+            label = $Label
+            success = $false
+            exitCode = $ensureDirResult.exitCode
+            output = @($ensureDirResult.output)
+            warningsOrErrorsDetected = $false
+        }
+    }
+
+    $scpArgs = @($scpBaseArgs + $pathsToUpload + @($target))
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $rawOutput = & scp @scpArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $outputLines = @($rawOutput | ForEach-Object { [string]$_ })
+    return [pscustomobject]@{
+        label = $Label
+        success = ($exitCode -eq 0)
+        exitCode = $exitCode
+        output = $outputLines
+        warningsOrErrorsDetected = (Test-OutputHasWarningsOrErrors -OutputLines $outputLines)
+    }
+}
+
+function Set-NodePluginSourceMetadata {
+    param(
+        $NodeConnection,
+        $PluginRequest,
+        [switch]$DoExecute
+    )
+
+    $commitSha = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.commitSha } else { "" }
+    $packageSha256 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageSha256 } else { "" }
+    $packageMd5 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageMd5 } else { "" }
+    $metadataScript = @'
+source_type="$1"
+requested_value="$2"
+display_version="$3"
+commit_sha="$4"
+package_sha256="$5"
+package_md5="$6"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+marker_path="$plugin_root/testlab-plugin-source.json"
+mkdir -p "$plugin_root"
+
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$package_md5"
+}
+EOF
+
+echo "plugin source metadata written to $marker_path"
+'@
+    $command = Convert-ToRemoteBashScriptCommand -Script $metadataScript -Arguments @(
+        [string]$PluginRequest.sourceType,
+        [string]$PluginRequest.requestedValue,
+        [string]$PluginRequest.displayVersion,
+        $commitSha,
+        $packageSha256,
+        $packageMd5
+    )
+
+    return Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -PreviewCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+}
+
+function Install-WorkspaceBuildPlugin {
+    param(
+        $NodeConnection,
+        $PluginRequest,
+        [switch]$DoExecute
+    )
+
+    $buildInfo = $PluginRequest.buildInfo
+    if ($null -eq $buildInfo) {
+        throw "Workspace-build plugin request is missing build metadata."
+    }
+
+    $remoteStageRoot = "/boot/config/plugins/buddybackup-testlab-staging/{0}" -f $buildInfo.shortSha
+    $remoteDepsRoot = "$remoteStageRoot/deps"
+    $results = @()
+
+    $results += Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($buildInfo.packagePath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
+    if ($buildInfo.dependencyPackagePaths -and $buildInfo.dependencyPackagePaths.Count -gt 0) {
+        $results += Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($buildInfo.dependencyPackagePaths) -RemoteDirectory $remoteDepsRoot -Label "workspace-build-deps-upload" -DoExecute:$DoExecute
+    }
+
+    $failedUpload = @($results | Where-Object { -not $_.success })
+    if ($failedUpload.Count -gt 0) {
+        return $results
+    }
+
+    $installScript = @'
+stage_root="$1"
+stage_deps_root="$2"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+stage_package="$stage_root/buddybackup.txz"
+
+install_dep() {
+  local file="$1"
+  if [ ! -f "$file" ]; then
+    echo "Missing staged dependency: $file" >&2
+    exit 1
+  fi
+
+  installpkg "$file"
+}
+
+if [ ! -f "$stage_package" ]; then
+  echo "Missing staged workspace package: $stage_package" >&2
+  exit 1
+fi
+
+mkdir -p "$plugin_root"
+
+source /etc/unraid-version >/dev/null 2>&1 || true
+major_version="0"
+if [ -n "${version:-}" ]; then
+  major_version="${version%%.*}"
+fi
+
+install_dep "$stage_deps_root/perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
+install_dep "$stage_deps_root/perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
+install_dep "$stage_deps_root/perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
+install_dep "$stage_deps_root/perl-List-MoreUtils-0.425-x86_64-2_slonly.txz"
+if [ "$major_version" -lt 7 ]; then
+  install_dep "$stage_deps_root/mbuffer-20240107-x86_64-1_SBo.tgz"
+fi
+
+if [ ! -f "$plugin_root/buddybackup.cfg" ]; then
+  cat > "$plugin_root/buddybackup.cfg" <<'EOF'
+ReceiveBackups=disable
+ReceiveDestinationRententionHourly=0
+ReceiveDestinationRententionDaily=7
+ReceiveDestinationRententionWeekly=4
+ReceiveDestinationRententionMonthly=3
+ReceiveDestinationRententionYearly=0
+EOF
+fi
+
+cp "$stage_package" "$plugin_root/buddybackup.txz"
+upgradepkg --install-new --reinstall "$plugin_root/buddybackup.txz"
+/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
+
+echo "workspace-build package installed from $stage_package"
+'@
+    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @($remoteStageRoot, $remoteDepsRoot)
+    $results += Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $installCommand -PreviewCommand "install BuddyBackup workspace-build package" -Label "workspace-build-install" -DoExecute:$DoExecute
+    if ($results[-1].success) {
+        $results += Set-NodePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+    }
+
+    return $results
 }
 
 function Get-ManualAccessConfig {
@@ -328,7 +592,7 @@ function Invoke-NodeBaseSetup {
         $Node,
         [string]$NodeName,
         $NodeConnection,
-        [string]$PluginVersion,
+        $PluginRequest,
         [string]$PluginUrlTemplate,
         [switch]$DoExecute
     )
@@ -370,25 +634,38 @@ function Invoke-NodeBaseSetup {
 
     $results = @()
 
-    if ([string]::IsNullOrWhiteSpace($PluginVersion)) {
-        throw "Missing plugin version for node '$NodeName'. Set nodes.$NodeName.pluginVersion or setup.buddybackup.pluginVersion in lab config."
-    }
-    if ([string]::IsNullOrWhiteSpace($PluginUrlTemplate)) {
-        throw "Missing plugin URL template for BuddyBackup installation on node '$NodeName'."
+    if ($null -eq $PluginRequest) {
+        throw "Missing plugin request for node '$NodeName'. Set nodes.$NodeName.pluginVersion or setup.buddybackup.pluginVersion in lab config."
     }
 
-    $pluginUrl = if ($PluginUrlTemplate -match '\{version\}') {
-        $PluginUrlTemplate.Replace("{version}", $PluginVersion)
+    $pluginInstallResults = @()
+    if ($PluginRequest.sourceType -eq "workspace-build") {
+        $pluginInstallResults = @(Install-WorkspaceBuildPlugin -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute)
     } else {
-        $PluginUrlTemplate
+        if ([string]::IsNullOrWhiteSpace($PluginUrlTemplate)) {
+            throw "Missing plugin URL template for BuddyBackup installation on node '$NodeName'."
+        }
+
+        $pluginUrl = if ($PluginUrlTemplate -match '\{version\}') {
+            $PluginUrlTemplate.Replace("{version}", [string]$PluginRequest.requestedValue)
+        } else {
+            $PluginUrlTemplate
+        }
+
+        $pluginInstallResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command ("plugin install {0}" -f $pluginUrl) -Label "buddybackup-plugin-install" -DoExecute:$DoExecute
+        $pluginInstallResults += $pluginInstallResult
+        if ($pluginInstallResult.success) {
+            $pluginInstallResults += Set-NodePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+        }
     }
 
-    $pluginInstallResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command ("plugin install {0}" -f $pluginUrl) -Label "buddybackup-plugin-install" -DoExecute:$DoExecute
-    $results += $pluginInstallResult
-    if (-not $pluginInstallResult.success) {
-        throw "BuddyBackup plugin install failed on node '$NodeName'."
+    $results += $pluginInstallResults
+    $failedPluginInstallResults = @($pluginInstallResults | Where-Object { -not $_.success })
+    if ($failedPluginInstallResults.Count -gt 0) {
+        $failedLabels = @($failedPluginInstallResults | ForEach-Object { $_.label }) -join ","
+        throw "BuddyBackup plugin install failed on node '$NodeName'. Failed labels: $failedLabels"
     }
-    if ($failOnInstallWarnings -and $pluginInstallResult.warningsOrErrorsDetected) {
+    if ($failOnInstallWarnings -and @($pluginInstallResults | Where-Object { $_.warningsOrErrorsDetected }).Count -gt 0) {
         throw "BuddyBackup plugin install output on node '$NodeName' contained warning/error text."
     }
 
@@ -674,6 +951,7 @@ try {
             $nodePluginUrlTemplate = $defaultPluginUrlTemplate
         }
         $pluginVersion = if ($nodePluginVersion) { $nodePluginVersion } else { $defaultPluginVersion }
+        $pluginRequest = Resolve-SetupPluginRequest -Lab $lab -RequestedValue $pluginVersion
 
         $nodeConnection = Resolve-NodeConnection -Lab $lab -Node $node
 
@@ -711,7 +989,9 @@ try {
             unraidVersion       = $version
             payloadPath         = $payloadPath
             instanceName        = $instanceName
-            pluginVersion       = $pluginVersion
+            pluginVersion       = $pluginRequest.displayVersion
+            pluginRequested     = $pluginRequest.requestedValue
+            pluginSource        = $pluginRequest.sourceType
             outputPath          = $outputPath
             statusPath          = $statusPath
             sshReady            = $false
@@ -769,7 +1049,7 @@ try {
 
             if ($applyBaseSetup) {
                 Write-Host "[testlab] Applying BuddyBackup and ZFS base setup on $nodeName"
-                $baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute
+                $baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginRequest $pluginRequest -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute
                 $nodeEntry.baseSetupApplied = $true
                 $nodeEntry.baseSetup = $baseSetup
             }
@@ -785,7 +1065,7 @@ try {
             $nodeEntry.manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute:$false
             if ($applyBaseSetup) {
                 $nodeEntry.baseSetupApplied = $true
-                $nodeEntry.baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginVersion $pluginVersion -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute:$false
+                $nodeEntry.baseSetup = Invoke-NodeBaseSetup -Lab $lab -Node $node -NodeName $nodeName -NodeConnection $nodeConnection -PluginRequest $pluginRequest -PluginUrlTemplate $nodePluginUrlTemplate -DoExecute:$false
             }
         }
 

@@ -89,7 +89,25 @@ This initial implementation provides:
    ./testlab/scripts/run-matrix.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json -Execute
    ```
 
-9. Tear down the local WSL/QEMU nodes when you are done:
+9. Run the pre-release gate wrapper when you want one command that enforces repo-state policy, runs provisioning plus matrix execution, and stores a durable summary outside `.testlab`:
+
+   ```powershell
+   ./testlab/scripts/run-release-gate.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json
+   ```
+
+   By default this runs in dry-run mode, just like the underlying scripts.
+
+10. Execute the release gate for real:
+
+   ```powershell
+   ./testlab/scripts/run-release-gate.ps1 -LabConfig testlab/config/lab.local.json -MatrixConfig testlab/config/matrix.small.json -Execute
+   ```
+
+   The release gate refuses to start if the git worktree is dirty. It records the tested commit SHA, branch, matrix profile, and copied run summaries under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory` unless you override `releaseGate.historyRoot` in the lab config or pass `-HistoryRoot`.
+
+   On successful clean execute runs, the wrapper also publishes a sanitized public summary into `testlab/release-history` so release coverage remains visible in the Git repository.
+
+11. Tear down the local WSL/QEMU nodes when you are done:
 
    ```powershell
    ./testlab/scripts/teardown-wsl-qemu-lab.ps1 -LabConfig testlab/config/lab.local.json -Execute
@@ -100,10 +118,13 @@ This initial implementation provides:
 ## Default behavior
 
 - `provision-lab.ps1`, `run-matrix.ps1`, `run-functional-smoke.ps1`, and `teardown-wsl-qemu-lab.ps1` default to dry-run. Pass `-Execute` to make changes on live nodes.
+- `run-release-gate.ps1` also defaults to dry-run. It runs the existing provision and matrix flows, then copies the resulting `provision-*.json` and `results.json` into the durable history root together with a `manifest.json`, `index.json`, and `latest.json` summary.
 - `run-matrix.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and `-MatrixConfig testlab/config/matrix.small.json`.
 - `run-functional-smoke.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and operates against the already provisioned `sender` and `receiver` nodes from that lab config.
 - In the example lab config, `setup.applyBaseConfigAfterSsh` and `setup.verifyBaseConfigInMatrix` are both `true`, so local provisioning applies BuddyBackup and ZFS base setup by default and each matrix cell runs `base-setup-verify` before its listed scenarios.
 - Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
+- `run-release-gate.ps1` fails immediately on any uncommitted or untracked git changes. `-AllowDirtyWorktree` exists only so the wrapper itself can be developed or debugged without weakening the default release policy.
+- `run-release-gate.ps1` only publishes repository history for successful clean execute runs. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
 
 ## Test catalog
 
@@ -123,6 +144,13 @@ This initial implementation provides:
 3. `cell-03`: sender runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, receiver runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
 - Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
 
+## Workspace-build source
+
+- Set a node or matrix plugin value to `workspace-build` when you want the testlab to install the BuddyBackup code from the currently checked out workspace instead of a published GitHub release tag.
+- The testlab builds `buddybackup.txz` locally from `src/` into `.testlab/build-cache/workspace-<shortSha>/buddybackup.txz`, uploads that package plus the local dependency packages from `deps/`, installs them on the guest, and then runs `rc.buddybackup.php update`.
+- The active install source is written on the guest to `/boot/config/plugins/buddybackup/testlab-plugin-source.json`. Matrix artifact collection captures that file as `plugin-source.txt` so release and workspace-build provenance can be reviewed after a run.
+- `workspace-build` is intended for release-candidate validation. Because the current display version in `buddybackup.plg` can still match the last published release, use the recorded commit SHA and plugin-source metadata to distinguish a workspace candidate from a published tag.
+
 ## Backup direction coverage
 
 - Remote backup coverage is bidirectional in the functional smoke run.
@@ -138,9 +166,12 @@ This initial implementation provides:
 - Scripts default to dry-run to avoid accidental VM reboot or remote changes.
 - `provision-lab.ps1` without `-Execute` does not boot the local Unraid nodes. It only writes reports and dry-run actions.
 - `teardown-wsl-qemu-lab.ps1` also defaults to dry-run; keep `-Execute` when you actually want to stop the local nodes.
+- `run-release-gate.ps1` is the intended entrypoint for pre-release runs. It is strict about git cleanliness by default because release evidence should always map to one exact commit.
 - SSH key-based access is expected for sender/receiver nodes.
 - The current local provider boots two Unraid guests (`sender` and `receiver`) through WSL/QEMU.
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
+- Release-gate history is written outside the workspace by default under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory`, so results can persist across multiple release cycles even if `.testlab` is cleaned.
+- Public release history is written inside the repository under `testlab/release-history` only after successful clean execute release-gate runs.
 - The `windows-local` provider targets WSL2 plus QEMU/KVM.
 - For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are sender `2222` / `8080` / `8443` and receiver `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.sender.webGuiHttpPort`, `nodes.sender.webGuiHttpsPort`, `nodes.receiver.webGuiHttpPort`, and `nodes.receiver.webGuiHttpsPort`.

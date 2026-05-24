@@ -25,7 +25,8 @@
   },
   "plugin": {
     "installMethod": "url",
-    "plgUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg"
+    "plgUrlTemplate": "https://github.com/Piratkopia13/unraid-buddybackup/releases/download/{version}/buddybackup.plg",
+    "buildCacheRoot": ".testlab/build-cache"
   },
   "timeouts": {
     "sshReadySeconds": 300,

@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "testlab-logging.ps1")
+. (Join-Path $PSScriptRoot "testlab-plugin-source.ps1")
 
 function Require-File {
     param([string]$Path)
@@ -107,6 +108,46 @@ function Convert-ToRemoteShellCommand {
     $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
     $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
     return "printf '%s' '$commandB64' | base64 -d | bash"
+}
+
+function Convert-ToRemoteSingleQuotedArgument {
+    param([string]$Value)
+
+    return "'{0}'" -f (($Value -replace "'", "'\\''"))
+}
+
+function Convert-ToRemoteBashScriptCommand {
+    param(
+        [string]$Script,
+        [string[]]$Arguments
+    )
+
+    $normalizedScript = ($Script -replace "`r`n", "`n").Trim()
+    $scriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedScript))
+    $quotedArguments = @($Arguments | ForEach-Object { Convert-ToRemoteSingleQuotedArgument -Value ([string]$_) })
+    if ($quotedArguments.Count -gt 0) {
+        return "printf '%s' '$scriptB64' | base64 -d | bash -s -- $($quotedArguments -join ' ')"
+    }
+
+    return "printf '%s' '$scriptB64' | base64 -d | bash"
+}
+
+function Get-PluginBuildCacheRoot {
+    param($Lab)
+
+    $pluginCfg = Get-ObjectValue -Object $Lab -Name "plugin"
+    return [string](Get-ObjectValue -Object $pluginCfg -Name "buildCacheRoot")
+}
+
+function Resolve-LabPluginRequest {
+    param(
+        $Lab,
+        [string]$RequestedValue
+    )
+
+    $workspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    $buildCacheRoot = Get-PluginBuildCacheRoot -Lab $Lab
+    return Resolve-TestLabPluginRequest -RequestedValue $RequestedValue -WorkspaceRoot $workspaceRoot -ConfiguredBuildCacheRoot $buildCacheRoot
 }
 
 function Get-BuddyBackupPluginVerifyCommand {
@@ -371,6 +412,237 @@ function Invoke-RemoteCommand {
             Success = $true
         }
     }
+}
+
+function Invoke-RemoteUpload {
+    param(
+        [string]$User,
+        [string]$TargetHost,
+        [int]$Port,
+        [string]$IdentityFile,
+        [string[]]$LocalPaths,
+        [string]$RemoteDirectory,
+        [string]$Label,
+        [switch]$DoExecute
+    )
+
+    $resolvedIdentity = Get-LocalSshIdentityFile -IdentityFile $IdentityFile
+    $scpBaseArgs = @(
+        "-F", "NUL",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=8",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "LogLevel=ERROR",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=NUL",
+        "-o", "GlobalKnownHostsFile=NUL",
+        "-P", "$Port"
+    )
+    if ($resolvedIdentity) {
+        $scpBaseArgs += @("-i", $resolvedIdentity)
+    }
+
+    $pathsToUpload = @($LocalPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($pathsToUpload.Count -eq 0) {
+        throw "Remote upload '$Label' was called without any local paths."
+    }
+
+    $target = "{0}@{1}:{2}/" -f $User, $TargetHost, $RemoteDirectory
+    if (-not $DoExecute) {
+        $previewArgs = @($scpBaseArgs + $pathsToUpload + @($target))
+        Write-Host "[dry-run][upload][$Label] scp $($previewArgs -join ' ')"
+        return [pscustomobject]@{
+            Label = $Label
+            Command = "scp upload"
+            ExitCode = 0
+            Output = "dry-run"
+            Success = $true
+        }
+    }
+
+    $ensureDirResult = Invoke-RemoteCommand -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command ("mkdir -p {0}" -f $RemoteDirectory) -Label ("{0}-mkdir" -f $Label) -DoExecute
+    if (-not $ensureDirResult.Success) {
+        return [pscustomobject]@{
+            Label = $Label
+            Command = "scp upload"
+            ExitCode = $ensureDirResult.ExitCode
+            Output = $ensureDirResult.Output
+            Success = $false
+        }
+    }
+
+    $scpArgs = @($scpBaseArgs + $pathsToUpload + @($target))
+    $previousErrorActionPreference = $ErrorActionPreference
+    $hadNativeCommandPreference = Test-Path Variable:\PSNativeCommandUseErrorActionPreference
+    if ($hadNativeCommandPreference) {
+        $previousNativeCommandUseErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+    }
+
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($hadNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+
+        $rawOutput = & scp @scpArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($hadNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandUseErrorActionPreference
+        }
+    }
+
+    $output = (@($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+    return [pscustomobject]@{
+        Label = $Label
+        Command = "scp upload"
+        ExitCode = $exitCode
+        Output = $output
+        Success = ($exitCode -eq 0)
+    }
+}
+
+function Set-RemotePluginSourceMetadata {
+    param(
+        $NodeConnection,
+        $PluginRequest,
+        [switch]$DoExecute
+    )
+
+    $commitSha = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.commitSha } else { "" }
+    $packageSha256 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageSha256 } else { "" }
+    $packageMd5 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageMd5 } else { "" }
+    $metadataScript = @'
+source_type="$1"
+requested_value="$2"
+display_version="$3"
+commit_sha="$4"
+package_sha256="$5"
+package_md5="$6"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+marker_path="$plugin_root/testlab-plugin-source.json"
+mkdir -p "$plugin_root"
+
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$package_md5"
+}
+EOF
+
+echo "plugin source metadata written to $marker_path"
+'@
+    $command = Convert-ToRemoteBashScriptCommand -Script $metadataScript -Arguments @(
+        [string]$PluginRequest.sourceType,
+        [string]$PluginRequest.requestedValue,
+        [string]$PluginRequest.displayVersion,
+        $commitSha,
+        $packageSha256,
+        $packageMd5
+    )
+
+    return Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $command -LoggedCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+}
+
+function Install-WorkspaceBuildPlugin {
+    param(
+        $NodeConnection,
+        $PluginRequest,
+        [switch]$DoExecute
+    )
+
+    $buildInfo = $PluginRequest.buildInfo
+    if ($null -eq $buildInfo) {
+        throw "Workspace-build plugin request is missing build metadata."
+    }
+
+    $remoteStageRoot = "/boot/config/plugins/buddybackup-testlab-staging/{0}" -f $buildInfo.shortSha
+    $remoteDepsRoot = "$remoteStageRoot/deps"
+    $results = @()
+
+    $results += Invoke-RemoteUpload -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.packagePath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
+
+    if ($buildInfo.dependencyPackagePaths -and $buildInfo.dependencyPackagePaths.Count -gt 0) {
+        $results += Invoke-RemoteUpload -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.dependencyPackagePaths) -RemoteDirectory $remoteDepsRoot -Label "workspace-build-deps-upload" -DoExecute:$DoExecute
+    }
+
+    $failedUpload = @($results | Where-Object { -not $_.Success })
+    if ($failedUpload.Count -gt 0) {
+        return $results
+    }
+
+    $installScript = @'
+stage_root="$1"
+stage_deps_root="$2"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+stage_package="$stage_root/buddybackup.txz"
+
+install_dep() {
+  local file="$1"
+  if [ ! -f "$file" ]; then
+    echo "Missing staged dependency: $file" >&2
+    exit 1
+  fi
+
+  installpkg "$file"
+}
+
+if [ ! -f "$stage_package" ]; then
+  echo "Missing staged workspace package: $stage_package" >&2
+  exit 1
+fi
+
+mkdir -p "$plugin_root"
+
+source /etc/unraid-version >/dev/null 2>&1 || true
+major_version="0"
+if [ -n "${version:-}" ]; then
+  major_version="${version%%.*}"
+fi
+
+install_dep "$stage_deps_root/perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
+install_dep "$stage_deps_root/perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
+install_dep "$stage_deps_root/perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
+install_dep "$stage_deps_root/perl-List-MoreUtils-0.425-x86_64-2_slonly.txz"
+if [ "$major_version" -lt 7 ]; then
+  install_dep "$stage_deps_root/mbuffer-20240107-x86_64-1_SBo.tgz"
+fi
+
+if [ ! -f "$plugin_root/buddybackup.cfg" ]; then
+  cat > "$plugin_root/buddybackup.cfg" <<'EOF'
+ReceiveBackups=disable
+ReceiveDestinationRententionHourly=0
+ReceiveDestinationRententionDaily=7
+ReceiveDestinationRententionWeekly=4
+ReceiveDestinationRententionMonthly=3
+ReceiveDestinationRententionYearly=0
+EOF
+fi
+
+cp "$stage_package" "$plugin_root/buddybackup.txz"
+upgradepkg --install-new --reinstall "$plugin_root/buddybackup.txz"
+/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
+
+echo "workspace-build package installed from $stage_package"
+'@
+    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @($remoteStageRoot, $remoteDepsRoot)
+    $results += Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $installCommand -LoggedCommand "install BuddyBackup workspace-build package" -Label "workspace-build-install" -DoExecute:$DoExecute
+    if ($results[-1].Success) {
+        $results += Set-RemotePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+    }
+
+    return $results
 }
 
 function Wait-SshReady {
@@ -798,12 +1070,22 @@ function Run-BaseSetupVerification {
 
 function Install-Plugin {
     param(
+        $Lab,
         $NodeConnection,
-        [string]$Version,
+        $PluginRequest,
         [switch]$DoExecute
     )
 
-    $url = $Lab.plugin.plgUrlTemplate.Replace("{version}", $Version)
+    if ($PluginRequest.sourceType -eq "workspace-build") {
+        return Install-WorkspaceBuildPlugin -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+    }
+
+    $urlTemplate = [string]$Lab.plugin.plgUrlTemplate
+    if ([string]::IsNullOrWhiteSpace($urlTemplate)) {
+        throw "lab.plugin.plgUrlTemplate is required for release-tag plugin installs."
+    }
+
+    $url = $urlTemplate.Replace("{version}", [string]$PluginRequest.requestedValue)
     $cmd = "plugin install $url forced"
     $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $cmd -Label "plugin-install" -DoExecute:$DoExecute
 
@@ -812,7 +1094,12 @@ function Install-Plugin {
         $result.Success = $true
     }
 
-    return $result
+    $results = @($result)
+    if ($result.Success) {
+        $results += Set-RemotePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+    }
+
+    return $results
 }
 
 function Collect-NodeArtifacts {
@@ -829,6 +1116,7 @@ function Collect-NodeArtifacts {
 
     $commands = @(
         @{ Name = "plugin-list"; Cmd = "plugin list" },
+        @{ Name = "plugin-source"; Cmd = "test -f /boot/config/plugins/buddybackup/testlab-plugin-source.json && cat /boot/config/plugins/buddybackup/testlab-plugin-source.json || echo '(missing testlab-plugin-source.json)'" },
         @{ Name = "buddybackup-log"; Cmd = "test -f /var/log/buddybackup.log && cat /var/log/buddybackup.log || echo '(missing /var/log/buddybackup.log)'" },
         @{ Name = "buddybackup-cfg"; Cmd = "test -f /boot/config/plugins/buddybackup/buddybackup.cfg && cat /boot/config/plugins/buddybackup/buddybackup.cfg || echo '(missing buddybackup.cfg)'" },
         @{ Name = "backups-cfg"; Cmd = "test -f /boot/config/plugins/buddybackup/backups.cfg && cat /boot/config/plugins/buddybackup/backups.cfg || echo '(missing backups.cfg)'" },
@@ -874,8 +1162,8 @@ function Run-Scenario {
 
     switch ($Scenario) {
         "fresh-install" {
-            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -Version $Cell.sender.plugin -DoExecute:$DoExecute
-            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -Version $Cell.receiver.plugin -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.senderPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.receiverPluginRequest -DoExecute:$DoExecute
         }
         "post-reboot" {
             $timeout = 300
@@ -1004,6 +1292,10 @@ $cellIndex = 0
 
 foreach ($cell in $matrixCells) {
     $cellIndex += 1
+    $senderPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string]$cell.sender.plugin)
+    $receiverPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string]$cell.receiver.plugin)
+    $cell | Add-Member -NotePropertyName senderPluginRequest -NotePropertyValue $senderPluginRequest -Force
+    $cell | Add-Member -NotePropertyName receiverPluginRequest -NotePropertyValue $receiverPluginRequest -Force
     Write-Host "[testlab] Running cell $($cell.id) ($cellIndex/$totalCells) lifecycle=$($cell.lifecycle)"
     $status = "pass"
     $errors = @()
@@ -1083,8 +1375,14 @@ foreach ($cell in $matrixCells) {
         cellId = $cell.id
         senderUnraid = $cell.sender.unraid
         receiverUnraid = $cell.receiver.unraid
-        senderPlugin = $cell.sender.plugin
-        receiverPlugin = $cell.receiver.plugin
+        senderPlugin = $senderPluginRequest.displayVersion
+        senderPluginRequested = $senderPluginRequest.requestedValue
+        senderPluginResolved = $senderPluginRequest.displayVersion
+        senderPluginSource = $senderPluginRequest.sourceType
+        receiverPlugin = $receiverPluginRequest.displayVersion
+        receiverPluginRequested = $receiverPluginRequest.requestedValue
+        receiverPluginResolved = $receiverPluginRequest.displayVersion
+        receiverPluginSource = $receiverPluginRequest.sourceType
         lifecycle = $cell.lifecycle
         status = $status
         errors = $errors
