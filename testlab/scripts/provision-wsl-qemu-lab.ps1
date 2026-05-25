@@ -667,6 +667,11 @@ function Invoke-NodeBaseSetup {
         throw "Missing plugin request for node '$NodeName'. Set nodes.$NodeName.pluginVersion or setup.buddybackup.pluginVersion in lab config."
     }
 
+    $resolvedPluginVersion = [string]$PluginRequest.displayVersion
+    if ([string]::IsNullOrWhiteSpace($resolvedPluginVersion)) {
+        $resolvedPluginVersion = [string]$PluginRequest.requestedValue
+    }
+
     $pluginInstallResults = @()
     if ($PluginRequest.sourceType -eq "workspace-build") {
         $pluginInstallResults = @(Install-WorkspaceBuildPlugin -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute)
@@ -832,7 +837,7 @@ echo "encrypted_dataset_encryption=$encryption_value"
         datasetRoot = $datasetRoot
         unencryptedDataset = $plainDataset
         encryptedDataset = $encryptedDataset
-        pluginVersion = $PluginVersion
+        pluginVersion = $resolvedPluginVersion
         actions = @($results)
     }
 }

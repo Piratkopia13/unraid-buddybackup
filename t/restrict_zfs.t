@@ -35,9 +35,9 @@ for my $candidate_root (@repo_root_candidates) {
     }
 }
 
-ok(-f $script, 'restrict_zfs script exists');
+ok(defined $script && -f $script, 'restrict_zfs script exists');
 
-BAIL_OUT('Unable to locate restrict_zfs script from test path or current working directory') if !$script;
+BAIL_OUT('Unable to locate restrict_zfs script from test path or current working directory') if !defined $script;
 
 my $script_source = do {
     open my $fh, '<', $script or die "Unable to read $script: $!";
