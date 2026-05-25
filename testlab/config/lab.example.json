@@ -8,15 +8,15 @@
     "identityFile": ".testlab/lab_key"
   },
   "nodes": {
-    "sender": {
-      "name": "buddybackup-sender",
+    "nodeA": {
+      "name": "buddybackup-node-a",
       "host": "127.0.0.1",
       "port": 2222,
       "unraidVersion": "7.2.6",
       "pluginVersion": "2026.05.02"
     },
-    "receiver": {
-      "name": "buddybackup-receiver",
+    "nodeB": {
+      "name": "buddybackup-node-b",
       "host": "127.0.0.1",
       "port": 2223,
       "unraidVersion": "7.2.6",

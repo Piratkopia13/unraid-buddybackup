@@ -38,14 +38,14 @@ function Test-LabSupportsMatrixUnraidVersions {
     }
 
     $mismatches = @()
-    foreach ($nodeName in @('sender', 'receiver')) {
-        $labNode = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -Name $nodeName
+    foreach ($nodeName in @('nodeA', 'nodeB')) {
+        $labNode = Get-TestLabNodeValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -NodeName $nodeName
         $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
         if ([string]::IsNullOrWhiteSpace($labVersion)) {
             continue
         }
 
-        $cellVersions = @($MatrixCells | ForEach-Object { [string](Get-ObjectValue -Object (Get-ObjectValue -Object $_ -Name $nodeName) -Name 'unraid') } |
+        $cellVersions = @($MatrixCells | ForEach-Object { [string](Get-ObjectValue -Object (Get-TestLabNodeValue -Object $_ -NodeName $nodeName) -Name 'unraid') } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Select-Object -Unique)
 
@@ -101,6 +101,46 @@ function Get-ObjectValue {
     $property = $Object.PSObject.Properties[$Name]
     if ($property) {
         return $property.Value
+    }
+
+    return $null
+}
+
+function Get-TestLabCanonicalNodeName {
+    param([string]$NodeName)
+
+    switch ($NodeName) {
+        "sender" { return "nodeA" }
+        "receiver" { return "nodeB" }
+        default { return $NodeName }
+    }
+}
+
+function Get-TestLabLegacyNodeName {
+    param([string]$NodeName)
+
+    switch (Get-TestLabCanonicalNodeName -NodeName $NodeName) {
+        "nodeA" { return "sender" }
+        "nodeB" { return "receiver" }
+        default { return $null }
+    }
+}
+
+function Get-TestLabNodeValue {
+    param(
+        $Object,
+        [string]$NodeName
+    )
+
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
+    $value = Get-ObjectValue -Object $Object -Name $canonicalNodeName
+    if ($null -ne $value) {
+        return $value
+    }
+
+    $legacyNodeName = Get-TestLabLegacyNodeName -NodeName $NodeName
+    if (-not [string]::IsNullOrWhiteSpace($legacyNodeName)) {
+        return Get-ObjectValue -Object $Object -Name $legacyNodeName
     }
 
     return $null
@@ -383,9 +423,10 @@ function Get-NodeConnection {
         [string]$NodeName
     )
 
-    $node = $Lab.nodes.$NodeName
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
+    $node = Get-TestLabNodeValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -NodeName $canonicalNodeName
     if (-not $node -or -not $node.host) {
-        throw "Missing lab.nodes.$NodeName.host"
+        throw "Missing lab.nodes.$canonicalNodeName.host"
     }
 
     $defaultPort = if ($Lab.ssh -and $Lab.ssh.port) { [int]$Lab.ssh.port } else { 22 }
@@ -393,6 +434,7 @@ function Get-NodeConnection {
     $defaultIdentityFile = if ($Lab.ssh -and $Lab.ssh.identityFile) { [string]$Lab.ssh.identityFile } else { $null }
 
     return [pscustomobject]@{
+        NodeName = $canonicalNodeName
         User = if ($node.user) { [string]$node.user } else { $defaultUser }
         Host = [string]$node.host
         Port = if ($node.port) { [int]$node.port } else { $defaultPort }
@@ -1075,14 +1117,20 @@ function Get-FunctionalTestConfig {
         $hostGatewayIp = "10.0.2.2"
     }
 
-    $senderAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "senderAliasIp")
-    if ([string]::IsNullOrWhiteSpace($senderAliasIp)) {
-        $senderAliasIp = "10.254.0.22"
+    $nodeAAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "nodeAAliasIp")
+    if ([string]::IsNullOrWhiteSpace($nodeAAliasIp)) {
+        $nodeAAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "senderAliasIp")
+    }
+    if ([string]::IsNullOrWhiteSpace($nodeAAliasIp)) {
+        $nodeAAliasIp = "10.254.0.22"
     }
 
-    $receiverAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "receiverAliasIp")
-    if ([string]::IsNullOrWhiteSpace($receiverAliasIp)) {
-        $receiverAliasIp = "10.254.0.23"
+    $nodeBAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "nodeBAliasIp")
+    if ([string]::IsNullOrWhiteSpace($nodeBAliasIp)) {
+        $nodeBAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "receiverAliasIp")
+    }
+    if ([string]::IsNullOrWhiteSpace($nodeBAliasIp)) {
+        $nodeBAliasIp = "10.254.0.23"
     }
 
     $allowUnencryptedRemoteBackups = "yes"
@@ -1093,8 +1141,8 @@ function Get-FunctionalTestConfig {
 
     return [pscustomobject]@{
         hostGatewayIp = $hostGatewayIp
-        senderAliasIp = $senderAliasIp
-        receiverAliasIp = $receiverAliasIp
+        nodeAAliasIp = $nodeAAliasIp
+        nodeBAliasIp = $nodeBAliasIp
         allowUnencryptedRemoteBackups = $allowUnencryptedRemoteBackups
     }
 }
@@ -1107,16 +1155,17 @@ function Get-UpgradeScenarioNodePlan {
         $FunctionalCfg
     )
 
-    $uidPrefix = if ($NodeName -eq "sender") { "s" } else { "r" }
-    $aliasIp = if ($NodeName -eq "sender") { $FunctionalCfg.senderAliasIp } else { $FunctionalCfg.receiverAliasIp }
-    $root = "$($ZfsValues.DatasetRoot)/upgrade/$NodeName"
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
+    $uidPrefix = if ($canonicalNodeName -eq "nodeA") { "a" } else { "b" }
+    $aliasIp = if ($canonicalNodeName -eq "nodeA") { $FunctionalCfg.nodeAAliasIp } else { $FunctionalCfg.nodeBAliasIp }
+    $root = "$($ZfsValues.DatasetRoot)/upgrade/$canonicalNodeName"
 
     return [pscustomobject]@{
-        NodeName = $NodeName
+        NodeName = $canonicalNodeName
         SourceDataset = "$root/source"
-        SourceMountpoint = "/mnt/buddybackup-upgrade/$NodeName-source"
+        SourceMountpoint = "/mnt/buddybackup-upgrade/$canonicalNodeName-source"
         LocalBackupDataset = "$root/local-backup"
-        ReceiveRootDataset = "$($ZfsValues.DatasetRoot)/upgrade/receive-$NodeName"
+        ReceiveRootDataset = "$($ZfsValues.DatasetRoot)/upgrade/receive-$canonicalNodeName"
         RemoteBackupUid = "${uidPrefix}upgrm01"
         LocalBackupUid = "${uidPrefix}upglc01"
         SnapshotUid = "${uidPrefix}upgsn01"
@@ -1141,7 +1190,7 @@ function Run-BaseSetupVerification {
             throw "No local-provider report found for base setup verification."
         }
 
-        foreach ($nodeName in @("sender", "receiver")) {
+        foreach ($nodeName in @("nodeA", "nodeB")) {
             $nodeReport = @($providerReport.nodes | Where-Object { $_.node -eq $nodeName }) | Select-Object -First 1
             $nodeCheck = Test-NodeBaseSetupFromProviderReport -NodeReport $nodeReport -NodeName $nodeName
             $results += [pscustomobject]@{
@@ -1160,7 +1209,7 @@ function Run-BaseSetupVerification {
     $zfsValues = Get-SetupZfsValues -Lab $Lab
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
 
-    foreach ($nodeName in @("sender", "receiver")) {
+    foreach ($nodeName in @("nodeA", "nodeB")) {
         $connection = Get-NodeConnection -Lab $Lab -NodeName $nodeName
 
         $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command $pluginVerifyCommand -Label "${nodeName}-buddybackup-plugin-check" -DoExecute:$DoExecute
@@ -1741,8 +1790,8 @@ function Run-Scenario {
         [switch]$DoExecute
     )
 
-    $sender = Get-NodeConnection -Lab $Lab -NodeName "sender"
-    $receiver = Get-NodeConnection -Lab $Lab -NodeName "receiver"
+    $sender = Get-NodeConnection -Lab $Lab -NodeName "nodeA"
+    $receiver = Get-NodeConnection -Lab $Lab -NodeName "nodeB"
 
     $results = @()
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
@@ -1753,39 +1802,39 @@ function Run-Scenario {
 
     switch ($Scenario) {
         "fresh-install" {
-            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.senderPluginRequest -DoExecute:$DoExecute
-            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.receiverPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.nodeAPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.nodeBPluginRequest -DoExecute:$DoExecute
         }
         "upgrade-preserves-config" {
-            $senderUpgradeFromRequest = if ($Cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { $Cell.senderUpgradeFromPluginRequest } else { $null }
-            $receiverUpgradeFromRequest = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { $Cell.receiverUpgradeFromPluginRequest } else { $null }
+            $senderUpgradeFromRequest = if ($Cell.PSObject.Properties['nodeAUpgradeFromPluginRequest']) { $Cell.nodeAUpgradeFromPluginRequest } else { $Cell.senderUpgradeFromPluginRequest }
+            $receiverUpgradeFromRequest = if ($Cell.PSObject.Properties['nodeBUpgradeFromPluginRequest']) { $Cell.nodeBUpgradeFromPluginRequest } else { $Cell.receiverUpgradeFromPluginRequest }
             if ($null -eq $senderUpgradeFromRequest -or $null -eq $receiverUpgradeFromRequest) {
-                throw "Scenario 'upgrade-preserves-config' requires sender.upgradeFromPlugin and receiver.upgradeFromPlugin in cell $($Cell.id)."
+                throw "Scenario 'upgrade-preserves-config' requires nodeA.upgradeFromPlugin and nodeB.upgradeFromPlugin in cell $($Cell.id)."
             }
 
             $functionalCfg = Get-FunctionalTestConfig -Lab $Lab
             $zfsValues = Get-SetupZfsValues -Lab $Lab
-            $senderPlan = Get-UpgradeScenarioNodePlan -NodeName "sender" -Connection $sender -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
-            $receiverPlan = Get-UpgradeScenarioNodePlan -NodeName "receiver" -Connection $receiver -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
-            $senderPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($receiverPlan.ReceiveRootDataset)/from-sender" -Force
+            $senderPlan = Get-UpgradeScenarioNodePlan -NodeName "nodeA" -Connection $sender -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
+            $receiverPlan = Get-UpgradeScenarioNodePlan -NodeName "nodeB" -Connection $receiver -ZfsValues $zfsValues -FunctionalCfg $functionalCfg
+            $senderPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($receiverPlan.ReceiveRootDataset)/from-nodeA" -Force
             $senderPlan | Add-Member -NotePropertyName RemoteHost -NotePropertyValue $(if ($receiver.Port -eq 22) { $receiver.Host } else { $receiverPlan.AliasIp }) -Force
             $senderPlan | Add-Member -NotePropertyName PeerAliasIp -NotePropertyValue $receiverPlan.AliasIp -Force
-            $receiverPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($senderPlan.ReceiveRootDataset)/from-receiver" -Force
+            $receiverPlan | Add-Member -NotePropertyName RemoteDestinationDataset -NotePropertyValue "$($senderPlan.ReceiveRootDataset)/from-nodeB" -Force
             $receiverPlan | Add-Member -NotePropertyName RemoteHost -NotePropertyValue $(if ($sender.Port -eq 22) { $sender.Host } else { $senderPlan.AliasIp }) -Force
             $receiverPlan | Add-Member -NotePropertyName PeerAliasIp -NotePropertyValue $senderPlan.AliasIp -Force
 
             $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $senderUpgradeFromRequest -DoExecute:$DoExecute
             $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $receiverUpgradeFromRequest -DoExecute:$DoExecute
 
-            $senderKeyInfo = Get-RemoteFileValue -NodeConnection $sender -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "sender-upgrade-public-key" -DoExecute:$DoExecute
-            $receiverKeyInfo = Get-RemoteFileValue -NodeConnection $receiver -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "receiver-upgrade-public-key" -DoExecute:$DoExecute
+            $senderKeyInfo = Get-RemoteFileValue -NodeConnection $sender -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "nodeA-upgrade-public-key" -DoExecute:$DoExecute
+            $receiverKeyInfo = Get-RemoteFileValue -NodeConnection $receiver -Path "/boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "nodeB-upgrade-public-key" -DoExecute:$DoExecute
             $results += $senderKeyInfo.Result
             $results += $receiverKeyInfo.Result
 
             $setupScript = New-UpgradePreservesConfigSetupScript
             if (-not $DoExecute -or (($senderKeyInfo.Result.Success -and $senderKeyInfo.Value) -and ($receiverKeyInfo.Result.Success -and $receiverKeyInfo.Value))) {
                 $senderSetupCommand = Convert-ToRemoteBashScriptCommand -Script $setupScript -Arguments @(
-                    'sender',
+                    'nodeA',
                     [string]$senderPlan.SourceDataset,
                     [string]$senderPlan.SourceMountpoint,
                     [string]$senderPlan.LocalBackupDataset,
@@ -1802,7 +1851,7 @@ function Run-Scenario {
                     [string]$senderPlan.PeerAliasIp
                 )
                 $receiverSetupCommand = Convert-ToRemoteBashScriptCommand -Script $setupScript -Arguments @(
-                    'receiver',
+                    'nodeB',
                     [string]$receiverPlan.SourceDataset,
                     [string]$receiverPlan.SourceMountpoint,
                     [string]$receiverPlan.LocalBackupDataset,
@@ -1818,29 +1867,29 @@ function Run-Scenario {
                     [string]$sender.Port,
                     [string]$receiverPlan.PeerAliasIp
                 )
-                $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $senderSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on sender" -Label "sender-upgrade-seed" -DoExecute:$DoExecute
-                $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command $receiverSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on receiver" -Label "receiver-upgrade-seed" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $senderSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeA" -Label "nodeA-upgrade-seed" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command $receiverSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeB" -Label "nodeB-upgrade-seed" -DoExecute:$DoExecute
             } else {
                 $results += [pscustomobject]@{
                     Label = 'upgrade-seed-prerequisites'
-                    Command = 'read BuddyBackup sender public keys'
+                    Command = 'read BuddyBackup public keys'
                     ExitCode = 1
-                    Output = 'Failed to read the BuddyBackup sender public keys needed to seed pre-upgrade state.'
+                    Output = 'Failed to read the BuddyBackup public keys needed to seed pre-upgrade state.'
                     Success = $false
                 }
             }
 
-            $senderBefore = Get-UpgradeStateSnapshot -NodeName 'sender' -NodeConnection $sender -DoExecute:$DoExecute
-            $receiverBefore = Get-UpgradeStateSnapshot -NodeName 'receiver' -NodeConnection $receiver -DoExecute:$DoExecute
+            $senderBefore = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$DoExecute
+            $receiverBefore = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$DoExecute
             $results += $senderBefore.Result
             $results += $receiverBefore.Result
 
             if ($DoExecute) {
                 if ($senderBefore.Snapshot) {
-                    $senderBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'sender-upgrade-state-before.json')
-                    $senderBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'sender' -Snapshot $senderBefore.Snapshot -Plan $senderPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
+                    $senderBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'nodeA-upgrade-state-before.json')
+                    $senderBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'nodeA' -Snapshot $senderBefore.Snapshot -Plan $senderPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
                     $results += [pscustomobject]@{
-                        Label = 'sender-upgrade-before-sanity'
+                        Label = 'nodeA-upgrade-before-sanity'
                         Command = 'verify seeded pre-upgrade BuddyBackup state'
                         ExitCode = if ($senderBeforeCheck.Success) { 0 } else { 1 }
                         Output = if ($senderBeforeCheck.Success) { 'Seeded pre-upgrade state is present.' } else { $senderBeforeCheck.Error }
@@ -1849,10 +1898,10 @@ function Run-Scenario {
                 }
 
                 if ($receiverBefore.Snapshot) {
-                    $receiverBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'receiver-upgrade-state-before.json')
-                    $receiverBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'receiver' -Snapshot $receiverBefore.Snapshot -Plan $receiverPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
+                    $receiverBefore.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'nodeB-upgrade-state-before.json')
+                    $receiverBeforeCheck = Test-UpgradeStateSnapshot -NodeName 'nodeB' -Snapshot $receiverBefore.Snapshot -Plan $receiverPlan -AllowUnencryptedRemoteBackups $functionalCfg.allowUnencryptedRemoteBackups
                     $results += [pscustomobject]@{
-                        Label = 'receiver-upgrade-before-sanity'
+                        Label = 'nodeB-upgrade-before-sanity'
                         Command = 'verify seeded pre-upgrade BuddyBackup state'
                         ExitCode = if ($receiverBeforeCheck.Success) { 0 } else { 1 }
                         Output = if ($receiverBeforeCheck.Success) { 'Seeded pre-upgrade state is present.' } else { $receiverBeforeCheck.Error }
@@ -1861,14 +1910,14 @@ function Run-Scenario {
                 }
             } else {
                 $results += [pscustomobject]@{
-                    Label = 'sender-upgrade-before-sanity'
+                    Label = 'nodeA-upgrade-before-sanity'
                     Command = 'verify seeded pre-upgrade BuddyBackup state'
                     ExitCode = 0
                     Output = 'dry-run'
                     Success = $true
                 }
                 $results += [pscustomobject]@{
-                    Label = 'receiver-upgrade-before-sanity'
+                    Label = 'nodeB-upgrade-before-sanity'
                     Command = 'verify seeded pre-upgrade BuddyBackup state'
                     ExitCode = 0
                     Output = 'dry-run'
@@ -1876,26 +1925,26 @@ function Run-Scenario {
                 }
             }
 
-            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.senderPluginRequest -DoExecute:$DoExecute
-            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.receiverPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.nodeAPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.nodeBPluginRequest -DoExecute:$DoExecute
 
-            $senderAfter = Get-UpgradeStateSnapshot -NodeName 'sender' -NodeConnection $sender -DoExecute:$DoExecute
-            $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'receiver' -NodeConnection $receiver -DoExecute:$DoExecute
+            $senderAfter = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$DoExecute
+            $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$DoExecute
             $results += $senderAfter.Result
             $results += $receiverAfter.Result
 
             if ($DoExecute) {
                 if ($senderAfter.Snapshot) {
-                    $senderAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'sender-upgrade-state-after.json')
+                    $senderAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'nodeA-upgrade-state-after.json')
                 }
                 if ($receiverAfter.Snapshot) {
-                    $receiverAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'receiver-upgrade-state-after.json')
+                    $receiverAfter.Snapshot | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $CellDir 'nodeB-upgrade-state-after.json')
                 }
 
                 if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
-                    $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'sender' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                    $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
                     $results += [pscustomobject]@{
-                        Label = 'sender-upgrade-state-compare'
+                        Label = 'nodeA-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
                         ExitCode = if ($senderCompare.Success) { 0 } else { 1 }
                         Output = if ($senderCompare.Success) { 'BuddyBackup state was preserved across the upgrade.' } else { $senderCompare.Error }
@@ -1904,9 +1953,9 @@ function Run-Scenario {
                 }
 
                 if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
-                    $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'receiver' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                    $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
                     $results += [pscustomobject]@{
-                        Label = 'receiver-upgrade-state-compare'
+                        Label = 'nodeB-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
                         ExitCode = if ($receiverCompare.Success) { 0 } else { 1 }
                         Output = if ($receiverCompare.Success) { 'BuddyBackup state was preserved across the upgrade.' } else { $receiverCompare.Error }
@@ -1915,14 +1964,14 @@ function Run-Scenario {
                 }
             } else {
                 $results += [pscustomobject]@{
-                    Label = 'sender-upgrade-state-compare'
+                    Label = 'nodeA-upgrade-state-compare'
                     Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
                     ExitCode = 0
                     Output = 'dry-run'
                     Success = $true
                 }
                 $results += [pscustomobject]@{
-                    Label = 'receiver-upgrade-state-compare'
+                    Label = 'nodeB-upgrade-state-compare'
                     Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
                     ExitCode = 0
                     Output = 'dry-run'
@@ -1944,8 +1993,8 @@ function Run-Scenario {
             }
 
             foreach ($node in @(
-                [pscustomobject]@{ Name = "sender"; Connection = $sender },
-                [pscustomobject]@{ Name = "receiver"; Connection = $receiver }
+                [pscustomobject]@{ Name = "nodeA"; Connection = $sender },
+                [pscustomobject]@{ Name = "nodeB"; Connection = $receiver }
             )) {
                 Write-Host "[testlab] Scenario 'post-reboot': validating reboot persistence on $($node.Name)"
                 $manualAccessLabel = "$($node.Name)-manual-access-check"
@@ -2068,17 +2117,25 @@ $cellIndex = 0
 
 foreach ($cell in $matrixCells) {
     $cellIndex += 1
-    $senderPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string]$cell.sender.plugin)
-    $receiverPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string]$cell.receiver.plugin)
-    $cell | Add-Member -NotePropertyName senderPluginRequest -NotePropertyValue $senderPluginRequest -Force
-    $cell | Add-Member -NotePropertyName receiverPluginRequest -NotePropertyValue $receiverPluginRequest -Force
-    $senderUpgradeFromPlugin = [string](Get-ObjectValue -Object $cell.sender -Name 'upgradeFromPlugin')
-    if (-not [string]::IsNullOrWhiteSpace($senderUpgradeFromPlugin)) {
-        $cell | Add-Member -NotePropertyName senderUpgradeFromPluginRequest -NotePropertyValue (Resolve-LabPluginRequest -Lab $lab -RequestedValue $senderUpgradeFromPlugin) -Force
+    $nodeA = Get-TestLabNodeValue -Object $cell -NodeName 'nodeA'
+    $nodeB = Get-TestLabNodeValue -Object $cell -NodeName 'nodeB'
+    $nodeAPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string](Get-ObjectValue -Object $nodeA -Name 'plugin'))
+    $nodeBPluginRequest = Resolve-LabPluginRequest -Lab $lab -RequestedValue ([string](Get-ObjectValue -Object $nodeB -Name 'plugin'))
+    $cell | Add-Member -NotePropertyName nodeAPluginRequest -NotePropertyValue $nodeAPluginRequest -Force
+    $cell | Add-Member -NotePropertyName nodeBPluginRequest -NotePropertyValue $nodeBPluginRequest -Force
+    $cell | Add-Member -NotePropertyName senderPluginRequest -NotePropertyValue $nodeAPluginRequest -Force
+    $cell | Add-Member -NotePropertyName receiverPluginRequest -NotePropertyValue $nodeBPluginRequest -Force
+    $nodeAUpgradeFromPlugin = [string](Get-ObjectValue -Object $nodeA -Name 'upgradeFromPlugin')
+    if (-not [string]::IsNullOrWhiteSpace($nodeAUpgradeFromPlugin)) {
+        $resolvedNodeAUpgradeFromPlugin = Resolve-LabPluginRequest -Lab $lab -RequestedValue $nodeAUpgradeFromPlugin
+        $cell | Add-Member -NotePropertyName nodeAUpgradeFromPluginRequest -NotePropertyValue $resolvedNodeAUpgradeFromPlugin -Force
+        $cell | Add-Member -NotePropertyName senderUpgradeFromPluginRequest -NotePropertyValue $resolvedNodeAUpgradeFromPlugin -Force
     }
-    $receiverUpgradeFromPlugin = [string](Get-ObjectValue -Object $cell.receiver -Name 'upgradeFromPlugin')
-    if (-not [string]::IsNullOrWhiteSpace($receiverUpgradeFromPlugin)) {
-        $cell | Add-Member -NotePropertyName receiverUpgradeFromPluginRequest -NotePropertyValue (Resolve-LabPluginRequest -Lab $lab -RequestedValue $receiverUpgradeFromPlugin) -Force
+    $nodeBUpgradeFromPlugin = [string](Get-ObjectValue -Object $nodeB -Name 'upgradeFromPlugin')
+    if (-not [string]::IsNullOrWhiteSpace($nodeBUpgradeFromPlugin)) {
+        $resolvedNodeBUpgradeFromPlugin = Resolve-LabPluginRequest -Lab $lab -RequestedValue $nodeBUpgradeFromPlugin
+        $cell | Add-Member -NotePropertyName nodeBUpgradeFromPluginRequest -NotePropertyValue $resolvedNodeBUpgradeFromPlugin -Force
+        $cell | Add-Member -NotePropertyName receiverUpgradeFromPluginRequest -NotePropertyValue $resolvedNodeBUpgradeFromPlugin -Force
     }
     Write-Host "[testlab] Running cell $($cell.id) ($cellIndex/$totalCells) lifecycle=$($cell.lifecycle)"
     $status = "pass"
@@ -2145,8 +2202,8 @@ foreach ($cell in $matrixCells) {
     if (-not $SkipArtifacts) {
         try {
             Write-Host "[testlab] Collecting artifacts for cell $($cell.id)"
-            Collect-NodeArtifacts -Lab $lab -NodeName "sender" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "sender") -CellDir $cellDir -DoExecute:$Execute
-            Collect-NodeArtifacts -Lab $lab -NodeName "receiver" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "receiver") -CellDir $cellDir -DoExecute:$Execute
+            Collect-NodeArtifacts -Lab $lab -NodeName "nodeA" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "nodeA") -CellDir $cellDir -DoExecute:$Execute
+            Collect-NodeArtifacts -Lab $lab -NodeName "nodeB" -NodeConnection (Get-NodeConnection -Lab $lab -NodeName "nodeB") -CellDir $cellDir -DoExecute:$Execute
         } catch {
             $status = "fail"
             $errors += "Artifact collection failed: $($_.Exception.Message)"
@@ -2157,20 +2214,20 @@ foreach ($cell in $matrixCells) {
     $result += [pscustomobject]@{
         runId = $runId
         cellId = $cell.id
-        senderUnraid = $cell.sender.unraid
-        receiverUnraid = $cell.receiver.unraid
-        senderPlugin = $senderPluginRequest.displayVersion
-        senderPluginRequested = $senderPluginRequest.requestedValue
-        senderPluginResolved = $senderPluginRequest.displayVersion
-        senderPluginSource = $senderPluginRequest.sourceType
-        senderUpgradeFromPluginRequested = if ($cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { [string]$cell.senderUpgradeFromPluginRequest.requestedValue } else { $null }
-        senderUpgradeFromPluginResolved = if ($cell.PSObject.Properties['senderUpgradeFromPluginRequest']) { [string]$cell.senderUpgradeFromPluginRequest.displayVersion } else { $null }
-        receiverPlugin = $receiverPluginRequest.displayVersion
-        receiverPluginRequested = $receiverPluginRequest.requestedValue
-        receiverPluginResolved = $receiverPluginRequest.displayVersion
-        receiverPluginSource = $receiverPluginRequest.sourceType
-        receiverUpgradeFromPluginRequested = if ($cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { [string]$cell.receiverUpgradeFromPluginRequest.requestedValue } else { $null }
-        receiverUpgradeFromPluginResolved = if ($cell.PSObject.Properties['receiverUpgradeFromPluginRequest']) { [string]$cell.receiverUpgradeFromPluginRequest.displayVersion } else { $null }
+        nodeAUnraid = [string](Get-ObjectValue -Object $nodeA -Name 'unraid')
+        nodeBUnraid = [string](Get-ObjectValue -Object $nodeB -Name 'unraid')
+        nodeAPlugin = $nodeAPluginRequest.displayVersion
+        nodeAPluginRequested = $nodeAPluginRequest.requestedValue
+        nodeAPluginResolved = $nodeAPluginRequest.displayVersion
+        nodeAPluginSource = $nodeAPluginRequest.sourceType
+        nodeAUpgradeFromPluginRequested = if ($cell.PSObject.Properties['nodeAUpgradeFromPluginRequest']) { [string]$cell.nodeAUpgradeFromPluginRequest.requestedValue } else { $null }
+        nodeAUpgradeFromPluginResolved = if ($cell.PSObject.Properties['nodeAUpgradeFromPluginRequest']) { [string]$cell.nodeAUpgradeFromPluginRequest.displayVersion } else { $null }
+        nodeBPlugin = $nodeBPluginRequest.displayVersion
+        nodeBPluginRequested = $nodeBPluginRequest.requestedValue
+        nodeBPluginResolved = $nodeBPluginRequest.displayVersion
+        nodeBPluginSource = $nodeBPluginRequest.sourceType
+        nodeBUpgradeFromPluginRequested = if ($cell.PSObject.Properties['nodeBUpgradeFromPluginRequest']) { [string]$cell.nodeBUpgradeFromPluginRequest.requestedValue } else { $null }
+        nodeBUpgradeFromPluginResolved = if ($cell.PSObject.Properties['nodeBUpgradeFromPluginRequest']) { [string]$cell.nodeBUpgradeFromPluginRequest.displayVersion } else { $null }
         categories = @((Get-ObjectValue -Object $cell -Name "categories") | Where-Object { $null -ne $_ })
         purpose = [string](Get-ObjectValue -Object $cell -Name "purpose")
         lifecycle = $cell.lifecycle

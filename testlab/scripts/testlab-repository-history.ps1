@@ -23,19 +23,62 @@ function Join-TestLabRepositoryHistoryValues {
     return ($items -join "; ")
 }
 
+function Get-TestLabPropertyValue {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        return $property.Value
+    }
+
+    if ($Name -like 'nodeA*') {
+        $legacyProperty = $Object.PSObject.Properties[($Name -replace '^nodeA', 'sender')]
+        if ($legacyProperty) {
+            return $legacyProperty.Value
+        }
+    }
+
+    if ($Name -like 'nodeB*') {
+        $legacyProperty = $Object.PSObject.Properties[($Name -replace '^nodeB', 'receiver')]
+        if ($legacyProperty) {
+            return $legacyProperty.Value
+        }
+    }
+
+    return $null
+}
+
+function Get-TestLabPropertyOrDefault {
+    param(
+        $Object,
+        [string]$Name,
+        $DefaultValue = $null
+    )
+
+    $value = Get-TestLabPropertyValue -Object $Object -Name $Name
+    if ($null -ne $value) {
+        return $value
+    }
+
+    return $DefaultValue
+}
+
 function ConvertTo-TestLabPublicHistoryCell {
     param($Cell)
 
-    $senderPluginSource = if ($Cell.PSObject.Properties['senderPluginSource']) { [string]$Cell.senderPluginSource } else { "release-tag" }
-    $receiverPluginSource = if ($Cell.PSObject.Properties['receiverPluginSource']) { [string]$Cell.receiverPluginSource } else { "release-tag" }
-    $senderPluginRequested = if ($Cell.PSObject.Properties['senderPluginRequested']) { [string]$Cell.senderPluginRequested } else { [string]$Cell.senderPlugin }
-    $receiverPluginRequested = if ($Cell.PSObject.Properties['receiverPluginRequested']) { [string]$Cell.receiverPluginRequested } else { [string]$Cell.receiverPlugin }
-    $senderPluginResolved = if ($Cell.PSObject.Properties['senderPluginResolved']) { [string]$Cell.senderPluginResolved } else { [string]$Cell.senderPlugin }
-    $receiverPluginResolved = if ($Cell.PSObject.Properties['receiverPluginResolved']) { [string]$Cell.receiverPluginResolved } else { [string]$Cell.receiverPlugin }
-    $senderUpgradeFromPluginRequested = if ($Cell.PSObject.Properties['senderUpgradeFromPluginRequested']) { [string]$Cell.senderUpgradeFromPluginRequested } else { $null }
-    $receiverUpgradeFromPluginRequested = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginRequested']) { [string]$Cell.receiverUpgradeFromPluginRequested } else { $null }
-    $senderUpgradeFromPluginResolved = if ($Cell.PSObject.Properties['senderUpgradeFromPluginResolved']) { [string]$Cell.senderUpgradeFromPluginResolved } else { $null }
-    $receiverUpgradeFromPluginResolved = if ($Cell.PSObject.Properties['receiverUpgradeFromPluginResolved']) { [string]$Cell.receiverUpgradeFromPluginResolved } else { $null }
+    $nodeAPluginSource = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeAPluginSource' -DefaultValue 'release-tag')
+    $nodeBPluginSource = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeBPluginSource' -DefaultValue 'release-tag')
+    $nodeAPluginRequested = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeAPluginRequested' -DefaultValue (Get-TestLabPropertyValue -Object $Cell -Name 'nodeAPlugin'))
+    $nodeBPluginRequested = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeBPluginRequested' -DefaultValue (Get-TestLabPropertyValue -Object $Cell -Name 'nodeBPlugin'))
+    $nodeAPluginResolved = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeAPluginResolved' -DefaultValue (Get-TestLabPropertyValue -Object $Cell -Name 'nodeAPlugin'))
+    $nodeBPluginResolved = [string](Get-TestLabPropertyOrDefault -Object $Cell -Name 'nodeBPluginResolved' -DefaultValue (Get-TestLabPropertyValue -Object $Cell -Name 'nodeBPlugin'))
+    $nodeAUpgradeFromPluginRequested = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeAUpgradeFromPluginRequested')
+    $nodeBUpgradeFromPluginRequested = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeBUpgradeFromPluginRequested')
+    $nodeAUpgradeFromPluginResolved = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeAUpgradeFromPluginResolved')
+    $nodeBUpgradeFromPluginResolved = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeBUpgradeFromPluginResolved')
 
     return [pscustomobject]@{
         cellId = [string]$Cell.cellId
@@ -43,21 +86,21 @@ function ConvertTo-TestLabPublicHistoryCell {
         status = [string]$Cell.status
         categories = if ($Cell.PSObject.Properties['categories']) { @($Cell.categories) } else { @() }
         purpose = if ($Cell.PSObject.Properties['purpose']) { [string]$Cell.purpose } else { $null }
-        sender = [pscustomobject]@{
-            unraid = [string]$Cell.senderUnraid
-            pluginRequested = $senderPluginRequested
-            pluginResolved = $senderPluginResolved
-            pluginSource = $senderPluginSource
-            upgradeFromPluginRequested = $senderUpgradeFromPluginRequested
-            upgradeFromPluginResolved = $senderUpgradeFromPluginResolved
+        nodeA = [pscustomobject]@{
+            unraid = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeAUnraid')
+            pluginRequested = $nodeAPluginRequested
+            pluginResolved = $nodeAPluginResolved
+            pluginSource = $nodeAPluginSource
+            upgradeFromPluginRequested = $nodeAUpgradeFromPluginRequested
+            upgradeFromPluginResolved = $nodeAUpgradeFromPluginResolved
         }
-        receiver = [pscustomobject]@{
-            unraid = [string]$Cell.receiverUnraid
-            pluginRequested = $receiverPluginRequested
-            pluginResolved = $receiverPluginResolved
-            pluginSource = $receiverPluginSource
-            upgradeFromPluginRequested = $receiverUpgradeFromPluginRequested
-            upgradeFromPluginResolved = $receiverUpgradeFromPluginResolved
+        nodeB = [pscustomobject]@{
+            unraid = [string](Get-TestLabPropertyValue -Object $Cell -Name 'nodeBUnraid')
+            pluginRequested = $nodeBPluginRequested
+            pluginResolved = $nodeBPluginResolved
+            pluginSource = $nodeBPluginSource
+            upgradeFromPluginRequested = $nodeBUpgradeFromPluginRequested
+            upgradeFromPluginResolved = $nodeBUpgradeFromPluginResolved
         }
     }
 }
@@ -67,10 +110,10 @@ function ConvertTo-TestLabRepositoryHistoryEntry {
 
     $cells = @($Manifest.summary.cells | ForEach-Object { ConvertTo-TestLabPublicHistoryCell -Cell $_ })
     $pluginCoverage = @($cells | ForEach-Object {
-        "{0} ({1}) -> {2} ({3})" -f $_.sender.pluginResolved, $_.sender.pluginSource, $_.receiver.pluginResolved, $_.receiver.pluginSource
+        "{0} ({1}) -> {2} ({3})" -f $_.nodeA.pluginResolved, $_.nodeA.pluginSource, $_.nodeB.pluginResolved, $_.nodeB.pluginSource
     } | Select-Object -Unique)
     $unraidCoverage = @($cells | ForEach-Object {
-        "{0} -> {1}" -f $_.sender.unraid, $_.receiver.unraid
+        "{0} -> {1}" -f $_.nodeA.unraid, $_.nodeB.unraid
     } | Select-Object -Unique)
 
     return [pscustomobject]@{

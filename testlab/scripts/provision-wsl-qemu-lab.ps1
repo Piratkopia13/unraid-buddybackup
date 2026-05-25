@@ -957,8 +957,8 @@ $startedInstances = @()
 
 try {
     foreach ($entry in @(
-        @{ NodeName = "sender"; DefaultPort = 2222; DefaultHttpPort = 8080; DefaultHttpsPort = 8443 },
-        @{ NodeName = "receiver"; DefaultPort = 2223; DefaultHttpPort = 8081; DefaultHttpsPort = 8444 }
+        @{ NodeName = "nodeA"; DefaultPort = 2222; DefaultHttpPort = 8080; DefaultHttpsPort = 8443 },
+        @{ NodeName = "nodeB"; DefaultPort = 2223; DefaultHttpPort = 8081; DefaultHttpsPort = 8444 }
     )) {
         $nodeName = [string]$entry["NodeName"]
         $defaultPort = [int]$entry["DefaultPort"]

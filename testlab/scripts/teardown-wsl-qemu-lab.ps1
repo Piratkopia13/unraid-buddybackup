@@ -1,6 +1,6 @@
 param(
     [string]$LabConfig = "testlab/config/lab.local.json",
-    [string[]]$NodeNames = @("sender", "receiver"),
+    [string[]]$NodeNames = @("nodeA", "nodeB"),
     [switch]$Execute
 )
 

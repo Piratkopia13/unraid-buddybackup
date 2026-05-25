@@ -41,6 +41,46 @@ function Get-ObjectValue {
     return $null
 }
 
+function Get-TestLabCanonicalNodeName {
+    param([string]$NodeName)
+
+    switch ($NodeName) {
+        "sender" { return "nodeA" }
+        "receiver" { return "nodeB" }
+        default { return $NodeName }
+    }
+}
+
+function Get-TestLabLegacyNodeName {
+    param([string]$NodeName)
+
+    switch (Get-TestLabCanonicalNodeName -NodeName $NodeName) {
+        "nodeA" { return "sender" }
+        "nodeB" { return "receiver" }
+        default { return $null }
+    }
+}
+
+function Get-TestLabNodeValue {
+    param(
+        $Object,
+        [string]$NodeName
+    )
+
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
+    $value = Get-ObjectValue -Object $Object -Name $canonicalNodeName
+    if ($null -ne $value) {
+        return $value
+    }
+
+    $legacyNodeName = Get-TestLabLegacyNodeName -NodeName $NodeName
+    if (-not [string]::IsNullOrWhiteSpace($legacyNodeName)) {
+        return Get-ObjectValue -Object $Object -Name $legacyNodeName
+    }
+
+    return $null
+}
+
 function Resolve-TestLabPath {
     param([string]$Path)
 
@@ -103,14 +143,20 @@ function Get-FunctionalTestConfig {
         $receiveDatasetName = "receive"
     }
 
-    $senderAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "senderAliasIp")
-    if ([string]::IsNullOrWhiteSpace($senderAliasIp)) {
-        $senderAliasIp = "10.254.0.22"
+    $nodeAAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "nodeAAliasIp")
+    if ([string]::IsNullOrWhiteSpace($nodeAAliasIp)) {
+        $nodeAAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "senderAliasIp")
+    }
+    if ([string]::IsNullOrWhiteSpace($nodeAAliasIp)) {
+        $nodeAAliasIp = "10.254.0.22"
     }
 
-    $receiverAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "receiverAliasIp")
-    if ([string]::IsNullOrWhiteSpace($receiverAliasIp)) {
-        $receiverAliasIp = "10.254.0.23"
+    $nodeBAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "nodeBAliasIp")
+    if ([string]::IsNullOrWhiteSpace($nodeBAliasIp)) {
+        $nodeBAliasIp = [string](Get-ObjectValue -Object $functionalCfg -Name "receiverAliasIp")
+    }
+    if ([string]::IsNullOrWhiteSpace($nodeBAliasIp)) {
+        $nodeBAliasIp = "10.254.0.23"
     }
 
     $allowUnencryptedRemoteBackups = "yes"
@@ -123,8 +169,8 @@ function Get-FunctionalTestConfig {
         hostGatewayIp = $hostGatewayIp
         testDatasetRootName = $testDatasetRootName
         receiveDatasetName = $receiveDatasetName
-        senderAliasIp = $senderAliasIp
-        receiverAliasIp = $receiverAliasIp
+        nodeAAliasIp = $nodeAAliasIp
+        nodeBAliasIp = $nodeBAliasIp
         allowUnencryptedRemoteBackups = $allowUnencryptedRemoteBackups
     }
 }
@@ -135,9 +181,10 @@ function Get-NodeConnection {
         [string]$NodeName
     )
 
-    $node = Get-ObjectValue -Object $Lab.nodes -Name $NodeName
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
+    $node = Get-TestLabNodeValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -NodeName $canonicalNodeName
     if (-not $node -or -not (Get-ObjectValue -Object $node -Name "host")) {
-        throw "Missing lab.nodes.$NodeName.host"
+        throw "Missing lab.nodes.$canonicalNodeName.host"
     }
 
     $defaultPort = if ($Lab.ssh -and $Lab.ssh.port) { [int]$Lab.ssh.port } else { 22 }
@@ -146,7 +193,7 @@ function Get-NodeConnection {
 
     $identityFile = Get-ObjectValue -Object $node -Name "identityFile"
     return [pscustomobject]@{
-        NodeName = $NodeName
+        NodeName = $canonicalNodeName
         User = if (Get-ObjectValue -Object $node -Name "user") { [string](Get-ObjectValue -Object $node -Name "user") } else { $defaultUser }
         Host = [string](Get-ObjectValue -Object $node -Name "host")
         Port = if (Get-ObjectValue -Object $node -Name "port") { [int](Get-ObjectValue -Object $node -Name "port") } else { $defaultPort }
@@ -359,23 +406,24 @@ function Get-FunctionalNodePlan {
         [int]$Port
     )
 
+    $canonicalNodeName = Get-TestLabCanonicalNodeName -NodeName $NodeName
     $testRoot = "$($ZfsValues.DatasetRoot)/$($FunctionalCfg.testDatasetRootName)"
     $receiveRoot = "$testRoot/$($FunctionalCfg.receiveDatasetName)"
-    $aliasIp = if ($NodeName -eq "sender") { $FunctionalCfg.senderAliasIp } else { $FunctionalCfg.receiverAliasIp }
-    $localUid = if ($NodeName -eq "sender") { "sloc0001" } else { "rloc0001" }
-    $remoteUid = if ($NodeName -eq "sender") { "srem0001" } else { "rrem0001" }
+    $aliasIp = if ($canonicalNodeName -eq "nodeA") { $FunctionalCfg.nodeAAliasIp } else { $FunctionalCfg.nodeBAliasIp }
+    $localUid = if ($canonicalNodeName -eq "nodeA") { "aloc0001" } else { "bloc0001" }
+    $remoteUid = if ($canonicalNodeName -eq "nodeA") { "arem0001" } else { "brem0001" }
 
     return [pscustomobject]@{
-        nodeName = $NodeName
+        nodeName = $canonicalNodeName
         hostPort = $Port
         aliasIp = $aliasIp
         testRootDataset = $testRoot
         receiveRootDataset = $receiveRoot
-        sourceDataset = "$testRoot/$NodeName-source"
-        sourceMountpoint = "/mnt/buddybackup-functional/$NodeName-source"
-        localBackupDataset = "$testRoot/$NodeName-local-backup"
-        localRestoreDataset = "$testRoot/$NodeName-local-restore"
-        remoteRestoreDataset = "$testRoot/$NodeName-remote-restore"
+        sourceDataset = "$testRoot/$canonicalNodeName-source"
+        sourceMountpoint = "/mnt/buddybackup-functional/$canonicalNodeName-source"
+        localBackupDataset = "$testRoot/$canonicalNodeName-local-backup"
+        localRestoreDataset = "$testRoot/$canonicalNodeName-local-restore"
+        remoteRestoreDataset = "$testRoot/$canonicalNodeName-remote-restore"
         localBackupUid = $localUid
         remoteBackupUid = $remoteUid
     }
@@ -613,18 +661,18 @@ if (-not (Test-Path -LiteralPath $resolvedLabConfig)) {
 $lab = Get-Json -Path $resolvedLabConfig
 $zfsValues = Get-SetupZfsValues -Lab $lab
 $functionalCfg = Get-FunctionalTestConfig -Lab $lab
-$senderConnection = Get-NodeConnection -Lab $lab -NodeName "sender"
-$receiverConnection = Get-NodeConnection -Lab $lab -NodeName "receiver"
-$senderPlan = Get-FunctionalNodePlan -NodeName "sender" -ZfsValues $zfsValues -FunctionalCfg $functionalCfg -Port $senderConnection.Port
-$receiverPlan = Get-FunctionalNodePlan -NodeName "receiver" -ZfsValues $zfsValues -FunctionalCfg $functionalCfg -Port $receiverConnection.Port
+$senderConnection = Get-NodeConnection -Lab $lab -NodeName "nodeA"
+$receiverConnection = Get-NodeConnection -Lab $lab -NodeName "nodeB"
+$senderPlan = Get-FunctionalNodePlan -NodeName "nodeA" -ZfsValues $zfsValues -FunctionalCfg $functionalCfg -Port $senderConnection.Port
+$receiverPlan = Get-FunctionalNodePlan -NodeName "nodeB" -ZfsValues $zfsValues -FunctionalCfg $functionalCfg -Port $receiverConnection.Port
 
-$senderPlan | Add-Member -NotePropertyName inboundRemoteDataset -NotePropertyValue "$($senderPlan.receiveRootDataset)/from-receiver"
-$senderPlan | Add-Member -NotePropertyName remoteDestinationDataset -NotePropertyValue "$($receiverPlan.receiveRootDataset)/from-sender"
+$senderPlan | Add-Member -NotePropertyName inboundRemoteDataset -NotePropertyValue "$($senderPlan.receiveRootDataset)/from-nodeB"
+$senderPlan | Add-Member -NotePropertyName remoteDestinationDataset -NotePropertyValue "$($receiverPlan.receiveRootDataset)/from-nodeA"
 $senderPlan | Add-Member -NotePropertyName remoteHost -NotePropertyValue $(if ($receiverConnection.Port -eq 22) { $receiverConnection.Host } else { $receiverPlan.aliasIp })
 $senderPlan | Add-Member -NotePropertyName peerAliasIp -NotePropertyValue $receiverPlan.aliasIp
 
-$receiverPlan | Add-Member -NotePropertyName inboundRemoteDataset -NotePropertyValue "$($receiverPlan.receiveRootDataset)/from-sender"
-$receiverPlan | Add-Member -NotePropertyName remoteDestinationDataset -NotePropertyValue "$($senderPlan.receiveRootDataset)/from-receiver"
+$receiverPlan | Add-Member -NotePropertyName inboundRemoteDataset -NotePropertyValue "$($receiverPlan.receiveRootDataset)/from-nodeA"
+$receiverPlan | Add-Member -NotePropertyName remoteDestinationDataset -NotePropertyValue "$($senderPlan.receiveRootDataset)/from-nodeB"
 $receiverPlan | Add-Member -NotePropertyName remoteHost -NotePropertyValue $(if ($senderConnection.Port -eq 22) { $senderConnection.Host } else { $senderPlan.aliasIp })
 $receiverPlan | Add-Member -NotePropertyName peerAliasIp -NotePropertyValue $senderPlan.aliasIp
 
@@ -634,8 +682,8 @@ $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $reportPath = Join-Path $logsRoot ("functional-smoke-{0}.json" -f $runId)
 $snapshotRunId = $runId.Replace("-", "_")
 
-$senderPlan | Add-Member -NotePropertyName sourceSnapshot -NotePropertyValue "$($senderPlan.sourceDataset)@functional_smoke_${snapshotRunId}_sender"
-$receiverPlan | Add-Member -NotePropertyName sourceSnapshot -NotePropertyValue "$($receiverPlan.sourceDataset)@functional_smoke_${snapshotRunId}_receiver"
+$senderPlan | Add-Member -NotePropertyName sourceSnapshot -NotePropertyValue "$($senderPlan.sourceDataset)@functional_smoke_${snapshotRunId}_nodeA"
+$receiverPlan | Add-Member -NotePropertyName sourceSnapshot -NotePropertyValue "$($receiverPlan.sourceDataset)@functional_smoke_${snapshotRunId}_nodeB"
 
 $report = [ordered]@{
     runId = $runId
@@ -644,23 +692,23 @@ $report = [ordered]@{
     error = $null
     reportPath = $reportPath
     nodes = @(
-        [pscustomobject]@{ node = "sender"; sshPort = $senderConnection.Port; remoteHost = $senderPlan.remoteHost; webUi = "http://127.0.0.1:8080" },
-        [pscustomobject]@{ node = "receiver"; sshPort = $receiverConnection.Port; remoteHost = $receiverPlan.remoteHost; webUi = "http://127.0.0.1:8081" }
+        [pscustomobject]@{ node = "nodeA"; sshPort = $senderConnection.Port; remoteHost = $senderPlan.remoteHost; webUi = "http://127.0.0.1:8080" },
+        [pscustomobject]@{ node = "nodeB"; sshPort = $receiverConnection.Port; remoteHost = $receiverPlan.remoteHost; webUi = "http://127.0.0.1:8081" }
     )
     actions = @()
 }
 
 try {
-    Write-Host "[testlab] Functional smoke starting: sender localhost:$($senderConnection.Port), receiver localhost:$($receiverConnection.Port)"
+    Write-Host "[testlab] Functional smoke starting: nodeA localhost:$($senderConnection.Port), nodeB localhost:$($receiverConnection.Port)"
     Write-Host "[testlab] Functional smoke: reading BuddyBackup public keys"
     $senderPublicKey = Get-NodeBuddyBackupPublicKey -NodeConnection $senderConnection -DoExecute:$Execute
     $receiverPublicKey = Get-NodeBuddyBackupPublicKey -NodeConnection $receiverConnection -DoExecute:$Execute
 
     $setupScript = New-FunctionalSetupScript
 
-    Write-Host "[testlab] Functional smoke: applying environment setup on sender and receiver"
+    Write-Host "[testlab] Functional smoke: applying environment setup on nodeA and nodeB"
     $senderSetup = Invoke-NodeBashScript -NodeConnection $senderConnection -ScriptContent $setupScript -Arguments @(
-        "sender",
+        "nodeA",
         $senderPlan.sourceDataset,
         $senderPlan.sourceMountpoint,
         $senderPlan.localBackupDataset,
@@ -679,10 +727,10 @@ try {
         $senderPlan.peerAliasIp
     ) -Label "functional-setup" -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $senderSetup
-    Assert-CommandSucceeded -Result $senderSetup -FailureMessage "Functional setup failed on sender."
+    Assert-CommandSucceeded -Result $senderSetup -FailureMessage "Functional setup failed on nodeA."
 
     $receiverSetup = Invoke-NodeBashScript -NodeConnection $receiverConnection -ScriptContent $setupScript -Arguments @(
-        "receiver",
+        "nodeB",
         $receiverPlan.sourceDataset,
         $receiverPlan.sourceMountpoint,
         $receiverPlan.localBackupDataset,
@@ -701,12 +749,12 @@ try {
         $receiverPlan.peerAliasIp
     ) -Label "functional-setup" -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $receiverSetup
-    Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "Functional setup failed on receiver."
+    Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "Functional setup failed on nodeB."
 
     Write-Host "[testlab] Functional smoke: validating BuddyBackup connectivity"
     foreach ($pair in @(
-        @{ Connection = $senderConnection; Plan = $senderPlan; Label = "sender-test-connection" },
-        @{ Connection = $receiverConnection; Plan = $receiverPlan; Label = "receiver-test-connection" }
+        @{ Connection = $senderConnection; Plan = $senderPlan; Label = "nodeA-test-connection" },
+        @{ Connection = $receiverConnection; Plan = $receiverPlan; Label = "nodeB-test-connection" }
     )) {
         $connectionResult = Invoke-BuddyBackupShellCommand -NodeConnection $pair.Connection -Action "test_connection" -Arguments @($pair.Plan.remoteHost, $pair.Plan.remoteDestinationDataset) -Label $pair.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $connectionResult
@@ -718,8 +766,8 @@ try {
 
     Write-Host "[testlab] Functional smoke: creating source snapshots"
     foreach ($snapshot in @(
-        @{ Connection = $senderConnection; Snapshot = $senderPlan.sourceSnapshot; Label = "sender-create-source-snapshot" },
-        @{ Connection = $receiverConnection; Snapshot = $receiverPlan.sourceSnapshot; Label = "receiver-create-source-snapshot" }
+        @{ Connection = $senderConnection; Snapshot = $senderPlan.sourceSnapshot; Label = "nodeA-create-source-snapshot" },
+        @{ Connection = $receiverConnection; Snapshot = $receiverPlan.sourceSnapshot; Label = "nodeB-create-source-snapshot" }
     )) {
         $snapshotResult = Invoke-NodeSshCommand -NodeConnection $snapshot.Connection -Command ("zfs snapshot {0}" -f (Convert-ToShellSingleQuoted -Value $snapshot.Snapshot)) -Label $snapshot.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $snapshotResult
@@ -728,10 +776,10 @@ try {
 
     Write-Host "[testlab] Functional smoke: sending remote and local backups"
     foreach ($pair in @(
-        @{ Connection = $senderConnection; Type = "remote"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Uid = $senderPlan.remoteBackupUid; Label = "sender-remote-send"; Action = "send_backup" },
-        @{ Connection = $senderConnection; Type = "local"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Uid = $senderPlan.localBackupUid; Label = "sender-local-send"; Action = "send_local_backup" },
-        @{ Connection = $receiverConnection; Type = "remote"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = $receiverPlan.remoteHost; DestinationDataset = $receiverPlan.remoteDestinationDataset; Uid = $receiverPlan.remoteBackupUid; Label = "receiver-remote-send"; Action = "send_backup" },
-        @{ Connection = $receiverConnection; Type = "local"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Uid = $receiverPlan.localBackupUid; Label = "receiver-local-send"; Action = "send_local_backup" }
+        @{ Connection = $senderConnection; Type = "remote"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Uid = $senderPlan.remoteBackupUid; Label = "nodeA-remote-send"; Action = "send_backup" },
+        @{ Connection = $senderConnection; Type = "local"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Uid = $senderPlan.localBackupUid; Label = "nodeA-local-send"; Action = "send_local_backup" },
+        @{ Connection = $receiverConnection; Type = "remote"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = $receiverPlan.remoteHost; DestinationDataset = $receiverPlan.remoteDestinationDataset; Uid = $receiverPlan.remoteBackupUid; Label = "nodeB-remote-send"; Action = "send_backup" },
+        @{ Connection = $receiverConnection; Type = "local"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Uid = $receiverPlan.localBackupUid; Label = "nodeB-local-send"; Action = "send_local_backup" }
     )) {
         $sendArgs = if ($pair.Type -eq "remote") {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
@@ -748,10 +796,10 @@ try {
 
     Write-Host "[testlab] Functional smoke: verifying backup datasets"
     foreach ($check in @(
-        @{ Connection = $senderConnection; Dataset = $senderPlan.localBackupDataset; Label = "sender-local-backup-dataset-check" },
-        @{ Connection = $senderConnection; Dataset = $senderPlan.inboundRemoteDataset; Label = "sender-remote-backup-dataset-check" },
-        @{ Connection = $receiverConnection; Dataset = $receiverPlan.localBackupDataset; Label = "receiver-local-backup-dataset-check" },
-        @{ Connection = $receiverConnection; Dataset = $receiverPlan.inboundRemoteDataset; Label = "receiver-remote-backup-dataset-check" }
+        @{ Connection = $senderConnection; Dataset = $senderPlan.localBackupDataset; Label = "nodeA-local-backup-dataset-check" },
+        @{ Connection = $senderConnection; Dataset = $senderPlan.inboundRemoteDataset; Label = "nodeA-remote-backup-dataset-check" },
+        @{ Connection = $receiverConnection; Dataset = $receiverPlan.localBackupDataset; Label = "nodeB-local-backup-dataset-check" },
+        @{ Connection = $receiverConnection; Dataset = $receiverPlan.inboundRemoteDataset; Label = "nodeB-remote-backup-dataset-check" }
     )) {
         $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $datasetCheck
@@ -761,10 +809,10 @@ try {
     $snapshotSelections = @{}
     Write-Host "[testlab] Functional smoke: listing available snapshots"
     foreach ($query in @(
-        @{ Connection = $senderConnection; Uid = $senderPlan.remoteBackupUid; Type = "remote"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Key = "sender-remote-snapshots" },
-        @{ Connection = $senderConnection; Uid = $senderPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Key = "sender-local-snapshots" },
-        @{ Connection = $receiverConnection; Uid = $receiverPlan.remoteBackupUid; Type = "remote"; DestinationHost = $receiverPlan.remoteHost; DestinationDataset = $receiverPlan.remoteDestinationDataset; Key = "receiver-remote-snapshots" },
-        @{ Connection = $receiverConnection; Uid = $receiverPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Key = "receiver-local-snapshots" }
+        @{ Connection = $senderConnection; Uid = $senderPlan.remoteBackupUid; Type = "remote"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Key = "nodeA-remote-snapshots" },
+        @{ Connection = $senderConnection; Uid = $senderPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Key = "nodeA-local-snapshots" },
+        @{ Connection = $receiverConnection; Uid = $receiverPlan.remoteBackupUid; Type = "remote"; DestinationHost = $receiverPlan.remoteHost; DestinationDataset = $receiverPlan.remoteDestinationDataset; Key = "nodeB-remote-snapshots" },
+        @{ Connection = $receiverConnection; Uid = $receiverPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Key = "nodeB-local-snapshots" }
     )) {
         $snapshotArgs = if ($query.Type -eq "remote") { @($query.Type, $query.DestinationHost, $query.DestinationDataset) } else { @($query.Type, $query.DestinationDataset) }
         $snapshotResult = Invoke-BuddyBackupShellCommand -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -DoExecute:$Execute
@@ -777,10 +825,10 @@ try {
 
     Write-Host "[testlab] Functional smoke: restoring selected snapshots"
     foreach ($restore in @(
-        @{ Connection = $senderConnection; Type = "remote"; DestinationHost = $senderPlan.remoteHost; Selection = $snapshotSelections["sender-remote-snapshots"]; Destination = $senderPlan.remoteRestoreDataset; Label = "sender-remote-restore" },
-        @{ Connection = $senderConnection; Type = "local"; DestinationHost = ""; Selection = $snapshotSelections["sender-local-snapshots"]; Destination = $senderPlan.localRestoreDataset; Label = "sender-local-restore" },
-        @{ Connection = $receiverConnection; Type = "remote"; DestinationHost = $receiverPlan.remoteHost; Selection = $snapshotSelections["receiver-remote-snapshots"]; Destination = $receiverPlan.remoteRestoreDataset; Label = "receiver-remote-restore" },
-        @{ Connection = $receiverConnection; Type = "local"; DestinationHost = ""; Selection = $snapshotSelections["receiver-local-snapshots"]; Destination = $receiverPlan.localRestoreDataset; Label = "receiver-local-restore" }
+        @{ Connection = $senderConnection; Type = "remote"; DestinationHost = $senderPlan.remoteHost; Selection = $snapshotSelections["nodeA-remote-snapshots"]; Destination = $senderPlan.remoteRestoreDataset; Label = "nodeA-remote-restore" },
+        @{ Connection = $senderConnection; Type = "local"; DestinationHost = ""; Selection = $snapshotSelections["nodeA-local-snapshots"]; Destination = $senderPlan.localRestoreDataset; Label = "nodeA-local-restore" },
+        @{ Connection = $receiverConnection; Type = "remote"; DestinationHost = $receiverPlan.remoteHost; Selection = $snapshotSelections["nodeB-remote-snapshots"]; Destination = $receiverPlan.remoteRestoreDataset; Label = "nodeB-remote-restore" },
+        @{ Connection = $receiverConnection; Type = "local"; DestinationHost = ""; Selection = $snapshotSelections["nodeB-local-snapshots"]; Destination = $receiverPlan.localRestoreDataset; Label = "nodeB-local-restore" }
     )) {
         $restoreArgs = if ($restore.Type -eq "remote") {
             @($restore.Type, $restore.DestinationHost, "selected", $restore.Selection.snapshot, $restore.Selection.dataset, $restore.Destination)
@@ -794,10 +842,10 @@ try {
 
     Write-Host "[testlab] Functional smoke: verifying restored datasets"
     foreach ($check in @(
-        @{ Connection = $senderConnection; Dataset = $senderPlan.localRestoreDataset; Label = "sender-local-restore-dataset-check" },
-        @{ Connection = $senderConnection; Dataset = $senderPlan.remoteRestoreDataset; Label = "sender-remote-restore-dataset-check" },
-        @{ Connection = $receiverConnection; Dataset = $receiverPlan.localRestoreDataset; Label = "receiver-local-restore-dataset-check" },
-        @{ Connection = $receiverConnection; Dataset = $receiverPlan.remoteRestoreDataset; Label = "receiver-remote-restore-dataset-check" }
+        @{ Connection = $senderConnection; Dataset = $senderPlan.localRestoreDataset; Label = "nodeA-local-restore-dataset-check" },
+        @{ Connection = $senderConnection; Dataset = $senderPlan.remoteRestoreDataset; Label = "nodeA-remote-restore-dataset-check" },
+        @{ Connection = $receiverConnection; Dataset = $receiverPlan.localRestoreDataset; Label = "nodeB-local-restore-dataset-check" },
+        @{ Connection = $receiverConnection; Dataset = $receiverPlan.remoteRestoreDataset; Label = "nodeB-remote-restore-dataset-check" }
     )) {
         $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $datasetCheck

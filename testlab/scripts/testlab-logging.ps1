@@ -229,8 +229,8 @@ function Write-TestLabResultTable {
         [ordered]@{
             Cell = [string]$_.cellId
             Lifecycle = [string]$_.lifecycle
-            Sender = "{0}/{1}" -f $_.senderUnraid, $_.senderPlugin
-            Receiver = "{0}/{1}" -f $_.receiverUnraid, $_.receiverPlugin
+            NodeA = "{0}/{1}" -f $(if ($_.PSObject.Properties['nodeAUnraid']) { $_.nodeAUnraid } else { $_.senderUnraid }), $(if ($_.PSObject.Properties['nodeAPlugin']) { $_.nodeAPlugin } else { $_.senderPlugin })
+            NodeB = "{0}/{1}" -f $(if ($_.PSObject.Properties['nodeBUnraid']) { $_.nodeBUnraid } else { $_.receiverUnraid }), $(if ($_.PSObject.Properties['nodeBPlugin']) { $_.nodeBPlugin } else { $_.receiverPlugin })
             Scenarios = $scenarioSummary
             Status = ([string]$_.status).ToUpperInvariant()
         }
@@ -239,8 +239,8 @@ function Write-TestLabResultTable {
     $columns = @(
         @{ Key = 'Cell'; Header = 'Cell'; Width = 4 },
         @{ Key = 'Lifecycle'; Header = 'Lifecycle'; Width = 9 },
-        @{ Key = 'Sender'; Header = 'Sender'; Width = 6 },
-        @{ Key = 'Receiver'; Header = 'Receiver'; Width = 8 },
+        @{ Key = 'NodeA'; Header = 'NodeA'; Width = 6 },
+        @{ Key = 'NodeB'; Header = 'NodeB'; Width = 8 },
         @{ Key = 'Scenarios'; Header = 'Scenarios'; Width = 9 },
         @{ Key = 'Status'; Header = 'Status'; Width = 6 }
     )

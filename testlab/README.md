@@ -5,7 +5,7 @@ This folder contains the first implementation of a reproducible, script-first te
 ## Goals
 
 - Reproducible setup on a new host with minimal manual work.
-- Matrix testing for sender/receiver plugin compatibility across Unraid versions.
+- Matrix testing for fixed-node plugin compatibility across Unraid versions.
 - Explicit lifecycle scenarios for fresh install and post-reboot validation.
 - Dry-run-first execution with explicit `-Execute` paths for live provisioning and test actions.
 
@@ -48,14 +48,14 @@ This initial implementation provides:
    ./testlab/scripts/provision-lab.ps1 -LabConfig testlab/config/lab.local.json -Execute
    ```
 
-   For the current `windows-local` provider, this starts two Unraid nodes named `sender` and `receiver`.
+   For the current `windows-local` provider, this starts two Unraid nodes named `nodeA` and `nodeB`.
 
    During a real run, provisioning prints lines like these for each node:
 
    ```text
-   [testlab] sender WebGUI HTTP: http://127.0.0.1:8080
-   [testlab] sender WebGUI HTTPS: https://127.0.0.1:8443
-   [testlab] sender WebGUI user: root (password from setup.manualAccess.rootPassword)
+   [testlab] nodeA WebGUI HTTP: http://127.0.0.1:8080
+   [testlab] nodeA WebGUI HTTPS: https://127.0.0.1:8443
+   [testlab] nodeA WebGUI user: root (password from setup.manualAccess.rootPassword)
    ```
 
    The wrapper report at `.testlab/logs/provision-*.json` only records `providerReportPath`. The per-node WebGUI URLs and login user are stored in the provider report at `.testlab/logs/local-provider-*.json`; the password is not echoed or written to the report.
@@ -113,7 +113,7 @@ This initial implementation provides:
 
    On successful execute runs, the wrapper also publishes a sanitized public summary into `testlab/release-history` when the run either uses a clean worktree or installs published BuddyBackup releases only.
 
-11. To run a generated release profile against a published BuddyBackup release instead of the current workspace build, pass release-gate overrides on the command line:
+11. To run a generated release profile against a published BuddyBackup release instead of the current workspace build, pass the BuddyBackup release overrides on the command line:
 
     ```powershell
     ./testlab/scripts/run-release-gate.ps1 \
@@ -121,12 +121,10 @@ This initial implementation provides:
        -MatrixProfile release-default \
        -CurrentCandidatePlugin 2026.05.02 \
        -PreviousReleaseVersion 2025.09.13 \
-       -PreviousCertifiedUnraidVersion 7.2.6 \
-       -LatestSupportedUnraidVersion 7.2.6 \
        -Execute
     ```
 
-    Any non-`workspace-build` plugin value is treated as a published release tag. Use this when you want the generated profile to validate a public release-to-release window instead of the current checkout.
+    Any non-`workspace-build` plugin value is treated as a published release tag. Use this when you want the generated profile to validate a public release-to-release window instead of the current checkout. Unraid baselines for generated profiles come from `lab.releaseGate.previousCertifiedUnraidVersion` and `lab.releaseGate.latestSupportedUnraidVersion` in the lab config.
 
 11. Tear down the local WSL/QEMU nodes when you are done:
 
@@ -134,14 +132,14 @@ This initial implementation provides:
    ./testlab/scripts/teardown-wsl-qemu-lab.ps1 -LabConfig testlab/config/lab.local.json -Execute
    ```
 
-   To stop only one node, pass `-NodeNames sender` or `-NodeNames receiver`.
+   To stop only one node, pass `-NodeNames nodeA` or `-NodeNames nodeB`.
 
 ## Default behavior
 
 - `provision-lab.ps1`, `run-matrix.ps1`, `run-functional-smoke.ps1`, and `teardown-wsl-qemu-lab.ps1` default to dry-run. Pass `-Execute` to make changes on live nodes.
 - `run-release-gate.ps1` also defaults to dry-run. It runs the existing provision and matrix flows, then copies the resulting `provision-*.json` and `results.json` into the durable history root together with a `manifest.json`, `index.json`, and `latest.json` summary.
 - `run-matrix.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and `-MatrixConfig testlab/config/matrix.small.json`.
-- `run-functional-smoke.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and operates against the already provisioned `sender` and `receiver` nodes from that lab config.
+- `run-functional-smoke.ps1` defaults to `-LabConfig testlab/config/lab.local.json` and operates against the already provisioned `nodeA` and `nodeB` nodes from that lab config.
 - In the example lab config, `setup.applyBaseConfigAfterSsh` and `setup.verifyBaseConfigInMatrix` are both `true`, so local provisioning applies BuddyBackup and ZFS base setup by default and each matrix cell runs `base-setup-verify` before its listed scenarios.
 - Matrix artifact collection is enabled by default. Pass `-SkipArtifacts` to `run-matrix.ps1` to suppress per-cell artifact capture.
 - `run-release-gate.ps1` still fails immediately on any uncommitted or untracked git changes when the selected matrix includes a `workspace-build` candidate, because the tested BuddyBackup artifact comes from the current checkout in that mode.
@@ -152,7 +150,7 @@ This initial implementation provides:
 ## Test catalog
 
 - `base-setup-verify`: runs before each matrix cell when `setup.verifyBaseConfigInMatrix` is enabled. It verifies BuddyBackup is installed on both nodes, verifies the configured zpool exists, verifies the unencrypted dataset exists, and verifies the encrypted dataset exists with encryption enabled. On live local-provider runs it also cross-checks the latest local-provider report. Results are written to `scenario-base-setup-verify.json` in the cell artifact directory.
-- `fresh-install`: installs the matrix-selected BuddyBackup plugin version on both sender and receiver for that cell.
+- `fresh-install`: installs the matrix-selected BuddyBackup plugin version on both fixed lab nodes for that cell.
 - `post-reboot`: reboots both nodes one at a time, waits for SSH to drop and return, confirms a new `boot_id`, verifies the manual WebGUI password persisted, re-verifies BuddyBackup installation, and re-verifies the configured ZFS datasets.
 - `upgrade-preserves-config`: installs the configured `upgradeFromPlugin` version on both nodes, seeds realistic BuddyBackup state (backup jobs, snapshot job, advanced settings, receive mode, SSH state), upgrades both nodes in place to the matrix-selected plugin version, captures normalized before/after state summaries, and fails if any preserved state changed unexpectedly.
 - `backup-smoke`: delegates to the functional smoke workflow and reports whether the backup-oriented actions succeeded.
@@ -163,23 +161,23 @@ This initial implementation provides:
 
 - `testlab/config/matrix.small.json` is the default matrix file used by `run-matrix.ps1`.
 - It currently defines these cells:
-1. `cell-01`: sender and receiver both run Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `fresh-install`, `backup-smoke`, and `restore-smoke`.
-2. `cell-02`: sender runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, receiver runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
-3. `cell-03`: sender runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, receiver runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
-4. `cell-04`: sender and receiver both run Unraid `7.1.0` with BuddyBackup `2026.05.02`, but each upgrades in place from `2025.09.13`; scenarios are `upgrade-preserves-config`, `backup-smoke`, and `restore-smoke`.
+1. `cell-01`: nodeA and nodeB both run Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `fresh-install`, `backup-smoke`, and `restore-smoke`.
+2. `cell-02`: nodeA runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, nodeB runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
+3. `cell-03`: nodeA runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, nodeB runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
+4. `cell-04`: nodeA and nodeB both run Unraid `7.1.0` with BuddyBackup `2026.05.02`, but each upgrades in place from `2025.09.13`; scenarios are `upgrade-preserves-config`, `backup-smoke`, and `restore-smoke`.
 - Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
 
 ## Release matrix profiles
 
 - `run-release-gate.ps1` accepts `-MatrixProfile` for release-oriented generated matrices.
-- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup in both sender/receiver directions plus one in-place `upgrade-preserves-config` cell on each Unraid baseline.
-- `release-mixed-unraid`: an optional mixed-version profile. It keeps the previous certified Unraid version on the sender lab slot and the latest supported Unraid version on the receiver lab slot, then runs previous/current BuddyBackup interoperability plus mixed-pair `upgrade-preserves-config` coverage within that fixed slot pairing.
+- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup across both fixed lab nodes plus one in-place `upgrade-preserves-config` cell on each Unraid baseline.
+- `release-mixed-unraid`: an optional mixed-version profile. It keeps the previous certified Unraid version on nodeA and the latest supported Unraid version on nodeB, then runs previous/current BuddyBackup interoperability plus mixed-pair `upgrade-preserves-config` coverage within that fixed node pairing.
 - `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
 - `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
-- The matrix schema still names the two lab slots `sender` and `receiver`, but those are stable provisioning labels rather than exclusive backup-direction roles.
-- Current limitation: the existing providers provision one fixed sender lab slot and one fixed receiver lab slot from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.sender.unraidVersion` and `lab.nodes.receiver.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
-- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, use `release-mixed-unraid` when your lab already provisions different versions on the two fixed slots, or extend the harness later to reprovision between cells.
+- The matrix schema now names the two fixed lab slots `nodeA` and `nodeB`.
+- Current limitation: the existing providers provision one fixed nodeA slot and one fixed nodeB slot from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.nodeA.unraidVersion` and `lab.nodes.nodeB.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
+- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, use `release-mixed-unraid` when your lab already provisions different versions on the two fixed nodes, or extend the harness later to reprovision between cells.
 - Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
 - Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
 
@@ -201,11 +199,11 @@ This initial implementation provides:
 
 ## Backup direction coverage
 
-- The matrix and reports still label the two fixed lab slots as `sender` and `receiver`, but those names do not mean only one node sends backups and only one node receives them.
+- The matrix and reports label the two fixed lab slots as `nodeA` and `nodeB`, but those names do not mean only one node sends backups and only one node receives them.
 - Remote backup coverage is bidirectional in the functional smoke run.
-- The sender performs a remote backup to a dataset received on the receiver.
-- The receiver performs a remote backup to a dataset received on the sender.
-- After those remote sends, the smoke test verifies inbound remote datasets on both nodes, so each node is tested as both a remote sender and a remote receiver.
+- nodeA performs a remote backup to a dataset received on nodeB.
+- nodeB performs a remote backup to a dataset received on nodeA.
+- After those remote sends, the smoke test verifies inbound remote datasets on both nodes, so each fixed node is tested as both a remote sender and a remote receiver.
 - Connectivity checks are also bidirectional: `test_connection` is executed from both nodes against the opposite node before backups begin.
 - Local backup coverage is symmetric as well: both nodes run local backup, snapshot listing, and local restore flows.
 - Remote restore coverage is also symmetric: both nodes list remote snapshots and restore a selected remote snapshot into node-specific restore datasets.
@@ -217,14 +215,14 @@ This initial implementation provides:
 - `teardown-wsl-qemu-lab.ps1` also defaults to dry-run; keep `-Execute` when you actually want to stop the local nodes.
 - `run-release-gate.ps1` is the intended entrypoint for pre-release runs. It is strict about git cleanliness by default because release evidence should always map to one exact commit.
 - SSH key-based access is expected for both lab nodes.
-- The current local provider boots two Unraid guests in fixed `sender` and `receiver` lab slots through WSL/QEMU.
+- The current local provider boots two Unraid guests in fixed `nodeA` and `nodeB` lab slots through WSL/QEMU.
 - Artifacts are written to `.testlab/artifacts`, and provisioning reports are written to `.testlab/logs`.
 - Release-gate history is written outside the workspace by default under `%LOCALAPPDATA%\BuddyBackup\TestlabHistory`, so results can persist across multiple release cycles even if `.testlab` is cleaned.
 - Public release history is written inside the repository under `testlab/release-history` only after successful execute release-gate runs that either have a clean worktree or install published BuddyBackup releases only.
 - Public release history includes category-level compatibility status columns plus BuddyBackup and Unraid pair-coverage columns when the release matrix annotates cells with categories.
 - The `windows-local` provider targets WSL2 plus QEMU/KVM.
-- For the local provider, keep `lab.nodes.sender.host` and `lab.nodes.receiver.host` on `127.0.0.1` with distinct SSH-forwarded ports.
-- Default forwarded ports are sender `2222` / `8080` / `8443` and receiver `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.sender.webGuiHttpPort`, `nodes.sender.webGuiHttpsPort`, `nodes.receiver.webGuiHttpPort`, and `nodes.receiver.webGuiHttpsPort`.
+- For the local provider, keep `lab.nodes.nodeA.host` and `lab.nodes.nodeB.host` on `127.0.0.1` with distinct SSH-forwarded ports.
+- Default forwarded ports are nodeA `2222` / `8080` / `8443` and nodeB `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.nodeA.webGuiHttpPort`, `nodes.nodeA.webGuiHttpsPort`, `nodes.nodeB.webGuiHttpPort`, and `nodes.nodeB.webGuiHttpsPort`.
 - If a preferred WebGUI port is already busy, the probe can fall back to another localhost port for that run. Use the console output or the latest `local-provider-*.json` report instead of assuming the default ports were used.
 - If automatic Unraid zip download fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.

@@ -5,8 +5,6 @@ param(
     [string]$HistoryRoot,
     [string]$CurrentCandidatePlugin,
     [string]$PreviousReleaseVersion,
-    [string]$PreviousCertifiedUnraidVersion,
-    [string]$LatestSupportedUnraidVersion,
     [switch]$Execute,
     [switch]$AllowDirtyWorktree,
     [switch]$SkipProvision,
@@ -59,6 +57,72 @@ function Get-ObjectValue {
     $property = $Object.PSObject.Properties[$Name]
     if ($property) {
         return $property.Value
+    }
+
+    return $null
+}
+
+function Get-TestLabLegacyName {
+    param([string]$Name)
+
+    switch ($Name) {
+        "nodeA" { return "sender" }
+        "nodeB" { return "receiver" }
+        default { return $null }
+    }
+}
+
+function Get-TestLabPropertyValue {
+    param(
+        $Object,
+        [string]$Name
+    )
+
+    $value = Get-ObjectValue -Object $Object -Name $Name
+    if ($null -ne $value) {
+        return $value
+    }
+
+    if ($Name -like 'nodeA*') {
+        return Get-ObjectValue -Object $Object -Name ($Name -replace '^nodeA', 'sender')
+    }
+
+    if ($Name -like 'nodeB*') {
+        return Get-ObjectValue -Object $Object -Name ($Name -replace '^nodeB', 'receiver')
+    }
+
+    return $null
+}
+
+function Get-TestLabPropertyOrDefault {
+    param(
+        $Object,
+        [string]$Name,
+        $DefaultValue = $null
+    )
+
+    $value = Get-TestLabPropertyValue -Object $Object -Name $Name
+    if ($null -ne $value) {
+        return $value
+    }
+
+    return $DefaultValue
+}
+
+function Get-TestLabNodeValue {
+    param(
+        $Object,
+        [string]$NodeName
+    )
+
+    $value = Get-ObjectValue -Object $Object -Name $NodeName
+    if ($null -ne $value) {
+        return $value
+    }
+
+    $legacyName = Get-TestLabLegacyName -Name $NodeName
+    if (-not [string]::IsNullOrWhiteSpace($legacyName)) {
+        return Get-ObjectValue -Object $Object -Name $legacyName
     }
 
     return $null
@@ -308,9 +372,7 @@ function Apply-ReleaseGateOverrides {
     param(
         $Lab,
         [string]$CurrentCandidatePlugin,
-        [string]$PreviousReleaseVersion,
-        [string]$PreviousCertifiedUnraidVersion,
-        [string]$LatestSupportedUnraidVersion
+        [string]$PreviousReleaseVersion
     )
 
     $releaseGateCfg = Ensure-ReleaseGateConfig -Lab $Lab
@@ -320,12 +382,6 @@ function Apply-ReleaseGateOverrides {
     }
     if (-not [string]::IsNullOrWhiteSpace($PreviousReleaseVersion)) {
         Set-ObjectValue -Object $releaseGateCfg -Name "previousReleaseVersion" -Value $PreviousReleaseVersion
-    }
-    if (-not [string]::IsNullOrWhiteSpace($PreviousCertifiedUnraidVersion)) {
-        Set-ObjectValue -Object $releaseGateCfg -Name "previousCertifiedUnraidVersion" -Value $PreviousCertifiedUnraidVersion
-    }
-    if (-not [string]::IsNullOrWhiteSpace($LatestSupportedUnraidVersion)) {
-        Set-ObjectValue -Object $releaseGateCfg -Name "latestSupportedUnraidVersion" -Value $LatestSupportedUnraidVersion
     }
 }
 
@@ -347,9 +403,9 @@ function Test-MatrixUsesWorkspaceBuild {
 
     $cells = @($Matrix.cells)
     foreach ($cell in $cells) {
-        $senderPlugin = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $cell -Name "sender") -Name "plugin")
-        $receiverPlugin = [string](Get-ObjectValue -Object (Get-ObjectValue -Object $cell -Name "receiver") -Name "plugin")
-        if ($senderPlugin -match '^(?i)(workspace-build|current-commit)$' -or $receiverPlugin -match '^(?i)(workspace-build|current-commit)$') {
+        $nodeAPlugin = [string](Get-ObjectValue -Object (Get-TestLabNodeValue -Object $cell -NodeName "nodeA") -Name "plugin")
+        $nodeBPlugin = [string](Get-ObjectValue -Object (Get-TestLabNodeValue -Object $cell -NodeName "nodeB") -Name "plugin")
+        if ($nodeAPlugin -match '^(?i)(workspace-build|current-commit)$' -or $nodeBPlugin -match '^(?i)(workspace-build|current-commit)$') {
             return $true
         }
     }
@@ -374,14 +430,14 @@ function Test-LabSupportsMatrixUnraidVersions {
 
     $cells = @($Matrix.cells)
     $mismatches = @()
-    foreach ($nodeName in @('sender', 'receiver')) {
-        $labNode = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -Name $nodeName
+    foreach ($nodeName in @('nodeA', 'nodeB')) {
+        $labNode = Get-TestLabNodeValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -NodeName $nodeName
         $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
         if ([string]::IsNullOrWhiteSpace($labVersion)) {
             continue
         }
 
-        $cellVersions = @($cells | ForEach-Object { [string](Get-ObjectValue -Object (Get-ObjectValue -Object $_ -Name $nodeName) -Name 'unraid') } |
+        $cellVersions = @($cells | ForEach-Object { [string](Get-ObjectValue -Object (Get-TestLabNodeValue -Object $_ -NodeName $nodeName) -Name 'unraid') } |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Select-Object -Unique)
 
@@ -536,20 +592,20 @@ function Get-ResultCellSummary {
         [pscustomobject]@{
             cellId = [string]$_.cellId
             status = [string]$_.status
-            senderUnraid = [string]$_.senderUnraid
-            senderPlugin = [string]$_.senderPlugin
-            senderPluginRequested = if ($_.PSObject.Properties['senderPluginRequested']) { [string]$_.senderPluginRequested } else { [string]$_.senderPlugin }
-            senderPluginResolved = if ($_.PSObject.Properties['senderPluginResolved']) { [string]$_.senderPluginResolved } else { [string]$_.senderPlugin }
-            senderPluginSource = if ($_.PSObject.Properties['senderPluginSource']) { [string]$_.senderPluginSource } else { "release-tag" }
-            senderUpgradeFromPluginRequested = if ($_.PSObject.Properties['senderUpgradeFromPluginRequested']) { [string]$_.senderUpgradeFromPluginRequested } else { $null }
-            senderUpgradeFromPluginResolved = if ($_.PSObject.Properties['senderUpgradeFromPluginResolved']) { [string]$_.senderUpgradeFromPluginResolved } else { $null }
-            receiverUnraid = [string]$_.receiverUnraid
-            receiverPlugin = [string]$_.receiverPlugin
-            receiverPluginRequested = if ($_.PSObject.Properties['receiverPluginRequested']) { [string]$_.receiverPluginRequested } else { [string]$_.receiverPlugin }
-            receiverPluginResolved = if ($_.PSObject.Properties['receiverPluginResolved']) { [string]$_.receiverPluginResolved } else { [string]$_.receiverPlugin }
-            receiverPluginSource = if ($_.PSObject.Properties['receiverPluginSource']) { [string]$_.receiverPluginSource } else { "release-tag" }
-            receiverUpgradeFromPluginRequested = if ($_.PSObject.Properties['receiverUpgradeFromPluginRequested']) { [string]$_.receiverUpgradeFromPluginRequested } else { $null }
-            receiverUpgradeFromPluginResolved = if ($_.PSObject.Properties['receiverUpgradeFromPluginResolved']) { [string]$_.receiverUpgradeFromPluginResolved } else { $null }
+            nodeAUnraid = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeAUnraid')
+            nodeAPlugin = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeAPlugin')
+            nodeAPluginRequested = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeAPluginRequested' -DefaultValue (Get-TestLabPropertyValue -Object $_ -Name 'nodeAPlugin'))
+            nodeAPluginResolved = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeAPluginResolved' -DefaultValue (Get-TestLabPropertyValue -Object $_ -Name 'nodeAPlugin'))
+            nodeAPluginSource = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeAPluginSource' -DefaultValue 'release-tag')
+            nodeAUpgradeFromPluginRequested = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeAUpgradeFromPluginRequested')
+            nodeAUpgradeFromPluginResolved = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeAUpgradeFromPluginResolved')
+            nodeBUnraid = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeBUnraid')
+            nodeBPlugin = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeBPlugin')
+            nodeBPluginRequested = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeBPluginRequested' -DefaultValue (Get-TestLabPropertyValue -Object $_ -Name 'nodeBPlugin'))
+            nodeBPluginResolved = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeBPluginResolved' -DefaultValue (Get-TestLabPropertyValue -Object $_ -Name 'nodeBPlugin'))
+            nodeBPluginSource = [string](Get-TestLabPropertyOrDefault -Object $_ -Name 'nodeBPluginSource' -DefaultValue 'release-tag')
+            nodeBUpgradeFromPluginRequested = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeBUpgradeFromPluginRequested')
+            nodeBUpgradeFromPluginResolved = [string](Get-TestLabPropertyValue -Object $_ -Name 'nodeBUpgradeFromPluginResolved')
             categories = if ($_.PSObject.Properties['categories']) { @($_.categories) } else { @() }
             purpose = if ($_.PSObject.Properties['purpose']) { [string]$_.purpose } else { $null }
             lifecycle = [string]$_.lifecycle
@@ -663,7 +719,7 @@ Require-File -Path $provisionScript
 Require-File -Path $matrixScript
 
 $lab = Get-Json -Path $resolvedLabConfig
-Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePlugin -PreviousReleaseVersion $PreviousReleaseVersion -PreviousCertifiedUnraidVersion $PreviousCertifiedUnraidVersion -LatestSupportedUnraidVersion $LatestSupportedUnraidVersion
+Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePlugin -PreviousReleaseVersion $PreviousReleaseVersion
 $resolvedMatrixProfile = $null
 if (-not [string]::IsNullOrWhiteSpace($MatrixProfile)) {
     $generatedMatrix = Write-TestLabReleaseMatrixFile -WorkspaceRoot $workspaceRoot -Lab $lab -ProfileName $MatrixProfile
@@ -891,8 +947,6 @@ try {
             releaseGateOverrides = [ordered]@{
                 currentCandidatePlugin = $CurrentCandidatePlugin
                 previousReleaseVersion = $PreviousReleaseVersion
-                previousCertifiedUnraidVersion = $PreviousCertifiedUnraidVersion
-                latestSupportedUnraidVersion = $LatestSupportedUnraidVersion
             }
         }
         outputs = [ordered]@{

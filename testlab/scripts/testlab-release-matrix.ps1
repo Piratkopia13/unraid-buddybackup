@@ -68,38 +68,38 @@ function Get-TestLabReleaseMatrixConfigValue {
 function New-TestLabReleaseMatrixCell {
     param(
         [string]$Id,
-        [string]$SenderUnraid,
-        [string]$SenderPlugin,
-        [string]$SenderUpgradeFromPlugin,
-        [string]$ReceiverUnraid,
-        [string]$ReceiverPlugin,
-        [string]$ReceiverUpgradeFromPlugin,
+        [string]$NodeAUnraid,
+        [string]$NodeAPlugin,
+        [string]$NodeAUpgradeFromPlugin,
+        [string]$NodeBUnraid,
+        [string]$NodeBPlugin,
+        [string]$NodeBUpgradeFromPlugin,
         [string]$Lifecycle,
         [string[]]$Scenarios,
         [string[]]$Categories,
         [string]$Purpose
     )
 
-    $sender = [ordered]@{
-        unraid = $SenderUnraid
-        plugin = $SenderPlugin
+    $nodeA = [ordered]@{
+        unraid = $NodeAUnraid
+        plugin = $NodeAPlugin
     }
-    if (-not [string]::IsNullOrWhiteSpace($SenderUpgradeFromPlugin)) {
-        $sender.upgradeFromPlugin = $SenderUpgradeFromPlugin
+    if (-not [string]::IsNullOrWhiteSpace($NodeAUpgradeFromPlugin)) {
+        $nodeA.upgradeFromPlugin = $NodeAUpgradeFromPlugin
     }
 
-    $receiver = [ordered]@{
-        unraid = $ReceiverUnraid
-        plugin = $ReceiverPlugin
+    $nodeB = [ordered]@{
+        unraid = $NodeBUnraid
+        plugin = $NodeBPlugin
     }
-    if (-not [string]::IsNullOrWhiteSpace($ReceiverUpgradeFromPlugin)) {
-        $receiver.upgradeFromPlugin = $ReceiverUpgradeFromPlugin
+    if (-not [string]::IsNullOrWhiteSpace($NodeBUpgradeFromPlugin)) {
+        $nodeB.upgradeFromPlugin = $NodeBUpgradeFromPlugin
     }
 
     return [ordered]@{
         id = $Id
-        sender = $sender
-        receiver = $receiver
+        nodeA = $nodeA
+        nodeB = $nodeB
         lifecycle = $Lifecycle
         scenarios = $Scenarios
         categories = $Categories
@@ -140,27 +140,27 @@ function Get-TestLabReleaseMatrixDefinition {
         { $_ -in @("release-default", "default") } {
             return [ordered]@{
                 name = "release-default"
-                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup interoperability in both directions plus in-place upgrade preservation on both baselines."
+                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup interoperability across both fixed lab nodes plus in-place upgrade preservation on both baselines."
                 mode = "report-only"
                 cells = @(
-                    (New-TestLabReleaseMatrixCell -Id "prev-certified-prev-to-current" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the current candidate receiving backups."),
-                    (New-TestLabReleaseMatrixCell -Id "prev-certified-current-to-prev" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the previous release receiving backups."),
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-prev-to-current" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the current candidate receiving backups."),
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-to-prev" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the previous release receiving backups."),
-                    (New-TestLabReleaseMatrixCell -Id "prev-certified-upgrade-preserves-config" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $previousCertifiedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version."),
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-upgrade-preserves-config" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.")
+                    (New-TestLabReleaseMatrixCell -Id "prev-certified-prev-to-current" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $previousReleaseVersion -NodeBUnraid $previousCertifiedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the current candidate installed on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "prev-certified-current-to-prev" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $previousCertifiedUnraidVersion -NodeBPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the previous release installed on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-prev-to-current" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the current candidate installed on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-to-prev" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the previous release installed on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "prev-certified-upgrade-preserves-config" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $previousCertifiedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version."),
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-upgrade-preserves-config" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.")
                 )
             }
         }
         { $_ -in @("release-mixed-unraid", "mixed-unraid") } {
             return [ordered]@{
                 name = "release-mixed-unraid"
-                description = "Optional mixed-version release profile pairing the previous certified Unraid version on the sender lab slot with the latest supported Unraid version on the receiver lab slot, while still exercising BuddyBackup interoperability and upgrade preservation within that fixed slot pair."
+                description = "Optional mixed-version release profile pairing the previous certified Unraid version on nodeA with the latest supported Unraid version on nodeB, while still exercising BuddyBackup interoperability and upgrade preservation within that fixed slot pair."
                 mode = "report-only"
                 cells = @(
-                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-prev-to-current" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the previous release on the sender lab slot and the current candidate on the receiver lab slot."),
-                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-current-to-prev" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the current candidate on the sender lab slot and the previous release on the receiver lab slot."),
-                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-upgrade-preserves-config" -SenderUnraid $previousCertifiedUnraidVersion -SenderPlugin $currentCandidatePlugin -SenderUpgradeFromPlugin $previousReleaseVersion -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -ReceiverUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair where both lab slots upgrade in place from the previous release and then still pass backup and restore smoke.")
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-prev-to-current" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the previous release on nodeA and the current candidate on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-current-to-prev" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair with the current candidate on nodeA and the previous release on nodeB."),
+                    (New-TestLabReleaseMatrixCell -Id "mixed-unraid-upgrade-preserves-config" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Mixed-Unraid slot pair where both lab nodes upgrade in place from the previous release and then still pass backup and restore smoke.")
                 )
             }
         }
@@ -170,7 +170,7 @@ function Get-TestLabReleaseMatrixDefinition {
                 description = "Optional isolation profile for the current candidate on the latest supported Unraid version."
                 mode = "report-only"
                 cells = @(
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-current" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke", "restore-smoke") -Categories @("unraidCompatibility") -Purpose "Current candidate isolation run on the latest supported Unraid version.")
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-current" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke", "restore-smoke") -Categories @("unraidCompatibility") -Purpose "Current candidate isolation run on the latest supported Unraid version.")
                 )
             }
         }
@@ -180,7 +180,7 @@ function Get-TestLabReleaseMatrixDefinition {
                 description = "Optional reboot persistence profile for the current candidate on the latest supported Unraid version."
                 mode = "report-only"
                 cells = @(
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-current-post-reboot" -SenderUnraid $latestSupportedUnraidVersion -SenderPlugin $currentCandidatePlugin -ReceiverUnraid $latestSupportedUnraidVersion -ReceiverPlugin $currentCandidatePlugin -Lifecycle "post-reboot" -Scenarios @("post-reboot", "backup-smoke") -Categories @("unraidCompatibility") -Purpose "Current candidate reboot persistence on the latest supported Unraid version.")
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-current-post-reboot" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "post-reboot" -Scenarios @("post-reboot", "backup-smoke") -Categories @("unraidCompatibility") -Purpose "Current candidate reboot persistence on the latest supported Unraid version.")
                 )
             }
         }

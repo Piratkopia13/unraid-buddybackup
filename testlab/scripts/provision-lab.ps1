@@ -68,6 +68,35 @@ function Protect-LocalSshIdentityFile {
     & icacls $Path /inheritance:r /grant:r "${currentUser}:(F)" | Out-Null
 }
 
+function Get-TestLabLegacyName {
+    param([string]$Name)
+
+    switch ($Name) {
+        "nodeA" { return "sender" }
+        "nodeB" { return "receiver" }
+        default { return $null }
+    }
+}
+
+function Get-TestLabNodeValue {
+    param(
+        $Object,
+        [string]$NodeName
+    )
+
+    $value = $Object.$NodeName
+    if ($null -ne $value) {
+        return $value
+    }
+
+    $legacyName = Get-TestLabLegacyName -Name $NodeName
+    if (-not [string]::IsNullOrWhiteSpace($legacyName)) {
+        return $Object.$legacyName
+    }
+
+    return $null
+}
+
 function Get-LocalSshIdentityFile {
     param([string]$IdentityFile)
 
@@ -101,7 +130,7 @@ function Get-NodeConnection {
         [string]$NodeName
     )
 
-    $node = $Lab.nodes.$NodeName
+    $node = Get-TestLabNodeValue -Object $Lab.nodes -NodeName $NodeName
     if (-not $node -or -not $node.host) {
         throw "Missing lab.nodes.$NodeName.host"
     }
@@ -209,7 +238,7 @@ function Test-ReachableProvisionNodes {
     )
 
     $checks = @()
-    foreach ($nodeName in @('sender', 'receiver')) {
+    foreach ($nodeName in @('nodeA', 'nodeB')) {
         $connection = Get-NodeConnection -Lab $Lab -NodeName $nodeName
         try {
             $probe = Invoke-NodeProbe -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -DoExecute:$DoExecute
@@ -287,7 +316,7 @@ try {
         "manual" {
             Write-Host "[testlab] Manual provider selected. Validating configured nodes."
 
-            foreach ($nodeName in @("sender", "receiver")) {
+            foreach ($nodeName in @("nodeA", "nodeB")) {
                 $connection = Get-NodeConnection -Lab $lab -NodeName $nodeName
 
                 $probe = Invoke-NodeProbe -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -DoExecute:$Execute
