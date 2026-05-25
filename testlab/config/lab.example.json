@@ -49,7 +49,10 @@
     "imageSizeMB": 1024,
     "dataDiskSizeGB": 3,
     "bootWaitSeconds": 120,
-    "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip"
+    "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip",
+    "unraidDownloadUrls": {
+      "7.3.0": "https://releases.unraid.net/dl/stable/7.3.0/56144fb963526391630f54b842b30727b159e1bc0375142e34f265daa29d49f7/unRAIDServer-7.3.0-x86_64.zip"
+    }
   },
   "setup": {
     "applyBaseConfigAfterSsh": true,

@@ -385,6 +385,107 @@ function Apply-ReleaseGateOverrides {
     }
 }
 
+function Use-GeneratedMatrixProvisionedUnraidVersions {
+    param(
+        $Lab,
+        $GeneratedMatrix
+    )
+
+    $provider = [string](Get-ObjectValue -Object $Lab -Name 'provider')
+    $supportedProviders = @('windows-local', 'windows-wsl-qemu', 'manual')
+    if ($provider -notin $supportedProviders) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    $matrix = Get-ObjectValue -Object $GeneratedMatrix -Name 'matrix'
+    if ($null -eq $matrix) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    $cells = @($(Get-ObjectValue -Object $matrix -Name 'cells'))
+    if ($cells.Count -eq 0) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    $labNodes = Get-ObjectValue -Object $Lab -Name 'nodes'
+    $resolvedNodeVersions = [ordered]@{}
+    $updated = $false
+
+    foreach ($nodeName in @('nodeA', 'nodeB')) {
+        $labNode = Get-TestLabNodeValue -Object $labNodes -NodeName $nodeName
+        $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
+        if ([string]::IsNullOrWhiteSpace($labVersion)) {
+            continue
+        }
+
+        $resolvedNodeVersions[$nodeName] = $labVersion
+
+        foreach ($cell in $cells) {
+            $cellNode = Get-TestLabNodeValue -Object $cell -NodeName $nodeName
+            if ($null -eq $cellNode) {
+                continue
+            }
+
+            $cellVersion = [string](Get-ObjectValue -Object $cellNode -Name 'unraid')
+            if ($cellVersion -ne $labVersion) {
+                Set-ObjectValue -Object $cellNode -Name 'unraid' -Value $labVersion
+                $updated = $true
+            }
+        }
+    }
+
+    if ($resolvedNodeVersions.Count -eq 0) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    $versionSummary = @(
+        foreach ($nodeName in @('nodeA', 'nodeB')) {
+            if ($resolvedNodeVersions.Contains($nodeName)) {
+                "${nodeName}=$($resolvedNodeVersions[$nodeName])"
+            }
+        }
+    ) -join ', '
+
+    $descriptionNote = "Runtime Unraid versions resolved from the currently provisioned lab nodes: $versionSummary."
+    $description = [string](Get-ObjectValue -Object $matrix -Name 'description')
+    if ([string]::IsNullOrWhiteSpace($description)) {
+        $description = $descriptionNote
+    } else {
+        $description = "$description $descriptionNote"
+    }
+
+    Set-ObjectValue -Object $matrix -Name 'description' -Value $description
+    Set-ObjectValue -Object $matrix -Name 'unraidVersionSource' -Value 'provisioned-lab-nodes'
+    Set-ObjectValue -Object $matrix -Name 'provisionedNodeVersions' -Value $resolvedNodeVersions
+
+    $filePath = [string](Get-ObjectValue -Object $GeneratedMatrix -Name 'filePath')
+    if (-not [string]::IsNullOrWhiteSpace($filePath)) {
+        $matrix | ConvertTo-Json -Depth 8 | Set-Content -Path $filePath
+    }
+
+    return [pscustomobject]@{
+        Applied = $true
+        Updated = $updated
+        VersionSummary = $versionSummary
+    }
+}
+
 function Get-VersionPolicyMode {
     param($Lab)
 
@@ -723,8 +824,12 @@ Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePl
 $resolvedMatrixProfile = $null
 if (-not [string]::IsNullOrWhiteSpace($MatrixProfile)) {
     $generatedMatrix = Write-TestLabReleaseMatrixFile -WorkspaceRoot $workspaceRoot -Lab $lab -ProfileName $MatrixProfile
+    $generatedMatrixResolution = Use-GeneratedMatrixProvisionedUnraidVersions -Lab $lab -GeneratedMatrix $generatedMatrix
     $resolvedMatrixConfig = $generatedMatrix.filePath
     $resolvedMatrixProfile = $generatedMatrix.profileName
+    if ($generatedMatrixResolution.Applied) {
+        Write-Host "[testlab] Generated release matrix '$resolvedMatrixProfile' will use provisioned lab node Unraid versions: $($generatedMatrixResolution.VersionSummary)"
+    }
 } else {
     $resolvedMatrixConfig = Resolve-WorkspacePath -Path $MatrixConfig
     Require-File -Path $resolvedMatrixConfig

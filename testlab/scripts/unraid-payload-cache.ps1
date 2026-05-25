@@ -47,6 +47,23 @@ function Test-UnraidPayloadRoot {
     return $true
 }
 
+function Resolve-UnraidReleaseUrl {
+    param(
+        [string]$Version,
+        [string]$UrlTemplate
+    )
+
+    if ([string]::IsNullOrWhiteSpace($UrlTemplate)) {
+        return $null
+    }
+
+    if ($UrlTemplate -match '\{version\}') {
+        return $UrlTemplate.Replace("{version}", $Version)
+    }
+
+    return $UrlTemplate
+}
+
 function Get-UnraidPayloadExtractionRoot {
     param([string]$ExtractionRoot)
 
@@ -100,7 +117,7 @@ function Get-UnraidRelease {
         throw "Unraid $Version zip not found at '$zipFile' and no download URL is configured.`nDownload the zip manually from https://account.unraid.net and place it at:`n  $zipFile"
     }
 
-    $url = if ($UrlTemplate -match '\{version\}') { $UrlTemplate.Replace("{version}", $Version) } else { $UrlTemplate }
+    $url = Resolve-UnraidReleaseUrl -Version $Version -UrlTemplate $UrlTemplate
     Write-Host "[testlab] Attempting download of Unraid $Version from $url ..."
 
     $tmpZip = Join-Path $env:TEMP "unraid-${Version}-download.zip"
@@ -124,11 +141,10 @@ function Get-UnraidRelease {
         throw @"
 Auto-download failed: $_
 
-Unraid no longer offers public direct zip downloads.
-Please download Unraid $Version manually:
-  1. Go to https://account.unraid.net (free trial available)
-  2. Download the zip for version $Version
-  3. Place it at: $zipFile
+Use one of these recovery paths for Unraid ${Version}:
+    1. Set lab.wslQemu.unraidDownloadUrls."$Version" to a known direct zip URL
+    2. Set lab.wslQemu.unraidDownloadUrlTemplate if one predictable URL pattern still works
+    3. Download the zip manually from https://account.unraid.net and place it at: $zipFile
 Then re-run this script.
 "@
     }
@@ -158,6 +174,10 @@ function Ensure-UnraidPayload {
 
     if (-not $DoExecute) {
         Write-Host "[dry-run] Would ensure extracted Unraid $Version payload at $payloadRoot"
+        $resolvedUrl = Resolve-UnraidReleaseUrl -Version $Version -UrlTemplate $UrlTemplate
+        if (-not [string]::IsNullOrWhiteSpace($resolvedUrl)) {
+            Write-Host "[dry-run]   configured Unraid download URL: $resolvedUrl"
+        }
         return $payloadRoot
     }
 

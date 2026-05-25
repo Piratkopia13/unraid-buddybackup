@@ -43,6 +43,30 @@ function Get-ObjectValue {
     return $null
 }
 
+function Get-WslUnraidDownloadUrl {
+    param(
+        $WslConfig,
+        [string]$Version
+    )
+
+    if ($null -eq $WslConfig) {
+        return $null
+    }
+
+    $versionUrls = Get-ObjectValue -Object $WslConfig -Name "unraidDownloadUrls"
+    $versionUrl = [string](Get-ObjectValue -Object $versionUrls -Name $Version)
+    if (-not [string]::IsNullOrWhiteSpace($versionUrl)) {
+        return $versionUrl
+    }
+
+    $urlTemplate = [string](Get-ObjectValue -Object $WslConfig -Name "unraidDownloadUrlTemplate")
+    if (-not [string]::IsNullOrWhiteSpace($urlTemplate)) {
+        return $urlTemplate
+    }
+
+    return $null
+}
+
 function Resolve-NodeConnection {
     param(
         $Lab,
@@ -900,7 +924,6 @@ $cacheRoot = if ($wslCfg -and $wslCfg.cacheRoot) { [string]$wslCfg.cacheRoot } e
 $imageSizeMB = if ($wslCfg -and $wslCfg.imageSizeMB) { [int]$wslCfg.imageSizeMB } else { 1024 }
 $dataDiskSizeGB = if ($wslCfg -and $wslCfg.dataDiskSizeGB) { [int]$wslCfg.dataDiskSizeGB } else { 3 }
 $bootWaitSeconds = if ($wslCfg -and $wslCfg.bootWaitSeconds) { [int]$wslCfg.bootWaitSeconds } else { 120 }
-$downloadUrlTemplate = if ($wslCfg -and $wslCfg.unraidDownloadUrlTemplate) { [string]$wslCfg.unraidDownloadUrlTemplate } else { $null }
 
 $setupCfg = Get-ObjectValue -Object $lab -Name "setup"
 $applyBaseSetup = $true
@@ -1010,7 +1033,8 @@ try {
         } elseif ($wslCfg -and $wslCfg.payloadPath) {
             Resolve-TestLabPath ([string]$wslCfg.payloadPath)
         } else {
-            Ensure-UnraidPayload -Version $version -CacheRoot $cacheRoot -UrlTemplate $downloadUrlTemplate -DoExecute:$Execute
+            $downloadUrl = Get-WslUnraidDownloadUrl -WslConfig $wslCfg -Version $version
+            Ensure-UnraidPayload -Version $version -CacheRoot $cacheRoot -UrlTemplate $downloadUrl -DoExecute:$Execute
         }
 
         Write-Host ("[testlab] Payload for {0}: {1}" -f $nodeName, $payloadPath)

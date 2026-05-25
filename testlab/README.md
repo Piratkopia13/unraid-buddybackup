@@ -176,9 +176,11 @@ This initial implementation provides:
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
 - `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
 - The matrix schema now names the two fixed lab slots `nodeA` and `nodeB`.
-- Current limitation: the existing providers provision one fixed nodeA slot and one fixed nodeB slot from the lab config before the matrix starts. That means one `run-matrix.ps1` or `run-release-gate.ps1` execution cannot truly switch Unraid versions per cell. If a generated or hand-written matrix requests Unraid versions that do not match `lab.nodes.nodeA.unraidVersion` and `lab.nodes.nodeB.unraidVersion`, the run now fails early with a clear error instead of claiming misleading coverage.
-- Practical consequence: if you want to validate more than one Unraid baseline, run separate release-gate executions per baseline, use `release-mixed-unraid` when your lab already provisions different versions on the two fixed nodes, or extend the harness later to reprovision between cells.
-- Generated profiles read their baseline values from `lab.releaseGate.previousReleaseVersion`, `lab.releaseGate.previousCertifiedUnraidVersion`, `lab.releaseGate.latestSupportedUnraidVersion`, and `lab.releaseGate.currentCandidatePlugin`.
+- Current limitation: the existing providers provision one fixed nodeA slot and one fixed nodeB slot from the lab config before the matrix starts. That means one execution cannot truly switch Unraid versions per cell.
+- `run-matrix.ps1` now resolves runtime `nodeA.unraid` and `nodeB.unraid` values from `lab.nodes.nodeA.unraidVersion` and `lab.nodes.nodeB.unraidVersion`, so matrix execution uses whatever Unraid pair is already provisioned on the lab nodes.
+- Generated release-gate profiles do the same before they are written under `.testlab/generated-matrices`, so their saved JSON reflects the provisioned node versions used for that run.
+- If you want a different Unraid pair, change `lab.nodes.nodeA.unraidVersion` and `lab.nodes.nodeB.unraidVersion` and reprovision the lab before running the matrix.
+- Generated profiles still read their BuddyBackup version pairings from `lab.releaseGate.previousReleaseVersion` and `lab.releaseGate.currentCandidatePlugin`. The `previousCertifiedUnraidVersion` and `latestSupportedUnraidVersion` settings still describe the intended release-gate baselines, but the runtime matrix written under `.testlab/generated-matrices` records the actual provisioned node versions used for that run.
 - Generated matrix JSON files are written under `.testlab/generated-matrices` so the exact release matrix used for a run is still inspectable after the wrapper starts.
 
 ## Version bump policy
@@ -224,7 +226,9 @@ This initial implementation provides:
 - For the local provider, keep `lab.nodes.nodeA.host` and `lab.nodes.nodeB.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are nodeA `2222` / `8080` / `8443` and nodeB `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.nodeA.webGuiHttpPort`, `nodes.nodeA.webGuiHttpsPort`, `nodes.nodeB.webGuiHttpPort`, and `nodes.nodeB.webGuiHttpsPort`.
 - If a preferred WebGUI port is already busy, the probe can fall back to another localhost port for that run. Use the console output or the latest `local-provider-*.json` report instead of assuming the default ports were used.
-- If automatic Unraid zip download fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
+- `wslQemu.unraidDownloadUrlTemplate` still works when Unraid exposes a predictable versioned URL pattern.
+- If a newer release uses a hashed direct zip URL instead, set `wslQemu.unraidDownloadUrls.<version>` for that exact version.
+- If automatic Unraid zip download still fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
 - Base setup (`setup`) runs after SSH readiness and records testable action outputs in `.testlab/logs/local-provider-*.json`.
 - The local provider forwards each guest WebGUI to localhost and prints the HTTP/HTTPS URLs after real provisioning for manual checks.

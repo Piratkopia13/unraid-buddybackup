@@ -1,0 +1,130 @@
+{
+    "schemaVersion":  1,
+    "releaseGateRunId":  "20260525-212854-6c41f04",
+    "startedAt":  "2026-05-25T21:28:54.8638425+02:00",
+    "completedAt":  "2026-05-25T21:32:02.9971700+02:00",
+    "matrixProfile":  "release-mixed-unraid",
+    "pluginDisplayVersion":  "2026.05.02",
+    "commitSha":  "6c41f04dfbdd94bf1145a60971a8c29ea1b19cca",
+    "shortSha":  "6c41f04",
+    "branch":  "testlab/main",
+    "summary":  {
+                    "totalCells":  3,
+                    "passCells":  3,
+                    "failCells":  0,
+                    "categoryRollups":  [
+                                            {
+                                                "category":  "pluginCompatibility",
+                                                "totalCells":  3,
+                                                "passCells":  3,
+                                                "failCells":  0,
+                                                "status":  "pass",
+                                                "cellIds":  [
+                                                                "mixed-unraid-prev-to-current",
+                                                                "mixed-unraid-current-to-prev",
+                                                                "mixed-unraid-upgrade-preserves-config"
+                                                            ]
+                                            },
+                                            {
+                                                "category":  "unraidCompatibility",
+                                                "totalCells":  3,
+                                                "passCells":  3,
+                                                "failCells":  0,
+                                                "status":  "pass",
+                                                "cellIds":  [
+                                                                "mixed-unraid-prev-to-current",
+                                                                "mixed-unraid-current-to-prev",
+                                                                "mixed-unraid-upgrade-preserves-config"
+                                                            ]
+                                            }
+                                        ],
+                    "pluginCoverage":  [
+                                           "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
+                                           "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
+                                           "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
+                                       ],
+                    "unraidCoverage":  [
+                                           "7.2.6 -\u003e 7.3.0"
+                                       ]
+                },
+    "cells":  [
+                  {
+                      "cellId":  "mixed-unraid-prev-to-current",
+                      "lifecycle":  "fresh-install",
+                      "status":  "pass",
+                      "categories":  [
+                                         "pluginCompatibility",
+                                         "unraidCompatibility"
+                                     ],
+                      "purpose":  "Mixed-Unraid slot pair with the previous release on nodeA and the current candidate on nodeB.",
+                      "nodeA":  {
+                                    "unraid":  "7.2.6",
+                                    "pluginRequested":  "2025.09.13",
+                                    "pluginResolved":  "2025.09.13",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "",
+                                    "upgradeFromPluginResolved":  ""
+                                },
+                      "nodeB":  {
+                                    "unraid":  "7.3.0",
+                                    "pluginRequested":  "2026.05.02",
+                                    "pluginResolved":  "2026.05.02",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "",
+                                    "upgradeFromPluginResolved":  ""
+                                }
+                  },
+                  {
+                      "cellId":  "mixed-unraid-current-to-prev",
+                      "lifecycle":  "fresh-install",
+                      "status":  "pass",
+                      "categories":  [
+                                         "pluginCompatibility",
+                                         "unraidCompatibility"
+                                     ],
+                      "purpose":  "Mixed-Unraid slot pair with the current candidate on nodeA and the previous release on nodeB.",
+                      "nodeA":  {
+                                    "unraid":  "7.2.6",
+                                    "pluginRequested":  "2026.05.02",
+                                    "pluginResolved":  "2026.05.02",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "",
+                                    "upgradeFromPluginResolved":  ""
+                                },
+                      "nodeB":  {
+                                    "unraid":  "7.3.0",
+                                    "pluginRequested":  "2025.09.13",
+                                    "pluginResolved":  "2025.09.13",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "",
+                                    "upgradeFromPluginResolved":  ""
+                                }
+                  },
+                  {
+                      "cellId":  "mixed-unraid-upgrade-preserves-config",
+                      "lifecycle":  "upgrade-preserves-config",
+                      "status":  "pass",
+                      "categories":  [
+                                         "pluginCompatibility",
+                                         "unraidCompatibility"
+                                     ],
+                      "purpose":  "Mixed-Unraid slot pair where both lab nodes upgrade in place from the previous release and then still pass backup and restore smoke.",
+                      "nodeA":  {
+                                    "unraid":  "7.2.6",
+                                    "pluginRequested":  "2026.05.02",
+                                    "pluginResolved":  "2026.05.02",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "2025.09.13",
+                                    "upgradeFromPluginResolved":  "2025.09.13"
+                                },
+                      "nodeB":  {
+                                    "unraid":  "7.3.0",
+                                    "pluginRequested":  "2026.05.02",
+                                    "pluginResolved":  "2026.05.02",
+                                    "pluginSource":  "release-tag",
+                                    "upgradeFromPluginRequested":  "2025.09.13",
+                                    "upgradeFromPluginResolved":  "2025.09.13"
+                                }
+                  }
+              ]
+}

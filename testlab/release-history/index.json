@@ -1,200 +1,330 @@
-{
-    "releaseGateRunId":  "20260524-214246-3317e40",
-    "startedAt":  "2026-05-24T21:42:46.5268628+02:00",
-    "completedAt":  "2026-05-24T21:45:02.6448067+02:00",
-    "matrixProfile":  "release-default",
-    "pluginDisplayVersion":  "2026.05.02",
-    "commitSha":  "3317e4051662d233f8e9d8e16f3bf0b5719ff84a",
-    "shortSha":  "3317e40",
-    "branch":  "testlab/main",
-    "totalCells":  6,
-    "passCells":  6,
-    "failCells":  0,
-    "categoryRollups":  [
-                            {
-                                "category":  "pluginCompatibility",
-                                "totalCells":  6,
-                                "passCells":  6,
-                                "failCells":  0,
-                                "status":  "pass",
-                                "cellIds":  [
-                                                "prev-certified-prev-to-current",
-                                                "prev-certified-current-to-prev",
-                                                "latest-supported-prev-to-current",
-                                                "latest-supported-current-to-prev",
-                                                "prev-certified-upgrade-preserves-config",
-                                                "latest-supported-upgrade-preserves-config"
-                                            ]
-                            },
-                            {
-                                "category":  "unraidCompatibility",
-                                "totalCells":  3,
-                                "passCells":  3,
-                                "failCells":  0,
-                                "status":  "pass",
-                                "cellIds":  [
-                                                "latest-supported-prev-to-current",
-                                                "latest-supported-current-to-prev",
-                                                "latest-supported-upgrade-preserves-config"
-                                            ]
-                            }
-                        ],
-    "pluginCoverage":  [
-                           "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
-                           "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
-                           "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
-                       ],
-    "unraidCoverage":  [
-                           "7.2.6 -\u003e 7.2.6"
-                       ],
-    "detailPath":  "runs/20260524-214246-3317e40.json",
-    "cells":  [
-                  {
-                      "cellId":  "prev-certified-prev-to-current",
-                      "lifecycle":  "fresh-install",
-                      "status":  "pass",
-                      "categories":  "pluginCompatibility",
-                      "purpose":  "Baseline plugin compatibility on the previous certified Unraid version with the current candidate receiving backups.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2025.09.13",
-                                    "pluginResolved":  "2025.09.13",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
+[
+    {
+        "releaseGateRunId":  "20260525-212854-6c41f04",
+        "startedAt":  "2026-05-25T21:28:54.8638425+02:00",
+        "completedAt":  "2026-05-25T21:32:02.9971700+02:00",
+        "matrixProfile":  "release-mixed-unraid",
+        "pluginDisplayVersion":  "2026.05.02",
+        "commitSha":  "6c41f04dfbdd94bf1145a60971a8c29ea1b19cca",
+        "shortSha":  "6c41f04",
+        "branch":  "testlab/main",
+        "totalCells":  3,
+        "passCells":  3,
+        "failCells":  0,
+        "categoryRollups":  [
+                                {
+                                    "category":  "pluginCompatibility",
+                                    "totalCells":  3,
+                                    "passCells":  3,
+                                    "failCells":  0,
+                                    "status":  "pass",
+                                    "cellIds":  [
+                                                    "mixed-unraid-prev-to-current",
+                                                    "mixed-unraid-current-to-prev",
+                                                    "mixed-unraid-upgrade-preserves-config"
+                                                ]
                                 },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
+                                {
+                                    "category":  "unraidCompatibility",
+                                    "totalCells":  3,
+                                    "passCells":  3,
+                                    "failCells":  0,
+                                    "status":  "pass",
+                                    "cellIds":  [
+                                                    "mixed-unraid-prev-to-current",
+                                                    "mixed-unraid-current-to-prev",
+                                                    "mixed-unraid-upgrade-preserves-config"
+                                                ]
                                 }
-                  },
-                  {
-                      "cellId":  "prev-certified-current-to-prev",
-                      "lifecycle":  "fresh-install",
-                      "status":  "pass",
-                      "categories":  "pluginCompatibility",
-                      "purpose":  "Baseline plugin compatibility on the previous certified Unraid version with the previous release receiving backups.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
+                            ],
+        "pluginCoverage":  [
+                               "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
+                               "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
+                               "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
+                           ],
+        "unraidCoverage":  [
+                               "7.2.6 -\u003e 7.3.0"
+                           ],
+        "detailPath":  "runs/20260525-212854-6c41f04.json",
+        "cells":  [
+                      {
+                          "cellId":  "mixed-unraid-prev-to-current",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "Mixed-Unraid slot pair with the previous release on nodeA and the current candidate on nodeB.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.3.0",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "mixed-unraid-current-to-prev",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "Mixed-Unraid slot pair with the current candidate on nodeA and the previous release on nodeB.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.3.0",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "mixed-unraid-upgrade-preserves-config",
+                          "lifecycle":  "upgrade-preserves-config",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "Mixed-Unraid slot pair where both lab nodes upgrade in place from the previous release and then still pass backup and restore smoke.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.3.0",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    }
+                      }
+                  ]
+    },
+    {
+        "releaseGateRunId":  "20260524-214246-3317e40",
+        "startedAt":  "2026-05-24T21:42:46.5268628+02:00",
+        "completedAt":  "2026-05-24T21:45:02.6448067+02:00",
+        "matrixProfile":  "release-default",
+        "pluginDisplayVersion":  "2026.05.02",
+        "commitSha":  "3317e4051662d233f8e9d8e16f3bf0b5719ff84a",
+        "shortSha":  "3317e40",
+        "branch":  "testlab/main",
+        "totalCells":  6,
+        "passCells":  6,
+        "failCells":  0,
+        "categoryRollups":  [
+                                {
+                                    "category":  "pluginCompatibility",
+                                    "totalCells":  6,
+                                    "passCells":  6,
+                                    "failCells":  0,
+                                    "status":  "pass",
+                                    "cellIds":  [
+                                                    "prev-certified-prev-to-current",
+                                                    "prev-certified-current-to-prev",
+                                                    "latest-supported-prev-to-current",
+                                                    "latest-supported-current-to-prev",
+                                                    "prev-certified-upgrade-preserves-config",
+                                                    "latest-supported-upgrade-preserves-config"
+                                                ]
                                 },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2025.09.13",
-                                    "pluginResolved":  "2025.09.13",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
+                                {
+                                    "category":  "unraidCompatibility",
+                                    "totalCells":  3,
+                                    "passCells":  3,
+                                    "failCells":  0,
+                                    "status":  "pass",
+                                    "cellIds":  [
+                                                    "latest-supported-prev-to-current",
+                                                    "latest-supported-current-to-prev",
+                                                    "latest-supported-upgrade-preserves-config"
+                                                ]
                                 }
-                  },
-                  {
-                      "cellId":  "latest-supported-prev-to-current",
-                      "lifecycle":  "fresh-install",
-                      "status":  "pass",
-                      "categories":  [
-                                         "pluginCompatibility",
-                                         "unraidCompatibility"
-                                     ],
-                      "purpose":  "Plugin compatibility plus latest Unraid certification with the current candidate receiving backups.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2025.09.13",
-                                    "pluginResolved":  "2025.09.13",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
-                                },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
-                                }
-                  },
-                  {
-                      "cellId":  "latest-supported-current-to-prev",
-                      "lifecycle":  "fresh-install",
-                      "status":  "pass",
-                      "categories":  [
-                                         "pluginCompatibility",
-                                         "unraidCompatibility"
-                                     ],
-                      "purpose":  "Plugin compatibility plus latest Unraid certification with the previous release receiving backups.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
-                                },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2025.09.13",
-                                    "pluginResolved":  "2025.09.13",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "",
-                                    "upgradeFromPluginResolved":  ""
-                                }
-                  },
-                  {
-                      "cellId":  "prev-certified-upgrade-preserves-config",
-                      "lifecycle":  "upgrade-preserves-config",
-                      "status":  "pass",
-                      "categories":  "pluginCompatibility",
-                      "purpose":  "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "2025.09.13",
-                                    "upgradeFromPluginResolved":  "2025.09.13"
-                                },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "2025.09.13",
-                                    "upgradeFromPluginResolved":  "2025.09.13"
-                                }
-                  },
-                  {
-                      "cellId":  "latest-supported-upgrade-preserves-config",
-                      "lifecycle":  "upgrade-preserves-config",
-                      "status":  "pass",
-                      "categories":  [
-                                         "pluginCompatibility",
-                                         "unraidCompatibility"
-                                     ],
-                      "purpose":  "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.",
-                      "nodeA":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "2025.09.13",
-                                    "upgradeFromPluginResolved":  "2025.09.13"
-                                },
-                      "nodeB":  {
-                                    "unraid":  "7.2.6",
-                                    "pluginRequested":  "2026.05.02",
-                                    "pluginResolved":  "2026.05.02",
-                                    "pluginSource":  "release-tag",
-                                    "upgradeFromPluginRequested":  "2025.09.13",
-                                    "upgradeFromPluginResolved":  "2025.09.13"
-                                }
-                  }
-              ]
-}
+                            ],
+        "pluginCoverage":  [
+                               "2025.09.13 (release-tag) -\u003e 2026.05.02 (release-tag)",
+                               "2026.05.02 (release-tag) -\u003e 2025.09.13 (release-tag)",
+                               "2026.05.02 (release-tag) -\u003e 2026.05.02 (release-tag)"
+                           ],
+        "unraidCoverage":  [
+                               "7.2.6 -\u003e 7.2.6"
+                           ],
+        "detailPath":  "runs/20260524-214246-3317e40.json",
+        "cells":  [
+                      {
+                          "cellId":  "prev-certified-prev-to-current",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  "pluginCompatibility",
+                          "purpose":  "Baseline plugin compatibility on the previous certified Unraid version with the current candidate receiving backups.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "prev-certified-current-to-prev",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  "pluginCompatibility",
+                          "purpose":  "Baseline plugin compatibility on the previous certified Unraid version with the previous release receiving backups.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "latest-supported-prev-to-current",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "Plugin compatibility plus latest Unraid certification with the current candidate receiving backups.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "latest-supported-current-to-prev",
+                          "lifecycle":  "fresh-install",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "Plugin compatibility plus latest Unraid certification with the previous release receiving backups.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2025.09.13",
+                                        "pluginResolved":  "2025.09.13",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "",
+                                        "upgradeFromPluginResolved":  ""
+                                    }
+                      },
+                      {
+                          "cellId":  "prev-certified-upgrade-preserves-config",
+                          "lifecycle":  "upgrade-preserves-config",
+                          "status":  "pass",
+                          "categories":  "pluginCompatibility",
+                          "purpose":  "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    }
+                      },
+                      {
+                          "cellId":  "latest-supported-upgrade-preserves-config",
+                          "lifecycle":  "upgrade-preserves-config",
+                          "status":  "pass",
+                          "categories":  [
+                                             "pluginCompatibility",
+                                             "unraidCompatibility"
+                                         ],
+                          "purpose":  "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.",
+                          "nodeA":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    },
+                          "nodeB":  {
+                                        "unraid":  "7.2.6",
+                                        "pluginRequested":  "2026.05.02",
+                                        "pluginResolved":  "2026.05.02",
+                                        "pluginSource":  "release-tag",
+                                        "upgradeFromPluginRequested":  "2025.09.13",
+                                        "upgradeFromPluginResolved":  "2025.09.13"
+                                    }
+                      }
+                  ]
+    }
+]

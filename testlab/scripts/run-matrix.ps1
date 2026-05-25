@@ -106,6 +106,31 @@ function Get-ObjectValue {
     return $null
 }
 
+function Set-ObjectValue {
+    param(
+        $Object,
+        [string]$Name,
+        $Value
+    )
+
+    if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        $Object[$Name] = $Value
+        return
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        $property.Value = $Value
+        return
+    }
+
+    $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+}
+
 function Get-TestLabCanonicalNodeName {
     param([string]$NodeName)
 
@@ -144,6 +169,78 @@ function Get-TestLabNodeValue {
     }
 
     return $null
+}
+
+function Use-ProvisionedMatrixUnraidVersions {
+    param(
+        $Lab,
+        [object[]]$MatrixCells,
+        $Matrix = $null
+    )
+
+    $provider = [string](Get-ObjectValue -Object $Lab -Name 'provider')
+    $supportedProviders = @('windows-local', 'windows-wsl-qemu', 'manual')
+    if ($provider -notin $supportedProviders) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    $labNodes = Get-ObjectValue -Object $Lab -Name 'nodes'
+    $resolvedNodeVersions = [ordered]@{}
+    $updated = $false
+
+    foreach ($nodeName in @('nodeA', 'nodeB')) {
+        $labNode = Get-TestLabNodeValue -Object $labNodes -NodeName $nodeName
+        $labVersion = [string](Get-ObjectValue -Object $labNode -Name 'unraidVersion')
+        if ([string]::IsNullOrWhiteSpace($labVersion)) {
+            continue
+        }
+
+        $resolvedNodeVersions[$nodeName] = $labVersion
+
+        foreach ($cell in $MatrixCells) {
+            $cellNode = Get-TestLabNodeValue -Object $cell -NodeName $nodeName
+            if ($null -eq $cellNode) {
+                continue
+            }
+
+            $cellVersion = [string](Get-ObjectValue -Object $cellNode -Name 'unraid')
+            if ($cellVersion -ne $labVersion) {
+                Set-ObjectValue -Object $cellNode -Name 'unraid' -Value $labVersion
+                $updated = $true
+            }
+        }
+    }
+
+    if ($resolvedNodeVersions.Count -eq 0) {
+        return [pscustomobject]@{
+            Applied = $false
+            Updated = $false
+            VersionSummary = $null
+        }
+    }
+
+    if ($null -ne $Matrix) {
+        Set-ObjectValue -Object $Matrix -Name 'unraidVersionSource' -Value 'provisioned-lab-nodes'
+        Set-ObjectValue -Object $Matrix -Name 'provisionedNodeVersions' -Value $resolvedNodeVersions
+    }
+
+    $versionSummary = @(
+        foreach ($nodeName in @('nodeA', 'nodeB')) {
+            if ($resolvedNodeVersions.Contains($nodeName)) {
+                "${nodeName}=$($resolvedNodeVersions[$nodeName])"
+            }
+        }
+    ) -join ', '
+
+    return [pscustomobject]@{
+        Applied = $true
+        Updated = $updated
+        VersionSummary = $versionSummary
+    }
 }
 
 function Resolve-IdentityPath {
@@ -2089,7 +2186,12 @@ Require-File $MatrixConfig
 $lab = Get-Json -Path $LabConfig
 $matrix = Get-Json -Path $MatrixConfig
 $matrixCells = @($matrix.cells)
+$matrixVersionResolution = Use-ProvisionedMatrixUnraidVersions -Lab $lab -MatrixCells $matrixCells -Matrix $matrix
 $totalCells = $matrixCells.Count
+
+if ($matrixVersionResolution.Applied) {
+    Write-Host "[testlab] Matrix will use provisioned lab node Unraid versions: $($matrixVersionResolution.VersionSummary)"
+}
 
 $matrixUnraidSupport = Test-LabSupportsMatrixUnraidVersions -Lab $lab -MatrixCells $matrixCells
 if (-not $matrixUnraidSupport.Success) {
