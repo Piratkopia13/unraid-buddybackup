@@ -1,0 +1,34 @@
+{
+  "name": "small-initial",
+  "mode": "report-only",
+  "cells": [
+    {
+      "id": "cell-01",
+      "nodeA": { "unraid": "7.1.0", "plugin": "2026.05.02" },
+      "nodeB": { "unraid": "7.1.0", "plugin": "2026.05.02" },
+      "lifecycle": "fresh-install",
+      "scenarios": ["fresh-install", "backup-smoke", "restore-smoke"]
+    },
+    {
+      "id": "cell-02",
+      "nodeA": { "unraid": "7.1.0", "plugin": "2026.05.02" },
+      "nodeB": { "unraid": "7.1.0", "plugin": "2025.09.13" },
+      "lifecycle": "fresh-install",
+      "scenarios": ["fresh-install", "backup-smoke"]
+    },
+    {
+      "id": "cell-03",
+      "nodeA": { "unraid": "7.0.0", "plugin": "2025.09.13" },
+      "nodeB": { "unraid": "7.1.0", "plugin": "2026.05.02" },
+      "lifecycle": "post-reboot",
+      "scenarios": ["post-reboot", "backup-smoke"]
+    },
+    {
+      "id": "cell-04",
+      "nodeA": { "unraid": "7.1.0", "plugin": "2026.05.02", "upgradeFromPlugin": "2025.09.13" },
+      "nodeB": { "unraid": "7.1.0", "plugin": "2026.05.02", "upgradeFromPlugin": "2025.09.13" },
+      "lifecycle": "upgrade-preserves-config",
+      "scenarios": ["upgrade-preserves-config", "backup-smoke", "restore-smoke"]
+    }
+  ]
+}
