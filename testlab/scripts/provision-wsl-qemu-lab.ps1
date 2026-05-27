@@ -883,13 +883,22 @@ function Invoke-PostProvisionNodeSshCheck {
     param(
         [string]$NodeName,
         $NodeConnection,
-        [int]$Attempts = 10,
-        [int]$RetryDelaySeconds = 3,
+        [int]$Attempts = 24,
+        [int]$RetryDelaySeconds = 5,
+        [int]$RequiredSuccesses = 3,
+        [int]$InitialDelaySeconds = 5,
         [switch]$DoExecute
     )
 
     $attemptCount = [Math]::Max($Attempts, 1)
+    $requiredSuccessCount = [Math]::Max($RequiredSuccesses, 1)
     $attemptResults = @()
+    $successCount = 0
+
+    if ($DoExecute -and $InitialDelaySeconds -gt 0) {
+        Start-Sleep -Seconds $InitialDelaySeconds
+    }
+
     for ($attempt = 1; $attempt -le $attemptCount; $attempt++) {
         $probeResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command "echo probe-ok; uname -a" -Label "post-provision-ssh-check" -PreviewCommand "post-provision SSH reachability check" -DoExecute:$DoExecute
         $attemptResults += [pscustomobject]@{
@@ -900,12 +909,17 @@ function Invoke-PostProvisionNodeSshCheck {
         }
 
         if ($probeResult.success) {
-            return [pscustomobject]@{
-                success = $true
-                exitCode = $probeResult.exitCode
-                output = @($probeResult.output)
-                attempts = @($attemptResults)
+            $successCount += 1
+            if ($successCount -ge $requiredSuccessCount) {
+                return [pscustomobject]@{
+                    success = $true
+                    exitCode = $probeResult.exitCode
+                    output = @($probeResult.output)
+                    attempts = @($attemptResults)
+                }
             }
+        } else {
+            $successCount = 0
         }
 
         if ($DoExecute -and $attempt -lt $attemptCount) {
