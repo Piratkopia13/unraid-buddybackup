@@ -573,6 +573,39 @@ set_ini_value() {
   fi
 }
 
+persist_peer_forward_rule() {
+    local peer_alias_ip="$1"
+    local host_gateway_ip="$2"
+    local peer_port="$3"
+    local go_file="/boot/config/go"
+    local start_marker="# BuddyBackup testlab: persist peer forward ${peer_alias_ip} start"
+    local end_marker="# BuddyBackup testlab: persist peer forward ${peer_alias_ip} end"
+    local tmp_go
+
+    if [ ! -f "$go_file" ]; then
+        return 0
+    fi
+
+    tmp_go="${go_file}.buddybackup.tmp"
+    awk -v start="$start_marker" -v end="$end_marker" '
+        $0 == start { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' "$go_file" > "$tmp_go"
+
+    cat >> "$tmp_go" <<EOF
+
+$start_marker
+if command -v iptables >/dev/null 2>&1; then
+    iptables -t nat -C OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}" >/dev/null 2>&1 || \
+        iptables -t nat -A OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}"
+fi
+$end_marker
+EOF
+
+    mv "$tmp_go" "$go_file"
+}
+
 ensure_dataset_absent() {
   local dataset="$1"
   if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
@@ -642,6 +675,7 @@ if [[ "$peer_port" != "22" ]]; then
 
   iptables -t nat -C OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}" >/dev/null 2>&1 || \
     iptables -t nat -A OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}"
+    persist_peer_forward_rule "$peer_alias_ip" "$host_gateway_ip" "$peer_port"
 fi
 
 /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update

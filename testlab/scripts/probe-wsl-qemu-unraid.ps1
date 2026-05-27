@@ -380,13 +380,54 @@ fi
 cat >> "$mount_dir/config/go" <<'EOF'
 
 # BuddyBackup testlab: restore persisted SSH key and root password on every boot
+merge_root_shadow_entry() {
+    local source_path="$1"
+    local target_path="$2"
+    local root_entry=""
+    local tmp_target=""
+
+    if [ ! -f "$source_path" ]; then
+        return 0
+    fi
+
+    root_entry="$(awk -F: '$1=="root" { print; exit }' "$source_path" 2>/dev/null || true)"
+    if [ -z "$root_entry" ]; then
+        return 0
+    fi
+
+    tmp_target="$(mktemp)"
+    if [ -f "$target_path" ]; then
+        awk -F: -v root_entry="$root_entry" '
+            BEGIN { replaced=0 }
+            $1=="root" {
+                if (!replaced) {
+                    print root_entry
+                    replaced=1
+                }
+                next
+            }
+            { print }
+            END {
+                if (!replaced) {
+                    print root_entry
+                }
+            }
+        ' "$target_path" > "$tmp_target"
+    else
+        printf '%s\n' "$root_entry" > "$tmp_target"
+    fi
+
+    cat "$tmp_target" > "$target_path"
+    chmod 600 "$target_path" 2>/dev/null || true
+    rm -f "$tmp_target"
+}
+
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 cp /boot/config/ssh/authorized_keys /root/.ssh/authorized_keys 2>/dev/null || true
 chmod 600 /root/.ssh/authorized_keys 2>/dev/null || true
 if [ -f /boot/config/shadow ] && [ -f /etc/shadow ]; then
-    cp /boot/config/shadow /etc/shadow 2>/dev/null || true
-    chmod 600 /etc/shadow 2>/dev/null || true
+    merge_root_shadow_entry /boot/config/shadow /etc/shadow
 fi
 if [ -x /etc/rc.d/rc.sshd ]; then
     chmod +x /etc/rc.d/rc.sshd 2>/dev/null || true
@@ -403,11 +444,38 @@ fi
                 break
             fi
 
-            cp /boot/config/shadow /etc/shadow 2>/dev/null || true
-            chmod 600 /etc/shadow 2>/dev/null || true
+            merge_root_shadow_entry /boot/config/shadow /etc/shadow
         fi
 
         sleep 2
+        attempts=$((attempts - 1))
+    done
+) >/dev/null 2>&1 &
+
+(
+    attempts=180
+    plugin_root="/boot/config/plugins/buddybackup"
+    update_script="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php"
+    while [ "$attempts" -gt 0 ]; do
+        if [ -x "$update_script" ] && [ -f "$plugin_root/buddybackup.cfg" ]; then
+            "$update_script" update >/dev/null 2>&1 || true
+
+            remote_hosts_configured=0
+            if [ -f "$plugin_root/backups.cfg" ] && grep -Eq '^destination_host=".+"$' "$plugin_root/backups.cfg"; then
+                remote_hosts_configured=1
+            fi
+
+            known_hosts_ready=1
+            if [ "$remote_hosts_configured" -eq 1 ] && ! grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+                known_hosts_ready=0
+            fi
+
+            if grep -q '^buddybackup:' /etc/shadow 2>/dev/null && [ "$known_hosts_ready" -eq 1 ]; then
+                break
+            fi
+        fi
+
+        sleep 5
         attempts=$((attempts - 1))
     done
 ) >/dev/null 2>&1 &

@@ -151,7 +151,7 @@ This initial implementation provides:
 
 - `base-setup-verify`: runs before each matrix cell when `setup.verifyBaseConfigInMatrix` is enabled. It verifies BuddyBackup is installed on both nodes, verifies the configured zpool exists, verifies the unencrypted dataset exists, and verifies the encrypted dataset exists with encryption enabled. On live local-provider runs it also cross-checks the latest local-provider report. Results are written to `scenario-base-setup-verify.json` in the cell artifact directory.
 - `fresh-install`: installs the matrix-selected BuddyBackup plugin version on both fixed lab nodes for that cell.
-- `post-reboot`: reboots both nodes one at a time, waits for SSH to drop and return, confirms a new `boot_id`, verifies the manual WebGUI password persisted, re-verifies BuddyBackup installation, and re-verifies the configured ZFS datasets.
+- `post-reboot`: captures BuddyBackup state on both nodes, reboots both nodes one at a time, waits for SSH to drop and return, confirms a new `boot_id`, verifies the manual WebGUI password persisted, re-verifies BuddyBackup installation, re-verifies the configured ZFS datasets, and fails if any captured BuddyBackup state changed across the reboot.
 - `upgrade-preserves-config`: installs the configured `upgradeFromPlugin` version on both nodes, seeds realistic BuddyBackup state (backup jobs, snapshot job, advanced settings, receive mode, SSH state), upgrades both nodes in place to the matrix-selected plugin version, captures normalized before/after state summaries, and fails if any preserved state changed unexpectedly.
 - `backup-smoke`: delegates to the functional smoke workflow and reports whether the backup-oriented actions succeeded.
 - `restore-smoke`: also delegates to the functional smoke workflow and reports whether the restore-oriented actions succeeded. If `backup-smoke` already ran in the same cell, the runner reuses the cached functional smoke result instead of re-running the full smoke workflow.
@@ -163,18 +163,18 @@ This initial implementation provides:
 - It currently defines these cells:
 1. `cell-01`: nodeA and nodeB both run Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `fresh-install`, `backup-smoke`, and `restore-smoke`.
 2. `cell-02`: nodeA runs Unraid `7.1.0` with BuddyBackup `2026.05.02`, nodeB runs Unraid `7.1.0` with BuddyBackup `2025.09.13`; scenarios are `fresh-install` and `backup-smoke`.
-3. `cell-03`: nodeA runs Unraid `7.0.0` with BuddyBackup `2025.09.13`, nodeB runs Unraid `7.1.0` with BuddyBackup `2026.05.02`; scenarios are `post-reboot` and `backup-smoke`.
+3. `cell-03`: nodeA and nodeB both run the current `workspace-build`; scenarios are `post-reboot` and `backup-smoke`, so the default matrix now exercises reboot persistence on the current checkout.
 4. `cell-04`: nodeA and nodeB both run Unraid `7.1.0` with BuddyBackup `2026.05.02`, but each upgrades in place from `2025.09.13`; scenarios are `upgrade-preserves-config`, `backup-smoke`, and `restore-smoke`.
 - Because `setup.verifyBaseConfigInMatrix` defaults to `true` in the example lab config, each of those cells also runs `base-setup-verify` before the listed scenarios.
 
 ## Release matrix profiles
 
 - `run-release-gate.ps1` accepts `-MatrixProfile` for release-oriented generated matrices.
-- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup across both fixed lab nodes plus one in-place `upgrade-preserves-config` cell on each Unraid baseline.
+- `release-default`: the required release gate. It covers the previous certified Unraid version and the latest supported Unraid version, with previous-release versus current-candidate BuddyBackup across both fixed lab nodes, one in-place `upgrade-preserves-config` cell on each Unraid baseline, and one current/current `post-reboot` cell on the latest supported Unraid version.
 - `release-mixed-unraid`: an optional mixed-version profile. It keeps the previous certified Unraid version on nodeA and the latest supported Unraid version on nodeB, then runs previous/current BuddyBackup interoperability plus mixed-pair `upgrade-preserves-config` coverage within that fixed node pairing.
 - `release-latest-unraid-isolation`: an optional current/current isolation run on the latest supported Unraid version with restore coverage.
 - `release-post-reboot`: an optional reboot-persistence run for the current candidate on the latest supported Unraid version.
-- `release-extended`: the required `release-default` cells plus the isolation and post-reboot profiles.
+- `release-extended`: the required `release-default` cells plus the isolation profile.
 - The matrix schema now names the two fixed lab slots `nodeA` and `nodeB`.
 - Current limitation: the existing providers provision one fixed nodeA slot and one fixed nodeB slot from the lab config before the matrix starts. That means one execution cannot truly switch Unraid versions per cell.
 - `run-matrix.ps1` now resolves runtime `nodeA.unraid` and `nodeB.unraid` values from `lab.nodes.nodeA.unraidVersion` and `lab.nodes.nodeB.unraidVersion`, so matrix execution uses whatever Unraid pair is already provisioned on the lab nodes.

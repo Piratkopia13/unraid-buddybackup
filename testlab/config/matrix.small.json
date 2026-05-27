@@ -18,8 +18,8 @@
     },
     {
       "id": "cell-03",
-      "nodeA": { "unraid": "7.0.0", "plugin": "2025.09.13" },
-      "nodeB": { "unraid": "7.1.0", "plugin": "2026.05.02" },
+      "nodeA": { "unraid": "7.1.0", "plugin": "workspace-build" },
+      "nodeB": { "unraid": "7.1.0", "plugin": "workspace-build" },
       "lifecycle": "post-reboot",
       "scenarios": ["post-reboot", "backup-smoke"]
     },

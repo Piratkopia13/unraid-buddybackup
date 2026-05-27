@@ -519,16 +519,53 @@ if command -v php >/dev/null 2>&1; then
     use_php=1
 fi
 
+merge_root_shadow_entry() {
+    local source_path="$1"
+    local target_path="$2"
+    local root_entry=""
+    local tmp_target=""
+
+    if [ ! -f "$source_path" ]; then
+        return 0
+    fi
+
+    root_entry="$(awk -F: '$1=="root" { print; exit }' "$source_path" 2>/dev/null || true)"
+    if [ -z "$root_entry" ]; then
+        return 0
+    fi
+
+    tmp_target="$(mktemp)"
+    if [ -f "$target_path" ]; then
+        awk -F: -v root_entry="$root_entry" '
+            BEGIN { replaced=0 }
+            $1=="root" {
+                if (!replaced) {
+                    print root_entry
+                    replaced=1
+                }
+                next
+            }
+            { print }
+            END {
+                if (!replaced) {
+                    print root_entry
+                }
+            }
+        ' "$target_path" > "$tmp_target"
+    else
+        printf '%s\n' "$root_entry" > "$tmp_target"
+    fi
+
+    cat "$tmp_target" > "$target_path"
+    chmod 600 "$target_path" 2>/dev/null || true
+    rm -f "$tmp_target"
+}
+
 apply_password() {
     password="$(printf '%s' "$password_b64" | base64 -d)"
     printf 'root:%s\n' "$password" | chpasswd
     if [ -f /etc/shadow ]; then
-        cp /etc/shadow /boot/config/shadow 2>/dev/null || true
-        chmod 600 /boot/config/shadow 2>/dev/null || true
-    fi
-    if [ -f /boot/config/shadow ]; then
-        cp /boot/config/shadow /etc/shadow 2>/dev/null || true
-        chmod 600 /etc/shadow 2>/dev/null || true
+        merge_root_shadow_entry /etc/shadow /boot/config/shadow
     fi
 }
 

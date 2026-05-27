@@ -140,7 +140,7 @@ function Get-TestLabReleaseMatrixDefinition {
         { $_ -in @("release-default", "default") } {
             return [ordered]@{
                 name = "release-default"
-                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup interoperability across both fixed lab nodes plus in-place upgrade preservation on both baselines."
+                description = "Required release gate covering previous certified Unraid and latest supported Unraid with previous-release vs current-candidate BuddyBackup interoperability across both fixed lab nodes, in-place upgrade preservation on both baselines, and a current-candidate reboot persistence cell on the latest supported Unraid version."
                 mode = "report-only"
                 cells = @(
                     (New-TestLabReleaseMatrixCell -Id "prev-certified-prev-to-current" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $previousReleaseVersion -NodeBUnraid $previousCertifiedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility") -Purpose "Baseline plugin compatibility on the previous certified Unraid version with the current candidate installed on nodeB."),
@@ -148,7 +148,8 @@ function Get-TestLabReleaseMatrixDefinition {
                     (New-TestLabReleaseMatrixCell -Id "latest-supported-prev-to-current" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the current candidate installed on nodeB."),
                     (New-TestLabReleaseMatrixCell -Id "latest-supported-current-to-prev" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $previousReleaseVersion -Lifecycle "fresh-install" -Scenarios @("fresh-install", "backup-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "Plugin compatibility plus latest Unraid certification with the previous release installed on nodeB."),
                     (New-TestLabReleaseMatrixCell -Id "prev-certified-upgrade-preserves-config" -NodeAUnraid $previousCertifiedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $previousCertifiedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the previous certified Unraid version."),
-                    (New-TestLabReleaseMatrixCell -Id "latest-supported-upgrade-preserves-config" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version.")
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-upgrade-preserves-config" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeAUpgradeFromPlugin $previousReleaseVersion -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -NodeBUpgradeFromPlugin $previousReleaseVersion -Lifecycle "upgrade-preserves-config" -Scenarios @("upgrade-preserves-config", "backup-smoke", "restore-smoke") -Categories @("pluginCompatibility", "unraidCompatibility") -Purpose "In-place upgrade from the previous release must preserve BuddyBackup configuration and still pass backup and restore smoke on the latest supported Unraid version."),
+                    (New-TestLabReleaseMatrixCell -Id "latest-supported-current-current-post-reboot" -NodeAUnraid $latestSupportedUnraidVersion -NodeAPlugin $currentCandidatePlugin -NodeBUnraid $latestSupportedUnraidVersion -NodeBPlugin $currentCandidatePlugin -Lifecycle "post-reboot" -Scenarios @("post-reboot", "backup-smoke") -Categories @("unraidCompatibility") -Purpose "Current candidate reboot persistence on the latest supported Unraid version, including BuddyBackup state retention and post-reboot backup smoke.")
                 )
             }
         }
@@ -187,13 +188,12 @@ function Get-TestLabReleaseMatrixDefinition {
         { $_ -in @("release-extended", "extended") } {
             $defaultMatrix = Get-TestLabReleaseMatrixDefinition -Lab $Lab -ProfileName "release-default"
             $latestIsolationMatrix = Get-TestLabReleaseMatrixDefinition -Lab $Lab -ProfileName "release-latest-unraid-isolation"
-            $postRebootMatrix = Get-TestLabReleaseMatrixDefinition -Lab $Lab -ProfileName "release-post-reboot"
 
             return [ordered]@{
                 name = "release-extended"
-                description = "Extended release gate combining the required compatibility cells with latest-Unraid isolation and reboot persistence coverage."
+                description = "Extended release gate combining the required compatibility cells with an additional latest-Unraid isolation run."
                 mode = "report-only"
-                cells = @($defaultMatrix.cells + $latestIsolationMatrix.cells + $postRebootMatrix.cells)
+                cells = @($defaultMatrix.cells + $latestIsolationMatrix.cells)
             }
         }
         default {

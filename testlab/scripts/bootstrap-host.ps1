@@ -45,10 +45,12 @@ if (-not (Test-Path $labKeyPath)) {
     Assert-Command "ssh-keygen"
     # ssh-keygen cannot write directly to UNC paths on Windows; generate to a local temp dir
     # and then copy the two files to the UNC destination.
+    # Windows PowerShell drops true empty-string args for native commands, so pass
+    # a quoted empty string literal that ssh-keygen still interprets as empty.
     $tmpDir = Join-Path $env:TEMP "buddybackup-testlab-key-$(New-Guid)"
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
     $tmpKey = Join-Path $tmpDir "lab_key"
-    & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $tmpKey -N ""
+    & ssh-keygen -t ed25519 -C "buddybackup-testlab" -f $tmpKey -N '""'
     if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpKey)) {
         Copy-Item -Path $tmpKey          -Destination $labKeyPath    -Force
         Copy-Item -Path "${tmpKey}.pub"  -Destination $labKeyPubPath -Force

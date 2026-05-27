@@ -1396,6 +1396,39 @@ set_ini_value() {
     fi
 }
 
+persist_peer_forward_rule() {
+    local peer_alias_ip="$1"
+    local host_gateway_ip="$2"
+    local peer_port="$3"
+    local go_file="/boot/config/go"
+    local start_marker="# BuddyBackup testlab: persist peer forward ${peer_alias_ip} start"
+    local end_marker="# BuddyBackup testlab: persist peer forward ${peer_alias_ip} end"
+    local tmp_go
+
+    if [ ! -f "$go_file" ]; then
+        return 0
+    fi
+
+    tmp_go="${go_file}.buddybackup.tmp"
+    awk -v start="$start_marker" -v end="$end_marker" '
+        $0 == start { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' "$go_file" > "$tmp_go"
+
+    cat >> "$tmp_go" <<EOF
+
+$start_marker
+if command -v iptables >/dev/null 2>&1; then
+    iptables -t nat -C OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}" >/dev/null 2>&1 || \
+        iptables -t nat -A OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}"
+fi
+$end_marker
+EOF
+
+    mv "$tmp_go" "$go_file"
+}
+
 ensure_dataset_absent() {
     local dataset="$1"
     if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
@@ -1482,6 +1515,7 @@ if [[ "$peer_port" != "22" ]]; then
 
     iptables -t nat -C OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}" >/dev/null 2>&1 || \
         iptables -t nat -A OUTPUT -d "${peer_alias_ip}/32" -p tcp --dport 22 -j DNAT --to-destination "${host_gateway_ip}:${peer_port}"
+    persist_peer_forward_rule "$peer_alias_ip" "$host_gateway_ip" "$peer_port"
 fi
 
 /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
@@ -2089,12 +2123,26 @@ function Run-Scenario {
                 $rebootSettleSeconds = [int]$Lab.timeouts.rebootSettleSeconds
             }
 
+            $nodeSnapshots = @{}
+
             foreach ($node in @(
                 [pscustomobject]@{ Name = "nodeA"; Connection = $sender },
                 [pscustomobject]@{ Name = "nodeB"; Connection = $receiver }
             )) {
                 Write-Host "[testlab] Scenario 'post-reboot': validating reboot persistence on $($node.Name)"
                 $manualAccessLabel = "$($node.Name)-manual-access-check"
+
+                $beforeSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
+                $results += $beforeSnapshot.Result
+                if ($DoExecute -and (-not $beforeSnapshot.Result.Success -or $null -eq $beforeSnapshot.Snapshot)) {
+                    throw "Failed to capture BuddyBackup state before reboot for $($node.Name)."
+                }
+                if ($DoExecute) {
+                    $nodeSnapshots[$node.Name] = [ordered]@{
+                        Before = $beforeSnapshot.Snapshot
+                    }
+                }
+
                 $beforeBootId = Get-RemoteBootId -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Label "$($node.Name)-boot-id-before-reboot" -DoExecute:$DoExecute
                 $results += $beforeBootId.Result
                 if ($DoExecute -and (-not $beforeBootId.Result.Success -or [string]::IsNullOrWhiteSpace($beforeBootId.BootId))) {
@@ -2124,7 +2172,32 @@ function Run-Scenario {
 
                     $encryptedDatasetCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset) -Label "$($node.Name)-encrypted-dataset-check" -TimeoutSeconds $timeout
                     $results += $encryptedDatasetCheck.Result
+
+                    $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
+                    $results += $afterSnapshot.Result
+                    if (-not $afterSnapshot.Result.Success -or $null -eq $afterSnapshot.Snapshot) {
+                        throw "Failed to capture BuddyBackup state after reboot for $($node.Name)."
+                    }
+
+                    $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
+                    $results += [pscustomobject]@{
+                        Label = "$($node.Name)-post-reboot-state-compare"
+                        Command = "compare pre-reboot and post-reboot BuddyBackup state"
+                        ExitCode = if ($stateCompare.Success) { 0 } else { 1 }
+                        Output = if ($stateCompare.Success) { "State persisted across reboot." } else { $stateCompare.Error }
+                        Success = $stateCompare.Success
+                    }
+                    if (-not $stateCompare.Success) {
+                        throw "$($node.Name) BuddyBackup state changed across reboot: $($stateCompare.Error)"
+                    }
                 } else {
+                    $results += [pscustomobject]@{
+                        Label = "$($node.Name)-post-reboot-state-compare"
+                        Command = "compare pre-reboot and post-reboot BuddyBackup state"
+                        ExitCode = 0
+                        Output = 'dry-run'
+                        Success = $true
+                    }
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $pluginVerifyCommand -Label "$($node.Name)-plugin-check" -DoExecute:$DoExecute
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $manualAccessVerifyCommand -LoggedCommand $manualAccessVerifyLoggedCommand -Label "$($node.Name)-manual-access-check" -DoExecute:$DoExecute
                     $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zpool list -H -o name {0}" -f $zfsValues.PoolName) -Label "$($node.Name)-zpool-check" -DoExecute:$DoExecute
