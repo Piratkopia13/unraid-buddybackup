@@ -376,12 +376,20 @@ managed_known_host_exists() {
     ssh-keygen -F "${host}" -f "${ssh_known_hosts_path}" >/dev/null 2>&1
 }
 
+remove_managed_known_host() {
+    local host="$1"
+
+    ensure_managed_known_hosts_file
+    ssh-keygen -R "${host}" -f "${ssh_known_hosts_path}" >/dev/null 2>&1 || true
+}
+
 append_managed_known_host() {
     local host="$1"
     local scanned_key=""
 
     ensure_managed_known_hosts_file
-    scanned_key=$(ssh-keyscan -H "${host}" 2>/dev/null)
+    remove_managed_known_host "${host}"
+    scanned_key=$(ssh-keyscan "${host}" 2>/dev/null)
     if [[ -z "${scanned_key}" ]]; then
         return 1
     fi

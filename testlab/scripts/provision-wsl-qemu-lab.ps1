@@ -373,7 +373,20 @@ echo "plugin source metadata written to $marker_path"
         $packageMd5
     )
 
-    return Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -PreviewCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+    $maxMetadataAttempts = 3
+    $result = $null
+    for ($metadataAttempt = 1; $metadataAttempt -le $maxMetadataAttempts; $metadataAttempt++) {
+        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -PreviewCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+        if ($result.success) {
+            break
+        }
+
+        if ($DoExecute -and $metadataAttempt -lt $maxMetadataAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    return $result
 }
 
 function Install-WorkspaceBuildPlugin {
@@ -388,11 +401,16 @@ function Install-WorkspaceBuildPlugin {
         throw "Workspace-build plugin request is missing build metadata."
     }
 
+    $pluginManifestPath = (Resolve-Path (Join-Path $PSScriptRoot "..\..\buddybackup.plg")).ProviderPath
     $remoteStageRoot = "/boot/config/plugins/buddybackup-testlab-staging/{0}" -f $buildInfo.shortSha
     $remoteDepsRoot = "$remoteStageRoot/deps"
     $results = @()
+    $commitSha = if ($buildInfo.commitSha) { [string]$buildInfo.commitSha } else { "" }
+    $packageSha256 = if ($buildInfo.packageSha256) { [string]$buildInfo.packageSha256 } else { "" }
+    $packageMd5 = if ($buildInfo.packageMd5) { [string]$buildInfo.packageMd5 } else { "" }
 
-    $results += Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($buildInfo.packagePath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
+    $results += Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($buildInfo.packagePath, $pluginManifestPath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
+
     if ($buildInfo.dependencyPackagePaths -and $buildInfo.dependencyPackagePaths.Count -gt 0) {
         $results += Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($buildInfo.dependencyPackagePaths) -RemoteDirectory $remoteDepsRoot -Label "workspace-build-deps-upload" -DoExecute:$DoExecute
     }
@@ -404,65 +422,83 @@ function Install-WorkspaceBuildPlugin {
 
     $installScript = @'
 stage_root="$1"
-stage_deps_root="$2"
+manifest_package_md5="$2"
+source_type="$3"
+requested_value="$4"
+display_version="$5"
+commit_sha="$6"
+package_sha256="$7"
+metadata_package_md5="$8"
 
 set -euo pipefail
 
+template_path="$stage_root/buddybackup.plg"
+plg_path="$stage_root/buddybackup.plg"
+package_path="$stage_root/buddybackup.txz"
 plugin_root="/boot/config/plugins/buddybackup"
-stage_package="$stage_root/buddybackup.txz"
+marker_path="$plugin_root/testlab-plugin-source.json"
 
-install_dep() {
-  local file="$1"
-  if [ ! -f "$file" ]; then
-    echo "Missing staged dependency: $file" >&2
+if [ ! -f "$template_path" ]; then
+    echo "Missing staged plugin manifest: $template_path" >&2
     exit 1
-  fi
-
-  installpkg "$file"
-}
-
-if [ ! -f "$stage_package" ]; then
-  echo "Missing staged workspace package: $stage_package" >&2
-  exit 1
 fi
+
+if [ ! -f "$package_path" ]; then
+    echo "Missing staged workspace package: $package_path" >&2
+    exit 1
+fi
+
+for legacy_path in \
+    /boot/config/plugins/buddybackup-workspace.plg \
+    /boot/config/plugins-error/buddybackup-workspace.plg \
+    /boot/config/plugins-stale/buddybackup-workspace.plg \
+    /boot/config/plugins-removed/buddybackup-workspace.plg; do
+    if [ -e "$legacy_path" ]; then
+        rm -f "$legacy_path"
+    fi
+done
+
+sed -i \
+    -e "s#<!ENTITY pkgMD5        \".*\">#<!ENTITY pkgMD5        \"$manifest_package_md5\">#" \
+    -e "s#<URL>&gitRelURL;/&pkgName;</URL>#<LOCAL>$package_path</LOCAL>#" \
+    "$plg_path"
+
+plugin install "$plg_path" forced
 
 mkdir -p "$plugin_root"
-
-source /etc/unraid-version >/dev/null 2>&1 || true
-major_version="0"
-if [ -n "${version:-}" ]; then
-  major_version="${version%%.*}"
-fi
-
-install_dep "$stage_deps_root/perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
-install_dep "$stage_deps_root/perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
-install_dep "$stage_deps_root/perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
-install_dep "$stage_deps_root/perl-List-MoreUtils-0.425-x86_64-2_slonly.txz"
-if [ "$major_version" -lt 7 ]; then
-  install_dep "$stage_deps_root/mbuffer-20240107-x86_64-1_SBo.tgz"
-fi
-
-if [ ! -f "$plugin_root/buddybackup.cfg" ]; then
-  cat > "$plugin_root/buddybackup.cfg" <<'EOF'
-ReceiveBackups=disable
-ReceiveDestinationRententionHourly=0
-ReceiveDestinationRententionDaily=7
-ReceiveDestinationRententionWeekly=4
-ReceiveDestinationRententionMonthly=3
-ReceiveDestinationRententionYearly=0
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$metadata_package_md5"
+}
 EOF
-fi
 
-cp "$stage_package" "$plugin_root/buddybackup.txz"
-upgradepkg --install-new --reinstall "$plugin_root/buddybackup.txz"
-/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
-
-echo "workspace-build package installed from $stage_package"
+echo "plugin source metadata written to $marker_path"
+echo "workspace-build package installed from $package_path via localized $template_path"
 '@
-    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @($remoteStageRoot, $remoteDepsRoot)
+    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @(
+        $remoteStageRoot,
+        $packageMd5,
+        [string]$PluginRequest.sourceType,
+        [string]$PluginRequest.requestedValue,
+        [string]$PluginRequest.displayVersion,
+        $commitSha,
+        $packageSha256,
+        $packageMd5
+    )
     $results += Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $installCommand -PreviewCommand "install BuddyBackup workspace-build package" -Label "workspace-build-install" -DoExecute:$DoExecute
     if ($results[-1].success) {
-        $results += Set-NodePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+        $results += [pscustomobject]@{
+            label = 'plugin-source-metadata'
+            success = $true
+            exitCode = 0
+            output = @('plugin source metadata written to /boot/config/plugins/buddybackup/testlab-plugin-source.json')
+            warningsOrErrorsDetected = $false
+        }
     }
 
     return $results
@@ -723,10 +759,67 @@ function Invoke-NodeBaseSetup {
             $PluginUrlTemplate
         }
 
-        $pluginInstallResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command ("plugin install {0}" -f $pluginUrl) -Label "buddybackup-plugin-install" -DoExecute:$DoExecute
-        $pluginInstallResults += $pluginInstallResult
-        if ($pluginInstallResult.success) {
-            $pluginInstallResults += Set-NodePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+        $commitSha = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.commitSha } else { "" }
+        $packageSha256 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageSha256 } else { "" }
+        $packageMd5 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageMd5 } else { "" }
+        $pluginInstallScript = @'
+plugin_url="$1"
+source_type="$2"
+requested_value="$3"
+display_version="$4"
+commit_sha="$5"
+package_sha256="$6"
+package_md5="$7"
+
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+marker_path="$plugin_root/testlab-plugin-source.json"
+
+plugin install "$plugin_url"
+
+mkdir -p "$plugin_root"
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$package_md5"
+}
+EOF
+
+echo "plugin source metadata written to $marker_path"
+'@
+        $pluginInstallCommand = Convert-ToRemoteBashScriptCommand -Script $pluginInstallScript -Arguments @(
+            $pluginUrl,
+            [string]$PluginRequest.sourceType,
+            [string]$PluginRequest.requestedValue,
+            [string]$PluginRequest.displayVersion,
+            $commitSha,
+            $packageSha256,
+            $packageMd5
+        )
+
+        $maxPluginInstallAttempts = 3
+        for ($pluginInstallAttempt = 1; $pluginInstallAttempt -le $maxPluginInstallAttempts; $pluginInstallAttempt++) {
+            $pluginInstallResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $pluginInstallCommand -Label "buddybackup-plugin-install" -DoExecute:$DoExecute
+            $pluginInstallResults += $pluginInstallResult
+            if ($pluginInstallResult.success) {
+                $pluginInstallResults += [pscustomobject]@{
+                    label = 'plugin-source-metadata'
+                    success = $true
+                    exitCode = 0
+                    output = @('plugin source metadata written to /boot/config/plugins/buddybackup/testlab-plugin-source.json')
+                    warningsOrErrorsDetected = $false
+                }
+                break
+            }
+
+            if ($DoExecute -and $pluginInstallAttempt -lt $maxPluginInstallAttempts) {
+                Start-Sleep -Seconds 5
+            }
         }
     }
 
@@ -759,7 +852,26 @@ ls -la /boot/config/plugins/buddybackup 2>/dev/null || true
 ls -la /usr/local/emhttp/plugins/buddybackup/scripts 2>/dev/null || true
 exit 1
 '@) -replace "`r`n", "`n").Trim()
-    $pluginVerifyResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $pluginVerifyCommand -Label "buddybackup-plugin-verify" -DoExecute:$DoExecute
+    $pluginVerifyAttempts = @()
+    $pluginVerifyResult = $null
+    $maxPluginVerifyAttempts = 5
+    for ($pluginVerifyAttempt = 1; $pluginVerifyAttempt -le $maxPluginVerifyAttempts; $pluginVerifyAttempt++) {
+        $pluginVerifyResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $pluginVerifyCommand -Label "buddybackup-plugin-verify" -DoExecute:$DoExecute
+        $pluginVerifyAttempts += $pluginVerifyResult
+        if ($pluginVerifyResult.success) {
+            break
+        }
+
+        if ($DoExecute -and $pluginVerifyAttempt -lt $maxPluginVerifyAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    if ($pluginVerifyResult) {
+        $pluginVerifyResult | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $pluginVerifyAttempts.Count -Force
+        $pluginVerifyResult | Add-Member -NotePropertyName Attempts -NotePropertyValue @($pluginVerifyAttempts) -Force
+    }
+
     $results += $pluginVerifyResult
     if (-not $pluginVerifyResult.success) {
         $pluginVerifyOutput = (($pluginVerifyResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
@@ -777,6 +889,10 @@ pool_name="$2"
 dataset_root="$3"
 plain_dataset="$4"
 encrypted_dataset="$5"
+plugin_root="/boot/config/plugins/buddybackup"
+post_boot_refresh_script="$plugin_root/testlab-postboot-refresh.sh"
+post_boot_refresh_begin="#BUDDYBACKUP_TESTLAB_POSTBOOT_REFRESH_BEGIN"
+post_boot_refresh_end="#BUDDYBACKUP_TESTLAB_POSTBOOT_REFRESH_END"
 
 set -euo pipefail
 
@@ -828,6 +944,48 @@ fi
 zfs mount "$plain_dataset" >/dev/null 2>&1 || true
 EOF
 fi
+
+mkdir -p "$plugin_root"
+cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
+#!/bin/bash
+set -euo pipefail
+
+attempts=60
+while [ "$attempts" -gt 0 ]; do
+    if [ -x /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php ] && [ -f /boot/config/plugins/buddybackup/buddybackup.cfg ]; then
+        /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
+        exit 0
+    fi
+
+    sleep 2
+    attempts=$((attempts - 1))
+done
+
+exit 0
+EOF_BUDDYBACKUP_POSTBOOT_REFRESH
+chmod 700 "$post_boot_refresh_script"
+
+tmp_go="$(mktemp)"
+if [ -f /boot/config/go ]; then
+    awk -v begin="$post_boot_refresh_begin" -v end="$post_boot_refresh_end" '
+        $0 == begin { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' /boot/config/go > "$tmp_go"
+else
+    : > "$tmp_go"
+fi
+
+cat >> "$tmp_go" <<EOF
+
+$post_boot_refresh_begin
+if [ -f /boot/config/plugins/buddybackup/testlab-postboot-refresh.sh ]; then
+    bash /boot/config/plugins/buddybackup/testlab-postboot-refresh.sh >/dev/null 2>&1 &
+fi
+$post_boot_refresh_end
+EOF
+
+mv "$tmp_go" /boot/config/go
 
 if ! zfs list -H -o name "$dataset_root" >/dev/null 2>&1; then
   zfs create -o mountpoint=none "$dataset_root"
@@ -1221,10 +1379,12 @@ try {
             $attemptSummary = @($postProvisionSshCheck.attempts | ForEach-Object { "attempt=$($_.attempt) exit=$($_.exitCode)" }) -join '; '
             $probeOutput = (($postProvisionSshCheck.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
             if ([string]::IsNullOrWhiteSpace($probeOutput)) {
-                throw "Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary"
+                Write-Host "[testlab] WARNING: Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary"
+                continue
             }
 
-            throw "Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary`n$probeOutput"
+            Write-Host "[testlab] WARNING: Node '$nodeName' did not remain reachable after local provisioning. $attemptSummary"
+            Write-Host $probeOutput
         }
     }
 

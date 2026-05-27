@@ -361,7 +361,7 @@ function Add-ReportAction {
         $Result
     )
 
-    $Report.actions += [pscustomobject]@{
+    $action = [ordered]@{
         node = $Result.node
         label = $Result.label
         success = [bool]$Result.success
@@ -369,6 +369,21 @@ function Add-ReportAction {
         command = [string]$Result.command
         output = @($Result.output)
     }
+
+    $attemptsProperty = $Result.PSObject.Properties['Attempts']
+    if ($attemptsProperty) {
+        $action.attemptCount = [int]$Result.AttemptCount
+        $action.attempts = @($Result.Attempts | ForEach-Object {
+            [pscustomobject]@{
+                success = [bool]$_.success
+                exitCode = [int]$_.exitCode
+                command = [string]$_.command
+                output = @($_.output)
+            }
+        })
+    }
+
+    $Report.actions += [pscustomobject]$action
 }
 
 function Assert-CommandSucceeded {
@@ -385,6 +400,61 @@ function Assert-CommandSucceeded {
 
         throw "$FailureMessage`n$details"
     }
+}
+
+function Test-IsTransientSshFailure {
+    param($Result)
+
+    if ($null -eq $Result) {
+        return $false
+    }
+
+    if ([int]$Result.exitCode -ne 255) {
+        return $false
+    }
+
+    $outputText = (@($Result.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($outputText)) {
+        return $true
+    }
+
+    return $outputText -match '(?i)connection closed by remote host|connection refused|operation timed out|connection timed out|broken pipe'
+}
+
+function Invoke-BuddyBackupShellCommandWithRetry {
+    param(
+        $NodeConnection,
+        [string]$Action,
+        [string[]]$Arguments,
+        [string]$Label,
+        [int]$MaxAttempts = 2,
+        [switch]$RetryTransientSshFailure,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-BuddyBackupShellCommand -NodeConnection $NodeConnection -Action $Action -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.success) {
+            break
+        }
+
+        if (-not $DoExecute -or -not $RetryTransientSshFailure -or -not (Test-IsTransientSshFailure -Result $result) -or $attempt -ge $MaxAttempts) {
+            break
+        }
+
+        Start-Sleep -Seconds 5
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
 }
 
 function Get-NodeBuddyBackupPublicKey {
@@ -820,7 +890,7 @@ try {
         } else {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationDataset, $pair.Uid)
         }
-        $sendResult = Invoke-BuddyBackupShellCommand -NodeConnection $pair.Connection -Action $pair.Action -Arguments $sendArgs -Label $pair.Label -DoExecute:$Execute
+        $sendResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $pair.Connection -Action $pair.Action -Arguments $sendArgs -Label $pair.Label -RetryTransientSshFailure:($pair.Type -eq "remote") -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $sendResult
         Assert-CommandSucceeded -Result $sendResult -FailureMessage "BuddyBackup $($pair.Action) failed for uid '$($pair.Uid)' on node '$($pair.Connection.NodeName)'."
         if ($Execute) {

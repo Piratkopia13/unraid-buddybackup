@@ -703,6 +703,57 @@ function Invoke-RemoteUpload {
     }
 }
 
+function New-RetrySummaryResult {
+    param(
+        $Result,
+        [object[]]$Attempts
+    )
+
+    if ($null -eq $Result) {
+        return $null
+    }
+
+    $attemptList = @($Attempts | Where-Object { $null -ne $_ })
+    if ($attemptList.Count -le 1) {
+        return $Result
+    }
+
+    $Result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attemptList.Count -Force
+    $Result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attemptList) -Force
+    return $Result
+}
+
+function Invoke-RemoteUploadWithRetry {
+    param(
+        [string]$User,
+        [string]$TargetHost,
+        [int]$Port,
+        [string]$IdentityFile,
+        [string[]]$LocalPaths,
+        [string]$RemoteDirectory,
+        [string]$Label,
+        [int]$MaxAttempts = 3,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-RemoteUpload -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -LocalPaths $LocalPaths -RemoteDirectory $RemoteDirectory -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.Success) {
+            break
+        }
+
+        if ($DoExecute -and $attempt -lt $MaxAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    return New-RetrySummaryResult -Result $result -Attempts $attempts
+}
+
 function Set-RemotePluginSourceMetadata {
     param(
         $NodeConnection,
@@ -749,7 +800,20 @@ echo "plugin source metadata written to $marker_path"
         $packageMd5
     )
 
-    return Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $command -LoggedCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+    $maxMetadataAttempts = 3
+    $result = $null
+    for ($metadataAttempt = 1; $metadataAttempt -le $maxMetadataAttempts; $metadataAttempt++) {
+        $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $command -LoggedCommand "write BuddyBackup plugin source metadata" -Label "plugin-source-metadata" -DoExecute:$DoExecute
+        if ($result.Success) {
+            break
+        }
+
+        if ($DoExecute -and $metadataAttempt -lt $maxMetadataAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    return $result
 }
 
 function Install-WorkspaceBuildPlugin {
@@ -764,14 +828,18 @@ function Install-WorkspaceBuildPlugin {
         throw "Workspace-build plugin request is missing build metadata."
     }
 
+    $pluginManifestPath = (Resolve-Path (Join-Path $PSScriptRoot "..\..\buddybackup.plg")).ProviderPath
     $remoteStageRoot = "/boot/config/plugins/buddybackup-testlab-staging/{0}" -f $buildInfo.shortSha
     $remoteDepsRoot = "$remoteStageRoot/deps"
     $results = @()
+    $commitSha = if ($buildInfo.commitSha) { [string]$buildInfo.commitSha } else { "" }
+    $packageSha256 = if ($buildInfo.packageSha256) { [string]$buildInfo.packageSha256 } else { "" }
+    $packageMd5 = if ($buildInfo.packageMd5) { [string]$buildInfo.packageMd5 } else { "" }
 
-    $results += Invoke-RemoteUpload -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.packagePath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
+    $results += Invoke-RemoteUploadWithRetry -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.packagePath, $pluginManifestPath) -RemoteDirectory $remoteStageRoot -Label "workspace-build-package-upload" -DoExecute:$DoExecute
 
     if ($buildInfo.dependencyPackagePaths -and $buildInfo.dependencyPackagePaths.Count -gt 0) {
-        $results += Invoke-RemoteUpload -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.dependencyPackagePaths) -RemoteDirectory $remoteDepsRoot -Label "workspace-build-deps-upload" -DoExecute:$DoExecute
+        $results += Invoke-RemoteUploadWithRetry -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -LocalPaths @($buildInfo.dependencyPackagePaths) -RemoteDirectory $remoteDepsRoot -Label "workspace-build-deps-upload" -DoExecute:$DoExecute
     }
 
     $failedUpload = @($results | Where-Object { -not $_.Success })
@@ -781,65 +849,83 @@ function Install-WorkspaceBuildPlugin {
 
     $installScript = @'
 stage_root="$1"
-stage_deps_root="$2"
+manifest_package_md5="$2"
+source_type="$3"
+requested_value="$4"
+display_version="$5"
+commit_sha="$6"
+package_sha256="$7"
+metadata_package_md5="$8"
 
 set -euo pipefail
 
+template_path="$stage_root/buddybackup.plg"
+plg_path="$stage_root/buddybackup.plg"
+package_path="$stage_root/buddybackup.txz"
 plugin_root="/boot/config/plugins/buddybackup"
-stage_package="$stage_root/buddybackup.txz"
+marker_path="$plugin_root/testlab-plugin-source.json"
 
-install_dep() {
-  local file="$1"
-  if [ ! -f "$file" ]; then
-    echo "Missing staged dependency: $file" >&2
+if [ ! -f "$template_path" ]; then
+    echo "Missing staged plugin manifest: $template_path" >&2
     exit 1
-  fi
-
-  installpkg "$file"
-}
-
-if [ ! -f "$stage_package" ]; then
-  echo "Missing staged workspace package: $stage_package" >&2
-  exit 1
 fi
+
+if [ ! -f "$package_path" ]; then
+    echo "Missing staged workspace package: $package_path" >&2
+    exit 1
+fi
+
+for legacy_path in \
+    /boot/config/plugins/buddybackup-workspace.plg \
+    /boot/config/plugins-error/buddybackup-workspace.plg \
+    /boot/config/plugins-stale/buddybackup-workspace.plg \
+    /boot/config/plugins-removed/buddybackup-workspace.plg; do
+    if [ -e "$legacy_path" ]; then
+        rm -f "$legacy_path"
+    fi
+done
+
+sed -i \
+    -e "s#<!ENTITY pkgMD5        \".*\">#<!ENTITY pkgMD5        \"$manifest_package_md5\">#" \
+    -e "s#<URL>&gitRelURL;/&pkgName;</URL>#<LOCAL>$package_path</LOCAL>#" \
+    "$plg_path"
+
+plugin install "$plg_path" forced
 
 mkdir -p "$plugin_root"
-
-source /etc/unraid-version >/dev/null 2>&1 || true
-major_version="0"
-if [ -n "${version:-}" ]; then
-  major_version="${version%%.*}"
-fi
-
-install_dep "$stage_deps_root/perl-Capture-Tiny-0.48-x86_64-1ponce.txz"
-install_dep "$stage_deps_root/perl-Exporter-Tiny-1.000000-x86_64-1ponce.txz"
-install_dep "$stage_deps_root/perl-Config-IniFiles-2.82-x86_64-3_slonly.txz"
-install_dep "$stage_deps_root/perl-List-MoreUtils-0.425-x86_64-2_slonly.txz"
-if [ "$major_version" -lt 7 ]; then
-  install_dep "$stage_deps_root/mbuffer-20240107-x86_64-1_SBo.tgz"
-fi
-
-if [ ! -f "$plugin_root/buddybackup.cfg" ]; then
-  cat > "$plugin_root/buddybackup.cfg" <<'EOF'
-ReceiveBackups=disable
-ReceiveDestinationRententionHourly=0
-ReceiveDestinationRententionDaily=7
-ReceiveDestinationRententionWeekly=4
-ReceiveDestinationRententionMonthly=3
-ReceiveDestinationRententionYearly=0
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$metadata_package_md5"
+}
 EOF
-fi
 
-cp "$stage_package" "$plugin_root/buddybackup.txz"
-upgradepkg --install-new --reinstall "$plugin_root/buddybackup.txz"
-/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
-
-echo "workspace-build package installed from $stage_package"
+echo "plugin source metadata written to $marker_path"
+echo "workspace-build package installed from $package_path via localized $template_path"
 '@
-    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @($remoteStageRoot, $remoteDepsRoot)
+    $installCommand = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @(
+        $remoteStageRoot,
+        $packageMd5,
+        [string]$PluginRequest.sourceType,
+        [string]$PluginRequest.requestedValue,
+        [string]$PluginRequest.displayVersion,
+        $commitSha,
+        $packageSha256,
+        $packageMd5
+    )
     $results += Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $installCommand -LoggedCommand "install BuddyBackup workspace-build package" -Label "workspace-build-install" -DoExecute:$DoExecute
     if ($results[-1].Success) {
-        $results += Set-RemotePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+        $results += [pscustomobject]@{
+            Label = 'plugin-source-metadata'
+            Command = 'write BuddyBackup plugin source metadata'
+            ExitCode = 0
+            Output = 'plugin source metadata written to /boot/config/plugins/buddybackup/testlab-plugin-source.json'
+            Success = $true
+        }
     }
 
     return $results
@@ -1306,19 +1392,31 @@ function Run-BaseSetupVerification {
     $zfsValues = Get-SetupZfsValues -Lab $Lab
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
 
+    $baseSetupVerificationTimeout = 30
     foreach ($nodeName in @("nodeA", "nodeB")) {
         $connection = Get-NodeConnection -Lab $Lab -NodeName $nodeName
 
-        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command $pluginVerifyCommand -Label "${nodeName}-buddybackup-plugin-check" -DoExecute:$DoExecute
-        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zpool list -H -o name {0}" -f $zfsValues.PoolName) -Label "${nodeName}-zpool-check" -DoExecute:$DoExecute
-        $results += Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zfs list -H -o name {0}" -f $zfsValues.UnencryptedDataset) -Label "${nodeName}-plain-dataset-check" -DoExecute:$DoExecute
-        $encResult = Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset) -Label "${nodeName}-encrypted-dataset-check" -DoExecute:$DoExecute
-        $results += $encResult
+        $checks = @(
+            @{ Label = "${nodeName}-buddybackup-plugin-check"; Command = $pluginVerifyCommand; RequireEncrypted = $false },
+            @{ Label = "${nodeName}-zpool-check"; Command = ("zpool list -H -o name {0}" -f $zfsValues.PoolName); RequireEncrypted = $false },
+            @{ Label = "${nodeName}-plain-dataset-check"; Command = ("zfs list -H -o name {0}" -f $zfsValues.UnencryptedDataset); RequireEncrypted = $false },
+            @{ Label = "${nodeName}-encrypted-dataset-check"; Command = ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset); RequireEncrypted = $true }
+        )
 
-        if ($DoExecute -and $encResult.Success -and $encResult.Output -match '(?i)^off\s*$') {
-            $encResult.Success = $false
-            $encResult.ExitCode = 1
-            $encResult.Output = "encryption=off"
+        foreach ($check in $checks) {
+            $checkResult = if ($DoExecute) {
+                (Wait-ForRemoteSuccess -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command $check.Command -Label $check.Label -TimeoutSeconds $baseSetupVerificationTimeout).Result
+            } else {
+                Invoke-RemoteCommand -User $connection.User -TargetHost $connection.Host -Port $connection.Port -IdentityFile $connection.IdentityFile -Command $check.Command -Label $check.Label -DoExecute:$DoExecute
+            }
+
+            if ($DoExecute -and $check.RequireEncrypted -and $checkResult.Success -and $checkResult.Output -match '(?i)^off\s*$') {
+                $checkResult.Success = $false
+                $checkResult.ExitCode = 1
+                $checkResult.Output = "encryption=off"
+            }
+
+            $results += $checkResult
         }
     }
 
@@ -1552,6 +1650,17 @@ hash_or_empty() {
     fi
 }
 
+known_hosts_key_material_hash_or_empty() {
+    local path="$1"
+    if [ -f "$path" ]; then
+        awk '
+            /^[[:space:]]*$/ { next }
+            /^[[:space:]]*#/ { next }
+            NF >= 3 { print $2 " " $3 }
+        ' "$path" | LC_ALL=C sort | sha256sum | awk '{print $1}'
+    fi
+}
+
 line_or_empty() {
     local key="$1"
     local path="$2"
@@ -1575,6 +1684,7 @@ echo "backups_cfg_sha256=$(hash_or_empty "$backups_cfg")"
 echo "snapshots_cfg_sha256=$(hash_or_empty "$snapshots_cfg")"
 echo "sender_key_sha256=$(hash_or_empty "$sender_key")"
 echo "known_hosts_sha256=$(hash_or_empty "$managed_known_hosts")"
+echo "known_hosts_key_material_sha256=$(known_hosts_key_material_hash_or_empty "$managed_known_hosts")"
 echo "authorized_keys_sha256=$(hash_or_empty "$authorized_keys")"
 echo "sanoid_conf_sha256=$(hash_or_empty "$sanoid_conf")"
 
@@ -1601,8 +1711,12 @@ done
 emit_sections "$backups_cfg" "backup_section"
 emit_sections "$snapshots_cfg" "snapshot_section"
 
-for cron in "$plugin_root"/backup-*.cron; do
-    [ -f "$cron" ] && basename "$cron"
+shopt -s nullglob
+backup_crons=("$plugin_root"/backup-*.cron)
+shopt -u nullglob
+
+for cron in "${backup_crons[@]}"; do
+    basename "$cron"
 done | sort | while IFS= read -r value; do
     [ -n "$value" ] && echo "backup_cron=$value"
 done
@@ -1655,6 +1769,7 @@ function ConvertFrom-UpgradeStateOutput {
                 snapshotsCfgSha256 = ""
                 senderKeySha256 = ""
                 knownHostsSha256 = ""
+                knownHostsKeyMaterialSha256 = ""
                 knownHostsLineCount = 0
                 authorizedKeysSha256 = ""
                 sanoidConfSha256 = ""
@@ -1680,6 +1795,7 @@ function ConvertFrom-UpgradeStateOutput {
                         "snapshots_cfg_sha256" { $snapshot.snapshotsCfgSha256 = $value }
                         "sender_key_sha256" { $snapshot.senderKeySha256 = $value }
                         "known_hosts_sha256" { $snapshot.knownHostsSha256 = $value }
+                        "known_hosts_key_material_sha256" { $snapshot.knownHostsKeyMaterialSha256 = $value }
                         "known_hosts_line_count" { $snapshot.knownHostsLineCount = if ([string]::IsNullOrWhiteSpace($value)) { 0 } else { [int]$value } }
                         "authorized_keys_sha256" { $snapshot.authorizedKeysSha256 = $value }
                         "sanoid_conf_sha256" { $snapshot.sanoidConfSha256 = $value }
@@ -1711,7 +1827,25 @@ function Get-UpgradeStateSnapshot {
 
         $script = Get-UpgradeStateSummaryScript
         $command = Convert-ToRemoteBashScriptCommand -Script $script -Arguments @()
+    $maxSnapshotAttempts = 3
+    $attempts = @()
+    $result = $null
+
+    for ($snapshotAttempt = 1; $snapshotAttempt -le $maxSnapshotAttempts; $snapshotAttempt++) {
         $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $command -LoggedCommand "capture BuddyBackup upgrade state summary" -Label "${NodeName}-upgrade-state-snapshot" -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.Success) {
+            break
+        }
+
+        if ($DoExecute -and $snapshotAttempt -lt $maxSnapshotAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    if ($result) {
+        $result = New-RetrySummaryResult -Result $result -Attempts $attempts
+    }
 
         return [pscustomobject]@{
                 Result = $result
@@ -1799,7 +1933,7 @@ function Compare-UpgradeStateSnapshots {
                 'backupsCfgSha256',
                 'snapshotsCfgSha256',
                 'senderKeySha256',
-                'knownHostsSha256',
+                'knownHostsKeyMaterialSha256',
                 'knownHostsLineCount',
                 'authorizedKeysSha256',
                 'sanoidConfSha256',
@@ -1857,17 +1991,83 @@ function Install-Plugin {
     }
 
     $url = $urlTemplate.Replace("{version}", [string]$PluginRequest.requestedValue)
-    $cmd = "plugin install $url forced"
-    $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $cmd -Label "plugin-install" -DoExecute:$DoExecute
+    $commitSha = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.commitSha } else { "" }
+    $packageSha256 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageSha256 } else { "" }
+    $packageMd5 = if ($PluginRequest.buildInfo) { [string]$PluginRequest.buildInfo.packageMd5 } else { "" }
+    $installScript = @'
+plugin_url="$1"
+source_type="$2"
+requested_value="$3"
+display_version="$4"
+commit_sha="$5"
+package_sha256="$6"
+package_md5="$7"
 
-    if ($DoExecute -and -not $result.Success -and $result.Output -match '(?i)not reinstalling same version') {
-        $result.ExitCode = 0
-        $result.Success = $true
+set -euo pipefail
+
+plugin_root="/boot/config/plugins/buddybackup"
+marker_path="$plugin_root/testlab-plugin-source.json"
+
+plugin install "$plugin_url" forced
+
+mkdir -p "$plugin_root"
+cat > "$marker_path" <<EOF
+{
+  "sourceType": "$source_type",
+  "requestedValue": "$requested_value",
+  "displayVersion": "$display_version",
+  "commitSha": "$commit_sha",
+  "packageSha256": "$package_sha256",
+  "packageMd5": "$package_md5"
+}
+EOF
+
+echo "plugin source metadata written to $marker_path"
+'@
+    $cmd = Convert-ToRemoteBashScriptCommand -Script $installScript -Arguments @(
+        $url,
+        [string]$PluginRequest.sourceType,
+        [string]$PluginRequest.requestedValue,
+        [string]$PluginRequest.displayVersion,
+        $commitSha,
+        $packageSha256,
+        $packageMd5
+    )
+    $maxPluginInstallAttempts = 3
+    $attempts = @()
+    $result = $null
+
+    for ($pluginInstallAttempt = 1; $pluginInstallAttempt -le $maxPluginInstallAttempts; $pluginInstallAttempt++) {
+        $result = Invoke-RemoteCommand -User $NodeConnection.User -TargetHost $NodeConnection.Host -Port $NodeConnection.Port -IdentityFile $NodeConnection.IdentityFile -Command $cmd -Label "plugin-install" -DoExecute:$DoExecute
+
+        if ($DoExecute -and -not $result.Success -and $result.Output -match '(?i)not reinstalling same version') {
+            $result.ExitCode = 0
+            $result.Success = $true
+        }
+
+        $attempts += $result
+        if ($result.Success) {
+            break
+        }
+
+        if ($DoExecute -and $pluginInstallAttempt -lt $maxPluginInstallAttempts) {
+            Start-Sleep -Seconds 5
+        }
     }
 
-    $results = @($result)
-    if ($result.Success) {
-        $results += Set-RemotePluginSourceMetadata -NodeConnection $NodeConnection -PluginRequest $PluginRequest -DoExecute:$DoExecute
+    $results = @()
+    if ($result) {
+        $results += (New-RetrySummaryResult -Result $result -Attempts $attempts)
+    }
+
+    if ($result -and $result.Success) {
+        $results += [pscustomobject]@{
+            Label = 'plugin-source-metadata'
+            Command = 'write BuddyBackup plugin source metadata'
+            ExitCode = 0
+            Output = 'plugin source metadata written to /boot/config/plugins/buddybackup/testlab-plugin-source.json'
+            Success = $true
+        }
     }
 
     return $results
@@ -2111,6 +2311,9 @@ function Run-Scenario {
             }
         }
         "post-reboot" {
+            $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.nodeAPluginRequest -DoExecute:$DoExecute
+            $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.nodeBPluginRequest -DoExecute:$DoExecute
+
             $timeout = 300
             if ($Lab.timeouts -and $Lab.timeouts.sshReadySeconds) {
                 $timeout = [int]$Lab.timeouts.sshReadySeconds

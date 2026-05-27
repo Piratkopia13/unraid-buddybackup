@@ -383,7 +383,7 @@ function update_backups_from_config() {
     passthru($rc.' clear_known_hosts');
     ensure_managed_known_hosts_file();
     $known_hosts_path = $managed_known_hosts_path;
-    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup start\n", FILE_APPEND)!==false);
+    $known_hosts_content = "# buddybackup start\n";
 
     $destination_hosts = [];
     foreach ($backup_cfg as $uid => $cfg) {
@@ -414,14 +414,18 @@ function update_backups_from_config() {
         add_backup_cron_file($uid, $cfg);
     }
 
-    foreach (array_keys($destination_hosts) as $destination_host) {
-        $command = 'ssh-keyscan -H '.escapeshellarg($destination_host).' 2>/dev/null';
+    $destination_host_names = array_keys($destination_hosts);
+    sort($destination_host_names, SORT_STRING);
+
+    foreach ($destination_host_names as $destination_host) {
+        $command = 'ssh-keyscan '.escapeshellarg($destination_host).' 2>/dev/null';
         if ($key = shell_exec($command)) {
-            ENSURE_SUCCESS(file_put_contents($known_hosts_path, $key, FILE_APPEND)!==false);
+            $known_hosts_content .= rtrim($key, "\r\n") . "\n";
         }
     }
 
-    ENSURE_SUCCESS(file_put_contents($known_hosts_path, "# buddybackup end\n", FILE_APPEND)!==false);
+    $known_hosts_content .= "# buddybackup end\n";
+    ENSURE_SUCCESS(file_put_contents($known_hosts_path, $known_hosts_content, LOCK_EX)!==false);
     @chmod($known_hosts_path, 0600);
 
     passthru("/usr/local/sbin/update_cron");
