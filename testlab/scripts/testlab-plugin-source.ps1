@@ -1,5 +1,7 @@
 $script:TestLabWorkspaceBuildInfoCache = @{}
 
+. (Join-Path $PSScriptRoot "wsl-common.ps1")
+
 function Ensure-TestLabDir {
     param([string]$Path)
 
@@ -100,6 +102,87 @@ function Get-TestLabDependencyPackagePaths {
     )
 }
 
+function Get-TestLabWorkspaceBuildStagingRoot {
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -and (Test-Path -LiteralPath $env:LOCALAPPDATA)) {
+        return (Join-Path $env:LOCALAPPDATA "BuddyBackup\workspace-build-staging")
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path -LiteralPath $env:TEMP)) {
+        return (Join-Path $env:TEMP "BuddyBackup\workspace-build-staging")
+    }
+
+    throw "Could not determine a local staging root for workspace-build packaging."
+}
+
+function New-TestLabWorkspacePackage {
+    param(
+        [string]$SrcRoot,
+        [string]$PackagePath
+    )
+
+    $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
+    if ($null -eq $tarCommand) {
+        throw "The 'tar' command is required to build a workspace BuddyBackup package on this host."
+    }
+
+    if (Test-Path -LiteralPath $PackagePath) {
+        Remove-Item -LiteralPath $PackagePath -Force
+    }
+
+    if ($env:OS -ne 'Windows_NT') {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $rawOutput = & $tarCommand.Source "-C" $SrcRoot "-cJf" $PackagePath "." 2>&1
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $PackagePath)) {
+            $details = (@($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+            throw "Failed to build workspace BuddyBackup package at $PackagePath.`n$details"
+        }
+
+        return
+    }
+
+    $stagingRoot = Get-TestLabWorkspaceBuildStagingRoot
+    Ensure-TestLabDir -Path $stagingRoot
+
+    $stageRoot = Join-Path $stagingRoot ([guid]::NewGuid().ToString("N"))
+    $stageSrcRoot = Join-Path $stageRoot "src"
+    $stagePackagePath = Join-Path $stageRoot "buddybackup.txz"
+
+    Ensure-TestLabDir -Path $stageRoot
+    try {
+        Copy-Item -LiteralPath $SrcRoot -Destination $stageRoot -Recurse -Force
+
+        $wslStageSrcRoot = Convert-WindowsPathToWslPath -WindowsPath $stageSrcRoot
+        $wslStagePackagePath = Convert-WindowsPathToWslPath -WindowsPath $stagePackagePath -AllowMissing
+        $buildScript = @'
+stage_src_root="$1"
+stage_package_path="$2"
+
+set -euo pipefail
+
+chmod -R 755 "$stage_src_root"
+tar -C "$stage_src_root" -cJf "$stage_package_path" .
+'@
+        $buildResult = Invoke-WslRootBash -Distro "Ubuntu" -ScriptContent $buildScript -Arguments @($wslStageSrcRoot, $wslStagePackagePath)
+        if ($buildResult.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $stagePackagePath)) {
+            $details = (@($buildResult.Output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+            throw "Failed to build workspace BuddyBackup package at $PackagePath.`n$details"
+        }
+
+        Copy-Item -LiteralPath $stagePackagePath -Destination $PackagePath -Force
+    } finally {
+        if (Test-Path -LiteralPath $stageRoot) {
+            Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Get-TestLabWorkspaceBuildInfo {
     param(
         [string]$WorkspaceRoot,
@@ -130,28 +213,7 @@ function Get-TestLabWorkspaceBuildInfo {
         throw "Missing BuddyBackup package source directory: $srcRoot"
     }
 
-    $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
-    if ($null -eq $tarCommand) {
-        throw "The 'tar' command is required to build a workspace BuddyBackup package on this host."
-    }
-
-    if (Test-Path -LiteralPath $packagePath) {
-        Remove-Item -LiteralPath $packagePath -Force
-    }
-
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $rawOutput = & $tarCommand.Source "-C" $srcRoot "-cJf" $packagePath "." 2>&1
-        $exitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
-
-    if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $packagePath)) {
-        $details = (@($rawOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
-        throw "Failed to build workspace BuddyBackup package at $packagePath.`n$details"
-    }
+    New-TestLabWorkspacePackage -SrcRoot $srcRoot -PackagePath $packagePath
 
     $packageMd5 = (Get-FileHash -LiteralPath $packagePath -Algorithm MD5).Hash.ToLowerInvariant()
     $packageSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
