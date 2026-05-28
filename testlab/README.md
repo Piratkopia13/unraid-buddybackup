@@ -230,6 +230,7 @@ This initial implementation provides:
 - If a newer release uses a hashed direct zip URL instead, set `wslQemu.unraidDownloadUrls.<version>` for that exact version.
 - If automatic Unraid zip download still fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
+- `wslQemu.networkDeviceModel` controls the QEMU guest NIC model for the local WSL/QEMU provider. It now defaults to `virtio-net-pci`, and the probe/report records the chosen NIC model and stable MAC address for each guest.
 - Base setup (`setup`) runs after SSH readiness and records testable action outputs in `.testlab/logs/local-provider-*.json`.
 - The local provider forwards each guest WebGUI to localhost and prints the HTTP/HTTPS URLs after real provisioning for manual checks.
 - Manual WebGUI login defaults to `root` with the password from `setup.manualAccess.rootPassword`, but that password is not echoed or written to testlab reports.

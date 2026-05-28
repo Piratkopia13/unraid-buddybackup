@@ -46,6 +46,7 @@
   "wslQemu": {
     "distro": "Ubuntu",
     "cacheRoot": ".testlab/cache",
+    "networkDeviceModel": "virtio-net-pci",
     "imageSizeMB": 1024,
     "dataDiskSizeGB": 3,
     "bootWaitSeconds": 120,

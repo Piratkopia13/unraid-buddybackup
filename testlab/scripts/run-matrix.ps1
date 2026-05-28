@@ -450,6 +450,54 @@ function Get-ManualAccessVerifyLoggedCommand {
     return "verify manual WebGUI password persistence (password redacted)"
 }
 
+function Get-BuddyBackupPostRebootReadyCommand {
+    return ((@'
+set -eu
+
+plugin_root="/boot/config/plugins/buddybackup"
+sshd_config="/etc/ssh/sshd_config"
+if [ -f /boot/config/ssh/sshd_config ]; then
+    sshd_config="/boot/config/ssh/sshd_config"
+fi
+
+if [ ! -f "$plugin_root/buddybackup.cfg" ]; then
+    echo "buddybackup.cfg is missing" >&2
+    exit 1
+fi
+
+if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+    echo "buddybackup user is not ready in /etc/shadow" >&2
+    exit 1
+fi
+
+if ! grep -Eq '^[[:space:]]*AllowUsers[[:space:]].*buddybackup([[:space:]]|$)' "$sshd_config" 2>/dev/null; then
+    echo "sshd AllowUsers is missing buddybackup" >&2
+    exit 1
+fi
+
+if ! grep -Eq '^[[:space:]]*Match[[:space:]]+User[[:space:]]+buddybackup([[:space:]]|$)' "$sshd_config" 2>/dev/null; then
+    echo "sshd Match User buddybackup block is missing" >&2
+    exit 1
+fi
+
+remote_hosts_configured=0
+if [ -f "$plugin_root/backups.cfg" ] && grep -Eq '^destination_host="' "$plugin_root/backups.cfg"; then
+    remote_hosts_configured=1
+fi
+
+if [ "$remote_hosts_configured" -eq 1 ] && ! grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+    echo "managed known_hosts is not ready" >&2
+    exit 1
+fi
+
+echo "buddybackup post-reboot ready"
+'@) -replace "`r`n", "`n").Trim()
+}
+
+function Get-BuddyBackupPostRebootReadyLoggedCommand {
+    return "verify BuddyBackup post-reboot readiness"
+}
+
 function Invoke-FunctionalSmokeScenario {
     param(
         [string]$LabConfigPath,
@@ -2128,6 +2176,8 @@ function Run-Scenario {
     $pluginVerifyCommand = Get-BuddyBackupPluginVerifyCommand
     $manualAccessVerifyCommand = Get-ManualAccessVerifyCommand -Lab $Lab
     $manualAccessVerifyLoggedCommand = Get-ManualAccessVerifyLoggedCommand
+    $buddyBackupPostRebootReadyCommand = Get-BuddyBackupPostRebootReadyCommand
+    $buddyBackupPostRebootReadyLoggedCommand = Get-BuddyBackupPostRebootReadyLoggedCommand
 
     Write-Host "[testlab] Starting scenario '$Scenario' for cell $($Cell.id)"
 
@@ -2375,6 +2425,9 @@ function Run-Scenario {
 
                     $encryptedDatasetCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command ("zfs get -H -o value encryption {0}" -f $zfsValues.EncryptedDataset) -Label "$($node.Name)-encrypted-dataset-check" -TimeoutSeconds $timeout
                     $results += $encryptedDatasetCheck.Result
+
+                    $buddyBackupReadyCheck = Wait-ForRemoteSuccess -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $buddyBackupPostRebootReadyCommand -LoggedCommand $buddyBackupPostRebootReadyLoggedCommand -Label "$($node.Name)-buddybackup-post-reboot-ready" -TimeoutSeconds $timeout
+                    $results += $buddyBackupReadyCheck.Result
 
                     $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
                     $results += $afterSnapshot.Result

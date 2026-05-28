@@ -1135,9 +1135,14 @@ $lab = Get-Json -Path $LabConfig
 $wslCfg = $lab.wslQemu
 $distro = if ($wslCfg -and $wslCfg.distro) { [string]$wslCfg.distro } else { "Ubuntu" }
 $cacheRoot = if ($wslCfg -and $wslCfg.cacheRoot) { [string]$wslCfg.cacheRoot } else { ".testlab/cache" }
+$networkDeviceModel = if ($wslCfg -and $wslCfg.networkDeviceModel) { [string]$wslCfg.networkDeviceModel } else { "virtio-net-pci" }
 $imageSizeMB = if ($wslCfg -and $wslCfg.imageSizeMB) { [int]$wslCfg.imageSizeMB } else { 1024 }
 $dataDiskSizeGB = if ($wslCfg -and $wslCfg.dataDiskSizeGB) { [int]$wslCfg.dataDiskSizeGB } else { 3 }
 $bootWaitSeconds = if ($wslCfg -and $wslCfg.bootWaitSeconds) { [int]$wslCfg.bootWaitSeconds } else { 120 }
+
+if ($networkDeviceModel -notmatch '^[A-Za-z0-9._-]+$') {
+    throw "lab.wslQemu.networkDeviceModel '$networkDeviceModel' contains unsupported characters."
+}
 
 $setupCfg = Get-ObjectValue -Object $lab -Name "setup"
 $applyBaseSetup = $true
@@ -1290,6 +1295,7 @@ try {
             serialLogPath       = "/tmp/buddybackup-qemu-$instanceName/unraid-serial.log"
             wslWorkingRoot      = "/tmp/buddybackup-qemu-$instanceName"
             dataDiskSizeGB      = $dataDiskSizeGB
+            networkDeviceModel  = $networkDeviceModel
             manualAccess        = $null
             baseSetupApplied    = $false
             baseSetup           = $null
@@ -1301,7 +1307,7 @@ try {
             Stop-WslLabInstance -Distro $distro -InstanceName $instanceName -DoExecute
 
             Write-Host "[testlab] Starting WSL/QEMU probe for $nodeName (boot wait ${bootWaitSeconds}s)"
-            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -HostHttpPort $desiredHttpPort -HostHttpsPort $desiredHttpsPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
+            & $probeScript -Distro $distro -PayloadPath $payloadPath -SshPublicKeyPath $publicKeyPath -SshPrivateKeyPath $privateKeyPath -NetworkDeviceModel $networkDeviceModel -ImageSizeMB $imageSizeMB -DataDiskSizeGB $dataDiskSizeGB -BootWaitSeconds $bootWaitSeconds -HostSshPort $desiredPort -HostHttpPort $desiredHttpPort -HostHttpsPort $desiredHttpsPort -OutputPath $outputPath -StatusPath $statusPath -InstanceName $instanceName -LeaveRunning
 
             if (-not (Test-Path -LiteralPath $statusPath)) {
                 throw "Probe status file was not written for node '$nodeName': $statusPath"
@@ -1318,6 +1324,12 @@ try {
             $nodeEntry.serialLogPath = [string]$nodeStatus.serialLogPath
             $nodeEntry.wslWorkingRoot = [string]$nodeStatus.wslWorkingRoot
             $nodeEntry.dataDiskPath = [string]$nodeStatus.dataDiskPath
+            if ($nodeStatus.PSObject.Properties['networkDeviceModel']) {
+                $nodeEntry.networkDeviceModel = [string]$nodeStatus.networkDeviceModel
+            }
+            if ($nodeStatus.PSObject.Properties['networkMacAddress']) {
+                $nodeEntry.networkMacAddress = [string]$nodeStatus.networkMacAddress
+            }
 
             if (-not $nodeStatus.success) {
                 throw "WSL/QEMU probe failed for node '$nodeName': $($nodeStatus.error)"

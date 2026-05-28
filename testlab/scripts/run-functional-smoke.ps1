@@ -319,6 +319,42 @@ function Invoke-NodeBashScript {
     return Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -Label $Label -DoExecute:$DoExecute
 }
 
+function Invoke-NodeBashScriptWithRetry {
+    param(
+        $NodeConnection,
+        [string]$ScriptContent,
+        [string[]]$Arguments,
+        [string]$Label,
+        [int]$MaxAttempts = 4,
+        [int]$RetryDelaySeconds = 10,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.success) {
+            break
+        }
+
+        if (-not $DoExecute -or -not (Test-IsTransientSshFailure -Result $result) -or $attempt -ge $MaxAttempts) {
+            break
+        }
+
+        Start-Sleep -Seconds $RetryDelaySeconds
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
+}
+
 function Invoke-BuddyBackupPhpCommand {
     param(
         $NodeConnection,
@@ -421,6 +457,31 @@ function Test-IsTransientSshFailure {
     return $outputText -match '(?i)connection closed by remote host|connection refused|operation timed out|connection timed out|broken pipe'
 }
 
+function Get-ResultOutputText {
+    param($Result)
+
+    if ($null -eq $Result) {
+        return ""
+    }
+
+    return (@($Result.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+}
+
+function Test-IsRetryableTestConnectionFailure {
+    param($Result)
+
+    if ($null -eq $Result) {
+        return $false
+    }
+
+    $outputText = Get-ResultOutputText -Result $Result
+    if ([string]::IsNullOrWhiteSpace($outputText)) {
+        return [int]$Result.exitCode -eq 255
+    }
+
+    return $outputText -match '(?i)Host key verification failed|SSH security validation failed'
+}
+
 function Invoke-BuddyBackupShellCommandWithRetry {
     param(
         $NodeConnection,
@@ -447,6 +508,42 @@ function Invoke-BuddyBackupShellCommandWithRetry {
         }
 
         Start-Sleep -Seconds 5
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
+}
+
+function Invoke-BuddyBackupTestConnectionWithRetry {
+    param(
+        $NodeConnection,
+        [string[]]$Arguments,
+        [string]$Label,
+        [int]$MaxAttempts = 2,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-BuddyBackupShellCommand -NodeConnection $NodeConnection -Action "test_connection" -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+
+        $outputText = Get-ResultOutputText -Result $result
+        $reportedSuccess = [int]$result.exitCode -eq 0 -and $outputText -match 'Success!' -and $outputText -notmatch '(?i)security validation failed'
+        if ($reportedSuccess) {
+            break
+        }
+
+        $shouldRetry = $DoExecute -and $attempt -lt $MaxAttempts -and ((Test-IsTransientSshFailure -Result $result) -or (Test-IsRetryableTestConnectionFailure -Result $result))
+        if (-not $shouldRetry) {
+            break
+        }
     }
 
     if ($result -and $attempts.Count -gt 1) {
@@ -676,6 +773,45 @@ EOF
     mv "$tmp_go" "$go_file"
 }
 
+prime_legacy_known_hosts() {
+    local remote_host="$1"
+    local known_hosts_file="/root/.ssh/known_hosts"
+    local begin_marker="# buddybackup start"
+    local end_marker="# buddybackup end"
+    local scanned_keys=""
+    local tmp_known_hosts=""
+    local next_known_hosts=""
+
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    touch "$known_hosts_file"
+    chmod 600 "$known_hosts_file"
+
+    scanned_keys=$(ssh-keyscan -H "$remote_host" 2>/dev/null || true)
+    if [[ -z "$scanned_keys" ]]; then
+        return 0
+    fi
+
+    tmp_known_hosts="$(mktemp)"
+    next_known_hosts="${tmp_known_hosts}.next"
+
+    awk -v begin="$begin_marker" -v end="$end_marker" '
+        $0 == begin { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' "$known_hosts_file" > "$tmp_known_hosts"
+
+    {
+        cat "$tmp_known_hosts"
+        printf '%s\n' "$begin_marker"
+        printf '%s\n' "$scanned_keys"
+        printf '%s\n' "$end_marker"
+    } > "$next_known_hosts"
+
+    mv "$next_known_hosts" "$known_hosts_file"
+    rm -f "$tmp_known_hosts"
+}
+
 ensure_dataset_absent() {
   local dataset="$1"
   if zfs list -H -o name "$dataset" >/dev/null 2>&1; then
@@ -748,6 +884,8 @@ if [[ "$peer_port" != "22" ]]; then
     persist_peer_forward_rule "$peer_alias_ip" "$host_gateway_ip" "$peer_port"
 fi
 
+prime_legacy_known_hosts "$remote_host"
+
 /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
 
 echo "configured_node=${node_name}"
@@ -811,7 +949,7 @@ try {
     $setupScript = New-FunctionalSetupScript
 
     Write-Host "[testlab] Functional smoke: applying environment setup on nodeA and nodeB"
-    $senderSetup = Invoke-NodeBashScript -NodeConnection $senderConnection -ScriptContent $setupScript -Arguments @(
+    $senderSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $senderConnection -ScriptContent $setupScript -Arguments @(
         "nodeA",
         $senderPlan.sourceDataset,
         $senderPlan.sourceMountpoint,
@@ -829,11 +967,11 @@ try {
         $functionalCfg.hostGatewayIp,
         [string]$receiverConnection.Port,
         $senderPlan.peerAliasIp
-    ) -Label "functional-setup" -DoExecute:$Execute
+    ) -Label "functional-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $senderSetup
     Assert-CommandSucceeded -Result $senderSetup -FailureMessage "Functional setup failed on nodeA."
 
-    $receiverSetup = Invoke-NodeBashScript -NodeConnection $receiverConnection -ScriptContent $setupScript -Arguments @(
+    $receiverSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $receiverConnection -ScriptContent $setupScript -Arguments @(
         "nodeB",
         $receiverPlan.sourceDataset,
         $receiverPlan.sourceMountpoint,
@@ -851,16 +989,30 @@ try {
         $functionalCfg.hostGatewayIp,
         [string]$senderConnection.Port,
         $receiverPlan.peerAliasIp
-    ) -Label "functional-setup" -DoExecute:$Execute
+    ) -Label "functional-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $receiverSetup
     Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "Functional setup failed on nodeB."
+
+    Write-Host "[testlab] Functional smoke: refreshing managed BuddyBackup host keys"
+    foreach ($refresh in @(
+        @{ Connection = $senderConnection; NodeName = "nodeA" },
+        @{ Connection = $receiverConnection; NodeName = "nodeB" }
+    )) {
+        $clearKnownHostsResult = Invoke-BuddyBackupShellCommand -NodeConnection $refresh.Connection -Action "clear_known_hosts" -Label "$($refresh.NodeName)-clear-known-hosts" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $clearKnownHostsResult
+        Assert-CommandSucceeded -Result $clearKnownHostsResult -FailureMessage "Failed to clear BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+
+        $refreshUpdateResult = Invoke-BuddyBackupPhpCommand -NodeConnection $refresh.Connection -Action "update" -Label "$($refresh.NodeName)-refresh-config" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $refreshUpdateResult
+        Assert-CommandSucceeded -Result $refreshUpdateResult -FailureMessage "Failed to rebuild BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+    }
 
     Write-Host "[testlab] Functional smoke: validating BuddyBackup connectivity"
     foreach ($pair in @(
         @{ Connection = $senderConnection; Plan = $senderPlan; Label = "nodeA-test-connection" },
         @{ Connection = $receiverConnection; Plan = $receiverPlan; Label = "nodeB-test-connection" }
     )) {
-        $connectionResult = Invoke-BuddyBackupShellCommand -NodeConnection $pair.Connection -Action "test_connection" -Arguments @($pair.Plan.remoteHost, $pair.Plan.remoteDestinationDataset) -Label $pair.Label -DoExecute:$Execute
+        $connectionResult = Invoke-BuddyBackupTestConnectionWithRetry -NodeConnection $pair.Connection -Arguments @($pair.Plan.remoteHost, $pair.Plan.remoteDestinationDataset) -Label $pair.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $connectionResult
         Assert-CommandSucceeded -Result $connectionResult -FailureMessage "BuddyBackup test_connection failed on node '$($pair.Connection.NodeName)'."
         if ($Execute) {

@@ -4,6 +4,7 @@ param(
     [string]$SshPublicKeyPath = ".testlab/lab_key.pub",
     [string]$SshPrivateKeyPath = ".testlab/lab_key",
     [string]$InstanceName = "probe",
+    [string]$NetworkDeviceModel = "virtio-net-pci",
     [int]$ImageSizeMB = 1024,
     [int]$DataDiskSizeGB = 3,
     [int]$BootWaitSeconds = 35,
@@ -60,6 +61,23 @@ function Resolve-WorkspacePath {
 
     $workspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
     return [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot $Path))
+}
+
+function Get-StableQemuMacAddress {
+    param([string]$Seed)
+
+    if ([string]::IsNullOrWhiteSpace($Seed)) {
+        throw "MAC address seed cannot be empty."
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Seed))
+    } finally {
+        $sha256.Dispose()
+    }
+
+    return "52:54:00:{0:x2}:{1:x2}:{2:x2}" -f $hash[0], $hash[1], $hash[2]
 }
 
 function Stop-WslProbeQemu {
@@ -130,6 +148,9 @@ if ($ImageSizeMB -lt 512) {
 }
 if ($DataDiskSizeGB -lt 3) {
     throw "DataDiskSizeGB must be at least 3 GB."
+}
+if ($NetworkDeviceModel -notmatch '^[A-Za-z0-9._-]+$') {
+    throw "NetworkDeviceModel '$NetworkDeviceModel' contains unsupported characters."
 }
 if ($BootWaitSeconds -lt 5) {
     throw "BootWaitSeconds must be at least 5 seconds."
@@ -256,9 +277,12 @@ $probeStatus.dataDiskPath = $dataDiskPath
 $selectedHostSshPort = Get-FreeLoopbackPort -PreferredPort $HostSshPort
 $selectedHostHttpPort = Get-FreeLoopbackPort -PreferredPort $HostHttpPort -ExcludedPorts @($selectedHostSshPort)
 $selectedHostHttpsPort = Get-FreeLoopbackPort -PreferredPort $HostHttpsPort -ExcludedPorts @($selectedHostSshPort, $selectedHostHttpPort)
+$networkMacAddress = Get-StableQemuMacAddress -Seed ("{0}:{1}:{2}:{3}" -f $InstanceName, $selectedHostSshPort, $selectedHostHttpPort, $selectedHostHttpsPort)
 $probeStatus.selectedHostSshPort = $selectedHostSshPort
 $probeStatus.selectedHostHttpPort = $selectedHostHttpPort
 $probeStatus.selectedHostHttpsPort = $selectedHostHttpsPort
+$probeStatus.networkDeviceModel = $NetworkDeviceModel
+$probeStatus.networkMacAddress = $networkMacAddress
 $probeStatus.webGuiHttpUrl = "http://127.0.0.1:$selectedHostHttpPort"
 $probeStatus.webGuiHttpsUrl = "https://127.0.0.1:$selectedHostHttpsPort"
 if ($selectedHostSshPort -ne $HostSshPort) {
@@ -283,10 +307,12 @@ work_root="$4"
 monitor_socket="$5"
 serial_log="$6"
 pid_file="$7"
-host_ssh_port="$8"
-data_disk_size_gb="$9"
-host_http_port="${10}"
-host_https_port="${11}"
+network_device_model="$8"
+network_mac_address="$9"
+host_ssh_port="${10}"
+data_disk_size_gb="${11}"
+host_http_port="${12}"
+host_https_port="${13}"
 
 log_step() {
     echo "$1"
@@ -509,7 +535,7 @@ qemu-system-x86_64 \
     -device usb-storage,bus=xhci.0,drive=usbdisk,bootindex=1 \
         -device virtio-blk-pci,drive=datadisk,serial=buddybackup_data \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${host_ssh_port}-:22,hostfwd=tcp:127.0.0.1:${host_http_port}-:80,hostfwd=tcp:127.0.0.1:${host_https_port}-:443 \
-  -device e1000,netdev=net0 \
+    -device "${network_device_model},netdev=net0,mac=${network_mac_address}" \
   -serial file:"$serial_log" \
   -monitor unix:"$monitor_socket",server,nowait \
   -vga std \
@@ -533,6 +559,8 @@ $buildResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $buildScript -A
     $monitorSocketPath,
     $serialLogPath,
     $pidFilePath,
+    $NetworkDeviceModel,
+    $networkMacAddress,
     [string]$selectedHostSshPort,
     [string]$DataDiskSizeGB,
     [string]$selectedHostHttpPort,
