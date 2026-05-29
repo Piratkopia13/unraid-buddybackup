@@ -4,7 +4,7 @@
         "startedAt":  "2026-05-28T20:25:29.0916122+02:00",
         "completedAt":  "2026-05-28T20:34:52.4604117+02:00",
         "matrixProfile":  "release-default",
-        "pluginDisplayVersion":  "2026.05.27",
+        "pluginDisplayVersion":  "2026.05.29",
         "commitSha":  "28b6c9a4d1040b586f3163d98433a922f254ab7d",
         "shortSha":  "28b6c9a",
         "branch":  "dev",
@@ -42,9 +42,9 @@
                                 }
                             ],
         "pluginCoverage":  [
-                               "2026.05.02 (release-tag) -\u003e 2026.05.27 (workspace-build)",
-                               "2026.05.27 (workspace-build) -\u003e 2026.05.02 (release-tag)",
-                               "2026.05.27 (workspace-build) -\u003e 2026.05.27 (workspace-build)"
+                               "2026.05.02 (release-tag) -\u003e 2026.05.29 (workspace-build)",
+                               "2026.05.29 (workspace-build) -\u003e 2026.05.02 (release-tag)",
+                               "2026.05.29 (workspace-build) -\u003e 2026.05.29 (workspace-build)"
                            ],
         "unraidCoverage":  [
                                "7.2.6 -\u003e 7.3.0"
@@ -68,7 +68,7 @@
                           "nodeB":  {
                                         "unraid":  "7.3.0",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""
@@ -83,7 +83,7 @@
                           "nodeA":  {
                                         "unraid":  "7.2.6",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""
@@ -117,7 +117,7 @@
                           "nodeB":  {
                                         "unraid":  "7.3.0",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""
@@ -135,7 +135,7 @@
                           "nodeA":  {
                                         "unraid":  "7.2.6",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""
@@ -158,7 +158,7 @@
                           "nodeA":  {
                                         "unraid":  "7.2.6",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "2026.05.02",
                                         "upgradeFromPluginResolved":  "2026.05.02"
@@ -166,7 +166,7 @@
                           "nodeB":  {
                                         "unraid":  "7.3.0",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "2026.05.02",
                                         "upgradeFromPluginResolved":  "2026.05.02"
@@ -184,7 +184,7 @@
                           "nodeA":  {
                                         "unraid":  "7.2.6",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "2026.05.02",
                                         "upgradeFromPluginResolved":  "2026.05.02"
@@ -192,7 +192,7 @@
                           "nodeB":  {
                                         "unraid":  "7.3.0",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "2026.05.02",
                                         "upgradeFromPluginResolved":  "2026.05.02"
@@ -207,7 +207,7 @@
                           "nodeA":  {
                                         "unraid":  "7.2.6",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""
@@ -215,7 +215,7 @@
                           "nodeB":  {
                                         "unraid":  "7.3.0",
                                         "pluginRequested":  "workspace-build",
-                                        "pluginResolved":  "2026.05.27",
+                                        "pluginResolved":  "2026.05.29",
                                         "pluginSource":  "workspace-build",
                                         "upgradeFromPluginRequested":  "",
                                         "upgradeFromPluginResolved":  ""

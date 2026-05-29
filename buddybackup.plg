@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.05.27">
+  <!ENTITY version      "2026.05.29">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "73be7d5553bfcbc9e609d30d8f9f78f4">
+  <!ENTITY pkgMD5        "5efad9f9be2651aa5858e9204869416c">
 ]>
 
 <PLUGIN  name="&name;"
@@ -27,7 +27,7 @@
 <CHANGES>
 ##&name;
 
-###2026.05.27
+###2026.05.29
 - Add button to create a fresh snapshot and immediately send a backup
 - Prompt to create a fresh snapshot when "Send backup now" is used before any snapshots exist
 - Improve restore snapshot loading with clearer messages and compatibility with buddies that have not updated the BuddyBackup plugin yet
