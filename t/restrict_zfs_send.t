@@ -51,6 +51,18 @@ like(
     'restrict_zfs_send normalizes PATH to include sbin directories'
 );
 
+like(
+    $script_source,
+    qr/my \$use_sudo = \(-f "\$0\.sudo"\) \? 1 : 0;/,
+    'restrict_zfs_send supports sudo mode via sibling flag file'
+);
+
+like(
+    $script_source,
+    qr/system\('\/usr\/bin\/sudo',\s*'-n',\s*'--',\s*'\/usr\/bin\/bash',\s*'-c',\s*\$command\)/s,
+    'restrict_zfs_send runs validated commands through sudo -n in sudo mode'
+);
+
 sub run_restrict {
     my ($command) = @_;
 

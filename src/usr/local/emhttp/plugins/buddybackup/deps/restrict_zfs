@@ -8,6 +8,11 @@ use Scalar::Util qw(looks_like_number);
 
 $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin), ($ENV{'PATH'} // ''));
 
+# Sudo mode: generic_host_setup.sh creates this flag file when the zfs binary is not
+# executable for the user (TrueNAS SCALE). Validated commands are then run through
+# sudo -n; the allowlist below remains the fine-grained gate either way.
+my $use_sudo = (-f "$0.sudo") ? 1 : 0;
+
 my $POOL = qr/'[\w-]+'/;
 my $DATASET = qr/'[\w\/ -]+'/;
 my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
@@ -79,7 +84,11 @@ foreach my $command (split /;/, $original_command) {
         if ($verbose) {
             $log_text = "running command: $command";
         }
-        system('/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+        if ($use_sudo) {
+            system('/usr/bin/sudo', '-n', '--', '/usr/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+        } else {
+            system('/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+        }
     }
 
     if ($log_text) {
