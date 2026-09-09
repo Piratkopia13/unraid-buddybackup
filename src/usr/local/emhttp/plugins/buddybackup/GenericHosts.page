@@ -63,6 +63,7 @@ Title="Generic ZFS hosts"
         var port = $('input[name="bb-port"]').val() || '22';
 
         $('#bb-generic-hosts-role-label').text(role == 'sender' ? 'Source dataset (or parent) to serve pulls from:' : 'Parent dataset to receive backups into:');
+        $('#bb-generic-hosts-sender-note').toggle(role == 'sender');
         $('.bb-generic-hosts-instructions').hide();
         $('#bb-generic-hosts-instructions-'+(platform == 'scale' ? 'scale' : 'generic')).show();
 
@@ -105,6 +106,15 @@ _(Your SSH public key (give this to the remote host setup))_:
         </select>
         <div class="buddybackup-field-note">Receiver: this Unraid pushes backups to the remote host.<br>
         Sender: this Unraid pulls backups from the remote host.</div>
+        <div class="buddybackup-field-note" id="bb-generic-hosts-sender-note" style="display:none;">
+        Pruning of pulled snapshots depends on the source's snapshot <b>names</b>: Unraid only prunes snapshots
+        whose names start with <code>autosnap</code> and end with <code>_hourly</code> / <code>_daily</code> /
+        <code>_weekly</code> / <code>_monthly</code> / <code>_yearly</code>. Sources running sanoid match this; a
+        TrueNAS periodic snapshot task needs its Naming Schema customized accordingly (for example
+        <code>autosnap_%Y-%m-%d_%H:%M:%S_hourly</code>) — the default <code>auto-%Y-%m-%d_%H-%M</code> naming is
+        never pruned and will accumulate. Proxmox's default <code>zfs-auto-snapshot</code> names do not match either —
+        run sanoid on such sources instead. Also add the local pull destination dataset on the
+        'Snapshot creation and pruning' page with 'Prune snapshots automatically' = Yes.</div>
     </dd>
 </dl>
 <dl>

@@ -58,6 +58,20 @@ Prerequisites for the checklist host:
 5. On TrueNAS: confirm the sender user cannot receive, destroy or snapshot (`zfs allow` shows
    only `send`/`hold` and the allowlist blocks everything else).
 6. On Unraid: restore from the pulled dataset via the local restore path.
+7. On Unraid: snapshot pruning of the pulled dataset:
+   - Before pulling, set the TrueNAS periodic snapshot task's Naming Schema to a sanoid-compatible
+     pattern matching its schedule, e.g. `autosnap_%Y-%m-%d_%H:%M:%S_hourly` for an hourly task
+     (TrueNAS requires `%Y`, `%m`, `%d`, `%H`, `%M` in the schema). TrueNAS's default
+     `auto-%Y-%m-%d_%H-%M` naming does not match and would never be pruned on Unraid.
+   - Add the pull destination dataset on *Snapshot creation and pruning* with
+     *Prune snapshots automatically* = Yes (Recursive = Yes if the pull is recursive) and a small
+     retention (e.g. hourly = 1, daily = 1).
+   - Confirm the pulled snapshots appear with the sanoid-compatible naming.
+   - Run `/usr/local/emhttp/plugins/buddybackup/deps/sanoid --configdir=/usr/local/emhttp/plugins/buddybackup --prune-snapshots --verbose`
+     and confirm snapshots of each type beyond retention are destroyed (the newest per type is
+     always kept).
+   - Confirm snapshots that do not match the `autosnap_*` naming (e.g. ones created with TrueNAS's
+     default naming schema) are left untouched and would accumulate forever.
 
 ## Negative checks
 
@@ -73,3 +87,5 @@ Prerequisites for the checklist host:
 - All steps complete without unexpected warnings; the setup script's `--verify` checklist
   reports zero FAIL entries in both roles; no forced-command line is lost after the TrueNAS
   UI key-edit step once the script has been re-run.
+- Pull-smoke pruning step: pulled `autosnap_*` snapshots beyond retention are destroyed by
+  sanoid; non-matching snapshot names are documented as never pruned.

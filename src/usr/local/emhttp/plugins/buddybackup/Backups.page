@@ -408,7 +408,17 @@ _(Your SSH public key (send this to you buddy))_:
                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local' || $data['type']=='remote_pull')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
                 <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local' || $data['type']=='remote_pull')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</div>
                 <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">Note: use the parent dataset configured on the generic host (set up on the 'Generic ZFS hosts' page), followed by a child dataset name.</div>
-                <div class="buddybackup-field-note buddybackup-type-pull buddybackup-note-pull" style="display:none;">Note: local dataset that pulled snapshots are stored in.</div>
+                <div class="buddybackup-field-note buddybackup-type-pull buddybackup-note-pull" style="display:none;">Note: local dataset that pulled snapshots are stored in. Pulled snapshots keep their source names and are not pruned automatically: add this dataset on the 'Snapshot creation and pruning' page with 'Prune snapshots automatically' = Yes (and Recursive = Yes for recursive pulls). Pruning only recognizes snapshots whose names start with autosnap and end with _hourly/_daily/_weekly/_monthly/_yearly (sources running sanoid, or a TrueNAS periodic task with its Naming Schema customized accordingly — TrueNAS's default auto-* names are never pruned).</div>
+                <?php
+                    $bb_pull_prune_warning = "";
+                    if ($data && ($data['type'] ?? '') == 'remote_pull' && !empty($data['destination_dataset'])
+                        && !bb_pull_destination_has_autoprune($data['destination_dataset'], $data['recursive'] ?? '')) {
+                        $bb_pull_prune_warning = "Warning: pulled snapshots in ".htmlspecialchars($data['destination_dataset'])." are currently not pruned by any snapshot pruning entry. Add this dataset on the 'Snapshot creation and pruning' page with 'Prune snapshots automatically' = Yes".(($data['recursive'] ?? '') == 'yes' ? " and Recursive = Yes" : "").".";
+                    }
+                ?>
+                <?php if ($bb_pull_prune_warning !== ""): ?>
+                <div class="buddybackup-field-note buddybackup-type-pull buddybackup-note-pull" style="display:none;color:#c87f0a;"><i class="fa fa-fw fa-exclamation-triangle"></i> <?=$bb_pull_prune_warning?></div>
+                <?php endif; ?>
             </dd>
         </dl>
         </td>

@@ -22,7 +22,15 @@ Tag="buddybackup"
         $disable_send = true;
         $disable_receive = true;
     }
-    
+
+    foreach ($backup_cfg as $pull_uid => $pull_backup) {
+        if (($pull_backup["type"] ?? "") == "remote_pull" && ($pull_backup["enable"] ?? "") == "yes"
+            && !empty($pull_backup["destination_dataset"])
+            && !bb_pull_destination_has_autoprune($pull_backup["destination_dataset"], $pull_backup["recursive"] ?? "")) {
+            array_push($warnings, "Pulled snapshots in '".$pull_backup["destination_dataset"]."' are not pruned automatically. Add this dataset on the 'Snapshot creation and pruning' page with 'Prune snapshots automatically' = Yes.");
+        }
+    }
+
 ?>
 <link type="text/css" rel="stylesheet" href="/webGui/styles/jquery.switchbutton.css">
 <script src="/webGui/javascript/jquery.switchbutton.js"></script></p>

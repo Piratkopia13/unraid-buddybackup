@@ -107,4 +107,40 @@
         }
         return $backups;
     }
+
+    // True when snapshots.cfg contains a section that prunes the given local dataset:
+    // an exact dataset match, or an ancestor section with recursive = yes (sanoid expands
+    // recursive sections to child datasets). When $recursive_pull is "yes", the covering
+    // section must itself be recursive, otherwise replicated child datasets are not pruned.
+    function bb_pull_destination_has_autoprune($destination_dataset, $recursive_pull = false) {
+        global $snapshot_cfg;
+        if (!is_string($destination_dataset) || $destination_dataset === "") {
+            return false;
+        }
+        $recursive_pull = ($recursive_pull === "yes" || $recursive_pull === true);
+        foreach ((array)$snapshot_cfg as $section) {
+            if (!is_array($section)) {
+                continue;
+            }
+            $dataset = $section["dataset"] ?? "";
+            if (($section["autoprune"] ?? "") !== "yes" || !is_string($dataset) || $dataset === "") {
+                continue;
+            }
+            $is_exact = ($dataset === $destination_dataset);
+            $is_ancestor = (!$is_exact && str_starts_with($destination_dataset."/", $dataset."/"));
+            if (!$is_exact && !$is_ancestor) {
+                continue;
+            }
+            if ($is_ancestor && ($section["recursive"] ?? "") !== "yes") {
+                // non-recursive ancestor sections do not expand to child datasets
+                continue;
+            }
+            if ($recursive_pull && $is_exact && ($section["recursive"] ?? "") !== "yes") {
+                // exact-match section without recursive: replicated child datasets would not be pruned
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
 ?>
