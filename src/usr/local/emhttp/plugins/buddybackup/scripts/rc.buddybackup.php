@@ -91,6 +91,38 @@ function is_valid_zfs_dataset_name($dataset) {
     return preg_match('/^(?!\/)(?!.*\/\/)(?!.*\/$)[^\/]+(?:\/[^\/]+)*$/', $dataset) === 1;
 }
 
+function is_valid_remote_host($host) {
+    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $host) === 1;
+}
+
+function normalize_remote_identity($user, $port, &$error_message = null) {
+    $user = trim((string)$user);
+    $port = trim((string)$port);
+
+    if ($user === '') {
+        $user = 'buddybackup';
+    }
+    if ($port === '') {
+        $port = '22';
+    }
+
+    if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $user) !== 1) {
+        $error_message = "Invalid remote user name '$user'.";
+        return null;
+    }
+
+    if (preg_match('/^\d{1,5}$/', $port) !== 1 || (int)$port < 1 || (int)$port > 65535) {
+        $error_message = "Invalid remote port '$port'.";
+        return null;
+    }
+
+    return array('user' => $user, 'port' => $port);
+}
+
+function resolve_remote_identity_from_cfg($cfg, $prefix, &$error_message = null) {
+    return normalize_remote_identity($cfg[$prefix.'_user'] ?? '', $cfg[$prefix.'_port'] ?? '', $error_message);
+}
+
 function read_receive_destination_dataset(&$error_message = null) {
     global $tmp_recv_dataset_path;
 
@@ -181,7 +213,7 @@ function run_task_command($cmd, $echo_pid) {
     return $result_code;
 }
 
-function build_send_backup_command($cfg, $uid) {
+function build_send_backup_command($cfg, $uid, &$error_message = null) {
     global $rc;
 
     if ($cfg['type'] == 'local') {
@@ -195,21 +227,69 @@ function build_send_backup_command($cfg, $uid) {
         ));
     }
 
-    return build_shell_command(array(
-        $rc,
-        'send_backup',
-        $cfg['source_dataset'],
-        $cfg['recursive'],
-        $cfg['destination_host'],
-        $cfg['destination_dataset'],
-        $uid,
-    ));
+    if ($cfg['type'] == 'remote') {
+        return build_shell_command(array(
+            $rc,
+            'send_backup',
+            'remote',
+            $cfg['source_dataset'],
+            $cfg['recursive'],
+            $cfg['destination_host'],
+            $cfg['destination_dataset'],
+            $uid,
+        ));
+    }
+
+    if ($cfg['type'] == 'remote_generic') {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        return build_shell_command(array(
+            $rc,
+            'send_backup',
+            'remote_generic',
+            $cfg['source_dataset'],
+            $cfg['recursive'],
+            $cfg['destination_host'],
+            $cfg['destination_dataset'],
+            $uid,
+            $identity['user'],
+            $identity['port'],
+        ));
+    }
+
+    if ($cfg['type'] == 'remote_pull') {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'source', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        return build_shell_command(array(
+            $rc,
+            'pull_backup',
+            $cfg['source_host'],
+            $identity['user'],
+            $identity['port'],
+            $cfg['source_dataset'],
+            $cfg['recursive'],
+            $cfg['destination_dataset'],
+            $uid,
+        ));
+    }
+
+    $error_message = "Unknown backup type: ".($cfg['type'] ?? '');
+    return null;
 }
 
-function build_create_snapshot_and_send_command($cfg, $uid) {
+function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = null) {
     global $rc;
 
-    return build_shell_command(array(
+    if ($cfg['type'] == 'remote_pull') {
+        $error_message = "Pull backups are cron-driven and do not support 'create fresh snapshot and send'.";
+        return null;
+    }
+
+    $parts = array(
         $rc,
         'create_snapshot_and_send',
         $cfg['type'],
@@ -218,7 +298,18 @@ function build_create_snapshot_and_send_command($cfg, $uid) {
         $cfg['destination_host'] ?? '',
         $cfg['destination_dataset'],
         $uid,
-    ));
+    );
+
+    if ($cfg['type'] == 'remote_generic') {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        $parts[] = $identity['user'];
+        $parts[] = $identity['port'];
+    }
+
+    return build_shell_command($parts);
 }
 
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
@@ -387,19 +478,43 @@ function update_backups_from_config() {
 
     $destination_hosts = [];
     foreach ($backup_cfg as $uid => $cfg) {
-        $is_local = $cfg['type'] == "local";
+        $type = $cfg['type'] ?? '';
+        $is_local = $type == "local";
         $destination_host = trim((string)($cfg['destination_host'] ?? ''));
+        $source_host = trim((string)($cfg['source_host'] ?? ''));
 
-        // append target as known host. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
-        // This is done as long as a destination host is set regardless if backups are enabled or not since we still need to eg. run get_available_snapshots
-        if (!$is_local && $destination_host !== '') {
-            $destination_hosts[$destination_host] = true;
+        // append targets as known hosts. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
+        // This is done as long as a host is set regardless if backups are enabled or not since we still need to eg. run get_available_snapshots
+        if (!$is_local && $type != 'remote_pull' && $destination_host !== '') {
+            $port = '22';
+            if ($type == 'remote_generic') {
+                $identity = resolve_remote_identity_from_cfg($cfg, 'destination');
+                if ($identity !== null) {
+                    $port = $identity['port'];
+                }
+            }
+            $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
+        }
+
+        if ($type == 'remote_pull' && $source_host !== '') {
+            $identity = resolve_remote_identity_from_cfg($cfg, 'source');
+            $port = $identity !== null ? $identity['port'] : '22';
+            $destination_hosts[$source_host.'|'.$port] = array('host' => $source_host, 'port' => $port);
+        }
+
+        $allow_empty = array();
+        if ($is_local) {
+            $allow_empty = array('destination_host');
+        } else if ($type == 'remote_generic') {
+            $allow_empty = array('destination_user', 'destination_port');
+        } else if ($type == 'remote_pull') {
+            $allow_empty = array('destination_host');
         }
 
         $any_empty = false;
         foreach ($cfg as $key => $value) {
             if (empty($value)) {
-                if ($is_local && $key == "destination_host") continue;
+                if (in_array($key, $allow_empty, true)) continue;
 
                 $any_empty = true;
                 BB_VERBOSE("Skipped backup uid $uid because of empty field $key");
@@ -414,11 +529,16 @@ function update_backups_from_config() {
         add_backup_cron_file($uid, $cfg);
     }
 
-    $destination_host_names = array_keys($destination_hosts);
-    sort($destination_host_names, SORT_STRING);
+    $destination_host_keys = array_keys($destination_hosts);
+    sort($destination_host_keys, SORT_STRING);
 
-    foreach ($destination_host_names as $destination_host) {
-        $command = 'ssh-keyscan '.escapeshellarg($destination_host).' 2>/dev/null';
+    foreach ($destination_host_keys as $destination_host_key) {
+        $entry = $destination_hosts[$destination_host_key];
+        $command = 'ssh-keyscan';
+        if ($entry['port'] != '22') {
+            $command .= ' -p '.escapeshellarg($entry['port']);
+        }
+        $command .= ' '.escapeshellarg($entry['host']).' 2>/dev/null';
         if ($key = shell_exec($command)) {
             $known_hosts_content .= rtrim($key, "\r\n") . "\n";
         }
@@ -469,7 +589,28 @@ function restore_snapshot($argv) {
         ));
         BB_LOG("remote cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
-    } else if ($cfg["type"] == "local") {
+    } else if ($cfg["type"] == "remote_generic") {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
+        $cmd = build_shell_command(array(
+            $GLOBALS['rc'],
+            'restore_snapshot',
+            'remote_generic',
+            $cfg['destination_host'],
+            $argv[3],
+            $argv[4],
+            $argv[5],
+            $argv[6],
+            $argv[7],
+            $identity['user'],
+            $identity['port'],
+        ));
+        BB_LOG("remote_generic cmd ".$cmd);
+        start_long_running_task_echo_pid($cmd);
+    } else if ($cfg["type"] == "local" || $cfg["type"] == "remote_pull") {
         $cmd = build_shell_command(array(
             $GLOBALS['rc'],
             'restore_snapshot',
@@ -497,24 +638,68 @@ function preflight_send_backup($uid) {
         return;
     }
 
+    if ($cfg['type'] == 'remote_pull') {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'source', $error_message);
+        if ($identity === null) {
+            write_json_response(array('status' => 'error', 'message' => $error_message));
+            return;
+        }
+        $cmd = build_shell_command(array(
+            $rc,
+            'preflight_pull_backup',
+            $cfg['source_host'],
+            $identity['user'],
+            $identity['port'],
+            $cfg['source_dataset'],
+        ));
+        passthru($cmd);
+        return;
+    }
+
     $cmd = build_shell_command(array($rc, 'preflight_send_backup', $cfg['type'], $cfg['source_dataset']));
     passthru($cmd);
 }
 
 function get_available_snapshots($uid) {
     global $rc;
-    global $plugin_path;
-    global $backups_config_path;
-    $backup_cfg = parse_ini_file($backups_config_path, true);
-    if (!array_key_exists($uid, $backup_cfg)) {
-        echo "UID '$uid' does not exist";
+    $error_message = null;
+    $cfg = load_backup_config_entry($uid, $error_message);
+    if ($cfg === null) {
+        echo $error_message;
         return;
     }
-    $cfg = $backup_cfg[$uid];
     if ($cfg["type"] == "remote") {
-        passthru($rc.' get_available_snapshots remote "'.$cfg["destination_host"].'" "'.$cfg["destination_dataset"].'"');
+        passthru(build_shell_command(array(
+            $rc,
+            'get_available_snapshots',
+            'remote',
+            $cfg["destination_host"],
+            $cfg["destination_dataset"],
+        )));
+    } else if ($cfg["type"] == "remote_generic") {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
+        passthru(build_shell_command(array(
+            $rc,
+            'get_available_snapshots',
+            'remote_generic',
+            $cfg["destination_host"],
+            $cfg["destination_dataset"],
+            $identity['user'],
+            $identity['port'],
+        )));
+    } else if ($cfg["type"] == "local" || $cfg["type"] == "remote_pull") {
+        passthru(build_shell_command(array(
+            $rc,
+            'get_available_snapshots',
+            'local',
+            $cfg["destination_dataset"],
+        )));
     } else {
-        passthru($rc.' get_available_snapshots local "'.$cfg["destination_dataset"].'"');
+        echo "Unknown backup type: ".($cfg["type"] ?? '');
     }
 }
 
@@ -565,7 +750,11 @@ function send_backup($uid, $echo_pid_arg) {
     }
 
     $echo_pid = (!empty($echo_pid_arg) && $echo_pid_arg == "echopid");
-    $cmd = build_send_backup_command($cfg, $uid);
+    $cmd = build_send_backup_command($cfg, $uid, $error_message);
+    if ($cmd === null) {
+        BB_ERR("Could not startup backup with uid '$uid': ".$error_message);
+        return;
+    }
     $result_code = run_task_command($cmd, $echo_pid);
 
     if (!$echo_pid) {
@@ -584,7 +773,11 @@ function create_snapshot_and_send($uid, $echo_pid_arg) {
     }
 
     $echo_pid = (!empty($echo_pid_arg) && $echo_pid_arg == 'echopid');
-    $cmd = build_create_snapshot_and_send_command($cfg, $uid);
+    $cmd = build_create_snapshot_and_send_command($cfg, $uid, $error_message);
+    if ($cmd === null) {
+        BB_ERR("Could not start create_snapshot_and_send for uid '$uid': ".$error_message);
+        return;
+    }
     $result_code = run_task_command($cmd, $echo_pid);
 
     if (!$echo_pid) {
@@ -606,9 +799,30 @@ switch ($argv[1]) {
         create_snapshot_and_send($argv[2], $argv[3]);
         break;
     case 'test_connection':
-        $host = escapeshellarg($argv[2] ?? '');
-        $destination_dataset = escapeshellarg($argv[3] ?? '');
-        passthru($rc.' test_connection '.$host.' '.$destination_dataset);
+        $type = $argv[4] ?? 'remote';
+        $user = $argv[5] ?? '';
+        $port = $argv[6] ?? '';
+        if ($type == 'remote_generic' || $type == 'remote_pull') {
+            $identity = normalize_remote_identity($user, $port, $error_message);
+            if ($identity === null) {
+                echo $error_message;
+                break;
+            }
+            $direction = ($type == 'remote_pull') ? 'pull' : 'push';
+            passthru(build_shell_command(array(
+                $rc,
+                'test_generic_connection',
+                $argv[2] ?? '',
+                $identity['user'],
+                $identity['port'],
+                $argv[3] ?? '',
+                $direction,
+            )));
+        } else {
+            $host = escapeshellarg($argv[2] ?? '');
+            $destination_dataset = escapeshellarg($argv[3] ?? '');
+            passthru($rc.' test_connection '.$host.' '.$destination_dataset);
+        }
         break;
     case 'get_available_snapshots':
         get_available_snapshots($argv[2]);
@@ -627,7 +841,7 @@ switch ($argv[1]) {
         break;
     
     default:
-        echo "usage ".$argv[0]." update|preflight_send_backup|send_backup|create_snapshot_and_send|get_available_snapshots|probe_zfs|mark_received_backup|restore_snapshot";
+        echo "usage ".$argv[0]." update|preflight_send_backup|send_backup|create_snapshot_and_send|test_connection|get_available_snapshots|probe_zfs|mark_received_backup|restore_snapshot";
         break;
 }
 ?>
