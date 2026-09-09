@@ -1,0 +1,190 @@
+Menu="BuddyBackup:5"
+Title="Generic ZFS hosts"
+---
+<?php
+    $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
+    if (file_exists($public_ssh_key_path)) {
+        $public_ssh_key = trim(file_get_contents($public_ssh_key_path));
+        if ($public_ssh_key === false) {
+            $public_ssh_key = "Failed to read file";
+        }
+    } else {
+        $public_ssh_key = "Reinstall plugin. SSH key not found.";
+    }
+
+    $setup_script_path = "/usr/local/emhttp/plugins/buddybackup/deps/generic_host_setup.sh";
+    if (file_exists($setup_script_path)) {
+        $setup_script_content = file_get_contents($setup_script_path);
+    } else {
+        $setup_script_content = "";
+    }
+    $setup_script_url = "https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/deps/generic_host_setup.sh";
+?>
+<script>
+    var bb_setup_script_content = <?=json_encode($setup_script_content)?>;
+    var bb_setup_script_url = <?=json_encode($setup_script_url)?>;
+
+    function escape_html(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    function shell_quote(value) {
+        return "'" + String(value).replace(/'/g, "'\\''") + "'";
+    }
+    function copy_text(btn, text) {
+        var done = function() {
+            var old = $(btn).val();
+            $(btn).val("Copied!").prop('disabled', true);
+            window.setTimeout(function() { $(btn).val(old).prop('disabled', false); }, 1500);
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(done, function() { fallback_copy(text); done(); });
+        } else {
+            fallback_copy(text);
+            done();
+        }
+    }
+    function fallback_copy(text) {
+        var ta = $("<textarea>").css({position:'fixed', opacity:0}).val(text).appendTo('body');
+        ta[0].select();
+        document.execCommand('copy');
+        ta.remove();
+    }
+
+    function generic_hosts_update() {
+        var role = $('select[name="bb-role"]').val();
+        var platform = $('select[name="bb-platform"]').val();
+        var user = $('input[name="bb-user"]').val() || 'buddybackup';
+        var dataset = $('input[name="bb-dataset"]').val();
+        var port = $('input[name="bb-port"]').val() || '22';
+
+        $('#bb-generic-hosts-role-label').text(role == 'sender' ? 'Source dataset (or parent) to serve pulls from:' : 'Parent dataset to receive backups into:');
+        $('.bb-generic-hosts-instructions').hide();
+        $('#bb-generic-hosts-instructions-'+(platform == 'scale' ? 'scale' : 'generic')).show();
+
+        var setup_cmd = 'curl -fsSL '+bb_setup_script_url+' | bash -s --';
+        setup_cmd += ' --role '+role;
+        setup_cmd += ' --user '+shell_quote(user);
+        setup_cmd += ' --dataset '+shell_quote(dataset);
+        setup_cmd += ' --port '+shell_quote(port);
+        setup_cmd += ' --pubkey '+shell_quote('<?=$public_ssh_key;?>');
+        $('#bb-generic-hosts-cmd').text(setup_cmd);
+    }
+    $(function() {
+        $('select[name="bb-role"], select[name="bb-platform"], input[name="bb-user"], input[name="bb-dataset"], input[name="bb-port"]').each(function(){
+            $(this).on('input change', generic_hosts_update);
+        });
+        generic_hosts_update();
+    })
+</script>
+<div id="bb-generic-hosts-page">
+<p>
+Backups can run to and from any OpenZFS system: TrueNAS SCALE, Proxmox VE or a generic Linux box with ZFS.
+This page generates a one-time setup command that you run <b>on the remote host</b> (as root). It creates a
+restricted user, installs a command allowlist, delegates the exact ZFS permissions needed and wires up SSH
+so the host can only ever run what BuddyBackup requires - nothing else.
+</p>
+
+_(Your SSH public key (give this to the remote host setup))_:
+: <input disabled type="text" class="align" style="opacity:1;" value="<?=$public_ssh_key;?>">
+  <input type="button" value="_(Copy)_" onclick="copy_text(this, '<?=$public_ssh_key;?>')">
+
+<table>
+<tr><th scope="col">Remote host setup</th></tr>
+<tr><td>
+<dl>
+    <dt>_(Role)_:</dt>
+    <dd>
+        <select name="bb-role" class="align">
+            <?=mk_option("receiver", "receiver", "_(Receive from this Unraid)_");?>
+            <?=mk_option("sender", "sender", "_(Send to this Unraid)_");?>
+        </select>
+        <div class="buddybackup-field-note">Receiver: this Unraid pushes backups to the remote host.<br>
+        Sender: this Unraid pulls backups from the remote host.</div>
+    </dd>
+</dl>
+<dl>
+    <dt id="bb-generic-hosts-role-label">_(Parent dataset to receive backups into)_:</dt>
+    <dd><input type="text" name="bb-dataset" class="align" placeholder="tank/backups/unraid"></dd>
+</dl>
+<dl>
+    <dt>_(Remote username)_:</dt>
+    <dd><input type="text" name="bb-user" class="align" placeholder="buddybackup"></dd>
+</dl>
+<dl>
+    <dt>_(SSH port)_:</dt>
+    <dd><input type="text" name="bb-port" class="align" placeholder="22"></dd>
+</dl>
+<dl>
+    <dt>_(Platform)_:</dt>
+    <dd>
+        <select name="bb-platform" class="align">
+            <?=mk_option("auto", "auto", "_(Auto)_");?>
+            <?=mk_option("scale", "scale", "_(TrueNAS SCALE)_");?>
+            <?=mk_option("proxmox", "proxmox", "_(Proxmox VE)_");?>
+            <?=mk_option("debian", "debian", "_(Debian)_");?>
+            <?=mk_option("ubuntu", "ubuntu", "_(Ubuntu)_");?>
+        </select>
+    </dd>
+</dl>
+</td></tr>
+</table>
+
+<h3>Setup command (run on the remote host as root)</h3>
+<pre id="bb-generic-hosts-cmd" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
+<input type="button" value="_(Copy setup command)_" onclick="copy_text(this, $('#bb-generic-hosts-cmd').text())">
+<input type="button" value="_(Copy setup script (review before running))_" onclick="copy_text(this, bb_setup_script_content)" <?=($setup_script_content === "")?"disabled":""?>>
+<div class="buddybackup-field-note">Prefer downloading the script and reviewing it before running:
+<code>curl -fsSL <?=$setup_script_url?> -o /tmp/bb-setup.sh</code>, inspect it, then run
+<code>bash /tmp/bb-setup.sh --role receiver --user buddybackup --dataset 'tank/backups/unraid'</code>.<br>
+The script is idempotent and self-verifying; re-run it with <code>--verify</code> after changing SSH keys on the remote host.</div>
+
+<div class="bb-generic-hosts-instructions" id="bb-generic-hosts-instructions-generic">
+<h3>Steps (Proxmox VE / Debian / Ubuntu)</h3>
+<ol>
+    <li>Open a root shell on the remote host (Proxmox: the node's console or SSH as root).</li>
+    <li>Paste and run the setup command above.</li>
+    <li>Follow its output. It creates the user with a locked password, applies the ZFS delegations,
+    writes the forced-command SSH key line and adds an SSH restriction drop-in.</li>
+    <li>Re-run with <code>--verify</code> to confirm everything is in place.</li>
+</ol>
+</div>
+
+<div class="bb-generic-hosts-instructions" id="bb-generic-hosts-instructions-scale" style="display:none;">
+<h3>Steps (TrueNAS SCALE)</h3>
+<ol>
+    <li><b>SSH service</b>: System Settings → Services → SSH: enable it and set the TCP port (matches the port above).</li>
+    <li><b>User</b>: Credentials → Users → Add: use the username above, disable password login, and pick a normal shell (e.g. /usr/bin/bash).</li>
+    <li><b>SSH key</b>: paste the public key above into the user's "SSH Public Key" field in the UI.</li>
+    <li><b>Run the setup script</b> from a root shell (TrueNAS: <code>sudo -i</code> in the web shell). It installs the
+    command allowlist, applies the ZFS delegations and rewrites the user's authorized_keys with the forced-command line.</li>
+    <li>If the script says the zfs binary is not executable for your user, paste the values it prints into the user's
+    <b>"Allowed sudo commands with no password"</b> field in the UI and re-run the script.</li>
+    <li><b>SSH restriction</b>: paste the <code>Match</code> block printed by the script into the SSH service's
+    <b>"Auxiliary Parameters"</b> field (System Settings → Services → SSH).</li>
+    <li><b>Important</b>: editing the user's keys in the TrueNAS UI later rewrites authorized_keys and removes the
+    forced-command line. Re-run the setup script (it is idempotent) afterwards.</li>
+</ol>
+</div>
+
+<h3>Security model</h3>
+<p>
+The remote host only ever gets the minimum access it needs, never root, and never a shell:
+<ul>
+    <li><b>Receiver</b> (this Unraid pushes): the user may create and receive datasets under the configured parent
+    (and serve restores back), but cannot delete, list other pools' data, or run anything outside the allowlist.
+    Received data is never mounted on the remote host (<code>mountpoint=none</code>).</li>
+    <li><b>Sender</b> (this Unraid pulls): the user may send snapshots of the configured dataset and nothing more.
+    If the remote host runs OpenZFS 2.4+, sends are restricted to raw streams, so this Unraid cannot read the
+    remote data even if this server is compromised.</li>
+    <li>SSH access is command-restricted (forced command), non-interactive, with no port forwarding and no pty.</li>
+    <li>Backups are always raw encrypted snapshot streams: the remote end cannot read your data.</li>
+</ul>
+Raw encrypted sends require <code>feature@encryption</code> on the destination pool. The "Test connection"
+button on a backup entry probes what it can and tells you what to verify manually.
+</p>
+</div>

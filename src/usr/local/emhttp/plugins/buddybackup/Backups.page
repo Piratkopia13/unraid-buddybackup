@@ -81,6 +81,7 @@ Title="Backup and restore"
     function request_send_backup_preflight(form) {
         var the_uid = form.find("input[name='#section']").val();
         var cmd = '<?=$rc_name?> preflight_send_backup '+the_uid;
+        var dest_type = form.find("select[name='type']").val();
 
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
             .done(function(raw_response) {
@@ -104,7 +105,11 @@ Title="Backup and restore"
                 }
 
                 if (response.status === 'missing_snapshots') {
-                    show_missing_snapshot_actions(form, response.message || 'No snapshots are available yet.');
+                    if (dest_type == 'remote_pull') {
+                        show_send_backup_error(response.message || 'No snapshots are available yet.');
+                    } else {
+                        show_missing_snapshot_actions(form, response.message || 'No snapshots are available yet.');
+                    }
                     return;
                 }
 
@@ -116,9 +121,24 @@ Title="Backup and restore"
     }
     function test_connection(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
-        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
-        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
-        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+        var dest_type = form.find("select[name='type']").val();
+        if (dest_type == "remote_generic") {
+            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+            var remote_user = shell_escape_arg(form.find('input[name="destination_user"]').val() || 'buddybackup');
+            var remote_port = shell_escape_arg(form.find('input[name="destination_port"]').val() || '22');
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'" remote_generic "'+remote_user+'" "'+remote_port+'"', '_(Connection test)_', "Testing connection to "+ip+"..")
+        } else if (dest_type == "remote_pull") {
+            var ip = shell_escape_arg(form.find('input[name="source_host"]').val());
+            var source_dataset = shell_escape_arg(form.find('input[name="source_dataset"]').filter('input.buddybackup-source-text').val());
+            var remote_user = shell_escape_arg(form.find('input[name="source_user"]').val() || 'buddybackup');
+            var remote_port = shell_escape_arg(form.find('input[name="source_port"]').val() || '22');
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+source_dataset+'" remote_pull "'+remote_user+'" "'+remote_port+'"', '_(Connection test)_', "Testing connection to "+ip+"..")
+        } else {
+            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+        }
     }
     function send_backup(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
@@ -127,6 +147,20 @@ Title="Backup and restore"
     function create_snapshot_and_send(btn) {
         var form = $(btn).closest("form.buddybackup-backup-entry");
         start_saved_backup(form, 'create_snapshot_and_send', "\nCreating fresh snapshot and running backup..\n");
+    }
+
+    function set_pull_source(form, pull) {
+        var source_select = form.find('select[name="source_dataset"]');
+        var source_text = form.find('input[name="source_dataset"].buddybackup-source-text');
+        if (pull) {
+            source_select.prop('disabled', true).hide();
+            source_text.prop('disabled', false).show();
+            form.find('.buddybackup-source-dt').text('Remote ZFS dataset to pull:');
+        } else {
+            source_select.prop('disabled', false).show();
+            source_text.prop('disabled', true).hide();
+            form.find('.buddybackup-source-dt').text('ZFS dataset to backup:');
+        }
     }
 
     function backup_input_changed(ctx, on_change = false) {
@@ -139,11 +173,22 @@ Title="Backup and restore"
             form.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled',true).addClass("lock");
         }
         var dest_type = form.find("select[name='type']").val();
-        if (dest_type == "remote") {
+        var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
+        if (dest_type == "remote" || dest_type == "remote_generic") {
             form.find('.buddybackup-type-remote').show();
+            if (dest_type == "remote_generic") {
+                form.find('.buddybackup-type-generic').show();
+                form.find('.buddybackup-note-remote').hide();
+                form.find('.buddybackup-note-generic').show();
+            } else {
+                form.find('.buddybackup-type-generic').hide();
+                form.find('.buddybackup-note-remote').show();
+                form.find('.buddybackup-note-generic').hide();
+            }
+            form.find('.buddybackup-type-pull').hide();
+            form.find('.buddybackup-note-pull').hide();
+            form.find('.buddybackup-type-not-pull').show();
             form.find('input[name="destination_dataset"]').removeAttr('list');
-
-            var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
 
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
@@ -153,14 +198,32 @@ Title="Backup and restore"
                 source_dataset.html($('datalist#local-encrypted-datasets').html());
             }
             source_dataset.val(source_dataset_val);
+            set_pull_source(form, false);
         } else if (dest_type == "local") {
             form.find('.buddybackup-type-remote').hide();
+            form.find('.buddybackup-type-generic').hide();
+            form.find('.buddybackup-type-pull').hide();
+            form.find('.buddybackup-note-remote').hide();
+            form.find('.buddybackup-note-generic').hide();
+            form.find('.buddybackup-note-pull').hide();
+            form.find('.buddybackup-type-not-pull').show();
             form.find('input[name="destination_dataset"]').attr('list', 'local-datasets');
 
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
             source_dataset.html($('datalist#local-datasets').html());
             source_dataset.val(source_dataset_val);
+            set_pull_source(form, false);
+        } else if (dest_type == "remote_pull") {
+            form.find('.buddybackup-type-remote').hide();
+            form.find('.buddybackup-type-generic').hide();
+            form.find('.buddybackup-type-pull').show();
+            form.find('.buddybackup-note-remote').hide();
+            form.find('.buddybackup-note-generic').hide();
+            form.find('.buddybackup-note-pull').show();
+            form.find('.buddybackup-type-not-pull').hide();
+            form.find('input[name="destination_dataset"]').attr('list', 'local-datasets');
+            set_pull_source(form, true);
         }
     }
     $(function() { 
@@ -187,6 +250,15 @@ Title="Backup and restore"
         var dest_type = form.find("select[name='type']").val();
         var saved = form.find("input[name='#saved']").val();
         var abort = false;
+        if (dest_type == "remote_pull") {
+            var source_host = form.find("input[name='source_host']").val();
+            var source_dataset = form.find("input[name='source_dataset'].buddybackup-source-text").val();
+            var destination_dataset = form.find("input[name='destination_dataset']").val();
+            if (!source_host || !source_dataset || !destination_dataset) {
+                swal({title:"_(Missing fields)_", text:"Pull backups need a remote host, a remote source dataset and a local destination dataset.", type:'warning', html:true, showCancelButton:false, confirmButtonText:"_(Ok)_"});
+                return;
+            }
+        }
         if (dest_type == "local" && saved != "true") {
             var destination_dataset = form.find("input[name='destination_dataset']").val();
             var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
@@ -267,12 +339,28 @@ _(Your SSH public key (send this to you buddy))_:
         </tr>
         <tr><td>
         <dl>
-            <dt>_(ZFS dataset to backup)_:</dt>
+            <dt class="buddybackup-source-dt">_(ZFS dataset to backup)_:</dt>
             <dd>
                 <select name="source_dataset" class="align" <?=$disabled?>>
                 <?=datasets($data["source_dataset"], $data['type']!='local' && $cfg["AllowUnencryptedRemoteBackups"]!='yes')?>
                 </select>
+                <input type="text" name="source_dataset" class="align buddybackup-source-text buddybackup-type-pull" style="display:none;" disabled value="<?=$data['source_dataset'];?>" <?=$disabled?>>
             </dd>
+        </dl>
+        <dl class="buddybackup-type-pull" style="display:none;">
+            <dt>_(Remote host to pull from)_:</dt>
+            <dd>
+                <input type="text" name="source_host" class="align" value="<?=$data['source_host'];?>" <?=$disabled?>>
+                <input type="button" value="_(Test connection)_" onclick="test_connection(this)" style="margin:0px;" <?=$disabled?>>
+            </dd>
+        </dl>
+        <dl class="buddybackup-type-pull" style="display:none;">
+            <dt>_(Remote username)_:</dt>
+            <dd><input type="text" name="source_user" class="align" value="<?=$data['source_user'];?>" placeholder="buddybackup" <?=$disabled?>></dd>
+        </dl>
+        <dl class="buddybackup-type-pull" style="display:none;">
+            <dt>_(SSH port)_:</dt>
+            <dd><input type="text" name="source_port" class="align" value="<?=$data['source_port'];?>" placeholder="22" <?=$disabled?>></dd>
         </dl>
         <dl>
             <dt>_(Backup child datasets)_:</dt>
@@ -292,23 +380,35 @@ _(Your SSH public key (send this to you buddy))_:
             <dt>_(Type)_:</dt>
             <dd>
                 <select name="type" class="align" <?=$disabled?>>
-                    <?=mk_option($data['type'], "remote", "_(Remote)_");?>
+                    <?=mk_option($data['type'], "remote", "_(Remote (BuddyBackup))_");?>
+                    <?=mk_option($data['type'], "remote_generic", "_(Remote (generic ZFS host))_");?>
                     <?=mk_option($data['type'], "local", "_(Local)_");?>
+                    <?=mk_option($data['type'], "remote_pull", "_(Pull from generic ZFS host)_");?>
                 </select>
             </dd>
         </dl>
-        <dl class="buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
+        <dl class="buddybackup-type-remote" <?=($data['type']=='local' || $data['type']=='remote_pull')?'style="display:none;"':''?>>
             <dt>_(Buddy's hostname or IP address)_:</dt>
             <dd>
                 <input type="text" name="destination_host" class="align" value="<?=$data['destination_host'];?>" <?=$disabled?>>
                 <input type="button" value="_(Test connection)_" onclick="test_connection(this)" style="margin:0px;" <?=$disabled?>>
             </dd>
         </dl>
+        <dl class="buddybackup-type-generic" style="display:none;">
+            <dt>_(Remote username)_:</dt>
+            <dd><input type="text" name="destination_user" class="align" value="<?=$data['destination_user'];?>" placeholder="buddybackup" <?=$disabled?>></dd>
+        </dl>
+        <dl class="buddybackup-type-generic" style="display:none;">
+            <dt>_(SSH port)_:</dt>
+            <dd><input type="text" name="destination_port" class="align" value="<?=$data['destination_port'];?>" placeholder="22" <?=$disabled?>></dd>
+        </dl>
         <dl>
             <dt>_(Destination dataset)_:</dt>
             <dd>
-                <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
-                <div class="buddybackup-field-note buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</div>
+                <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local' || $data['type']=='remote_pull')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
+                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local' || $data['type']=='remote_pull')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</div>
+                <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">Note: use the parent dataset configured on the generic host (set up on the 'Generic ZFS hosts' page), followed by a child dataset name.</div>
+                <div class="buddybackup-field-note buddybackup-type-pull buddybackup-note-pull" style="display:none;">Note: local dataset that pulled snapshots are stored in.</div>
             </dd>
         </dl>
         </td>
@@ -317,7 +417,7 @@ _(Your SSH public key (send this to you buddy))_:
         <div style="text-align:center;">
             <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
             <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
-            <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
+            <input class="disable-on-unsaved-simple buddybackup-type-not-pull" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
             <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
             <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
         </div>

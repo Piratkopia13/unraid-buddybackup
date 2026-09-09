@@ -41,7 +41,7 @@
         return $ret;
     }
     function get_running_backups_pids() {
-        return get_top_level_pids("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup send*_backup");
+        return get_top_level_pids("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup (send_backup|send_local_backup|pull_backup)");
     }
     function get_running_restore_pids() {
         return get_top_level_pids("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup restore_snapshot");
