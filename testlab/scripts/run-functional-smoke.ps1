@@ -1038,7 +1038,7 @@ try {
         @{ Connection = $receiverConnection; Type = "local"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Uid = $receiverPlan.localBackupUid; Label = "nodeB-local-send"; Action = "send_local_backup" }
     )) {
         $sendArgs = if ($pair.Type -eq "remote") {
-            @($pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            @($pair.Type, $pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
         } else {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationDataset, $pair.Uid)
         }

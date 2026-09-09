@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.05.29">
+  <!ENTITY version      "2026.09.09">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -26,6 +26,14 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.09.09
+- Back up to and pull from any OpenZFS system: TrueNAS SCALE, Proxmox VE and generic Linux hosts, in addition to the classic Unraid-to-Unraid buddy setup
+- New 'Generic ZFS hosts' page generates a one-time restricted setup command for the remote host (forced-command SSH allowlist, minimal zfs allow delegations, mountpoint=none receive parents)
+- New 'Pull from generic ZFS host' backup type: cron-driven pulls with raw encrypted sends and preflight checks for dataset, snapshots and encryption
+- 'Remote (generic ZFS host)' backup type with username and SSH port support and a type-aware connection test
+- Connection test now verifies zfs availability in the remote user's PATH, dataset existence, encryption status, resume support and command restriction
+- Sudo execution mode for TrueNAS SCALE hosts where the zfs binary is not executable by unprivileged users (allowlist stays the fine-grained gate)
 
 ###2026.05.29
 - Add button to create a fresh snapshot and immediately send a backup

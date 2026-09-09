@@ -5,7 +5,9 @@
 <Beta>False</Beta>
 <Category>Backup: Tools:</Category>
 <Name>ZFS Buddy Backup</Name>
+<Overview>BuddyBackup aims to simplify ZFS snapshot replication: back up to a buddy that is also running Unraid, or to any OpenZFS system such as TrueNAS SCALE or Proxmox VE — and pull backups from those hosts too. Raw encrypted snapshot replication keeps your data unreadable to the backup target, and the remote SSH user is restricted to the exact commands replication needs.</Overview>
 <Description>BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.</Description>
+<ExtraSearchTerms>truenas truenas scale proxmox zfs replication offsite backup snapshot encrypted</ExtraSearchTerms>
 <Project>https://github.com/Piratkopia13/unraid-buddybackup</Project>
 <DonateText>Be like open-source — freely give... to me!</DonateText>
 <DonateLink>https://www.paypal.com/paypalme/piratdev</DonateLink>

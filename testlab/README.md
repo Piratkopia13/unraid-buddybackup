@@ -156,6 +156,7 @@ This initial implementation provides:
 - `backup-smoke`: delegates to the functional smoke workflow and reports whether the backup-oriented actions succeeded.
 - `restore-smoke`: also delegates to the functional smoke workflow and reports whether the restore-oriented actions succeeded. If `backup-smoke` already ran in the same cell, the runner reuses the cached functional smoke result instead of re-running the full smoke workflow.
 - `run-functional-smoke.ps1`: can also be run directly against a live provisioned lab. It validates connectivity on both nodes, creates source snapshots on both nodes, runs remote and local backup flows on both nodes, lists available snapshots, restores selected snapshots, and verifies the restored datasets.
+- `run-generic-smoke.ps1`: standalone push/pull smoke against a generic OpenZFS host (Debian-based, same path as Proxmox). It prepares a source dataset and snapshot on the generic node, runs `generic_host_setup.sh` in both roles plus its `--verify` checklist, seeds `remote_generic` and `remote_pull` entries on nodeA, runs both connection tests, pushes and pulls real syncoid flows through the allowlists, verifies the pushed and pulled datasets, lists snapshots through the remote_generic path, and restores a pushed snapshot back to nodeA.
 
 ## Default matrix
 
@@ -198,6 +199,14 @@ This initial implementation provides:
 - The active install source is written on the guest to `/boot/config/plugins/buddybackup/testlab-plugin-source.json`. Matrix artifact collection captures that file as `plugin-source.txt` so release and workspace-build provenance can be reviewed after a run.
 - `workspace-build` is intended for release-candidate validation. Because the current display version in `buddybackup.plg` can still match the last published release, use the recorded commit SHA and plugin-source metadata to distinguish a workspace candidate from a published tag.
 - Any other plugin string such as `2026.05.02` is treated as a published release tag and installed from `lab.plugin.plgUrlTemplate`.
+
+## Generic node and TrueNAS SCALE coverage
+
+- The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created, then run the generic smoke directly:
+  - Dry-run: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json`
+  - Execute: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+- The generic smoke reaches nodeC from nodeA through the same host-gateway DNAT pattern the functional smoke uses, so the Unraid backup entries connect to `setup.functionalTests.nodeCAliasIp` on port 22.
+- TrueNAS SCALE is validated manually; `testlab/MANUAL-SCALE-CHECKLIST.md` documents the full setup, push and pull smoke, negative checks and pass criteria.
 
 ## Backup direction coverage
 
