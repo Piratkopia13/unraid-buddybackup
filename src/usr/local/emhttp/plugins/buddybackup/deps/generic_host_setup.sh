@@ -32,6 +32,12 @@ Optional:
   --sudo-mode auto|yes|no   allow validated commands to run via sudo where the
                             zfs binary is not executable by the user
                             (default: auto)
+  --allowlist-dir PATH      directory for the forced-command allowlist script
+                            (default: /usr/local/sbin; on TrueNAS SCALE, which
+                            has a read-only and non-persistent root filesystem,
+                            a hidden root-owned .buddybackup directory on the
+                            dataset's pool; must be root-owned and not writable
+                            by the SSH user)
   --verify                  only run the verification checklist
   --dry-run                 print what would be done, change nothing
   -h|--help                 this help
@@ -56,6 +62,7 @@ DATASET=""
 PUBKEY=""
 PORT="22"
 SUDO_MODE="auto"
+ALLOWLIST_DIR_ARG=""
 VERIFY_ONLY=0
 DRY_RUN=0
 
@@ -63,7 +70,7 @@ ERRORS=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --role|--user|--dataset|--pubkey|--port|--sudo-mode)
+        --role|--user|--dataset|--pubkey|--port|--sudo-mode|--allowlist-dir)
             # Guard: shift 2 with only one argument left would silently keep $1,
             # looping forever on the same option.
             if [ $# -lt 2 ]; then
@@ -79,6 +86,14 @@ while [ $# -gt 0 ]; do
         --pubkey) PUBKEY="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --sudo-mode) SUDO_MODE="$2"; shift 2 ;;
+        --allowlist-dir)
+            if [ -z "$2" ]; then
+                fail "--allowlist-dir requires a non-empty value"
+                exit 1
+            fi
+            ALLOWLIST_DIR_ARG="$2"
+            shift 2
+            ;;
         --verify) VERIFY_ONLY=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -138,7 +153,43 @@ if [ -f /etc/version ] && grep -qi truenas /etc/version 2>/dev/null; then
     IS_SCALE=1
 fi
 
-ALLOWLIST_DIR="/usr/local/sbin"
+# Directory that receives the forced-command allowlist script. Constraints:
+# root-writable, persistent across reboots, and NOT writable by the restricted
+# SSH user - a user-writable forced-command target could be replaced with an
+# unrestricted script, voiding the entire SSH lockdown.
+# /usr/local/sbin fits generic hosts (Proxmox, Debian, Ubuntu). TrueNAS SCALE
+# 24.04+ mounts its root filesystem read-only, so /usr/local/sbin cannot be
+# written and would not survive a reboot anyway; there the allowlist is placed
+# in a hidden root-owned .buddybackup directory on the pool that --dataset
+# lives on (data pools are the persistent storage TrueNAS provides).
+truenas_allowlist_dir() {
+    local pool="${DATASET%%/*}"
+    local mp
+    mp=$(zfs get -H -o value mountpoint "$pool" 2>/dev/null | tr -d '\n')
+    case "$mp" in
+        /*) ;;
+        # none, legacy, or zfs unavailable (dry-run without root): fall back to
+        # the canonical pool mountpoint; a later failure points at the override.
+        *) mp="/mnt/${pool}" ;;
+    esac
+    printf '%s' "${mp}/.buddybackup"
+}
+
+if [ -n "$ALLOWLIST_DIR_ARG" ]; then
+    ALLOWLIST_DIR="$ALLOWLIST_DIR_ARG"
+elif [ "$IS_SCALE" -eq 1 ]; then
+    ALLOWLIST_DIR=$(truenas_allowlist_dir)
+else
+    ALLOWLIST_DIR="/usr/local/sbin"
+fi
+# ALLOWLIST_PATH is embedded verbatim inside a double-quoted sshd forced-command
+# option, so characters that would terminate or escape that quoting (quotes,
+# backslashes, whitespace, shell metacharacters) must never reach it.
+ALLOWLIST_PATH_RE='^/[A-Za-z0-9_@+=.,:/-]+$'
+if ! printf '%s' "$ALLOWLIST_DIR" | grep -Eq "$ALLOWLIST_PATH_RE"; then
+    fail "--allowlist-dir must be an absolute path using only letters, digits, '_', '-', '/', '.', '@', '+', '=', ',' and ':'"
+    exit 1
+fi
 if [ "$ROLE" = "receiver" ]; then
     ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs"
 else
@@ -175,17 +226,70 @@ user_can_exec_zfs() {
     fi
 }
 
+# Runs `test <op> <path>` as the restricted user (access(2)-style check, so ACLs
+# are caught too). Used to confirm the SSH user can traverse/execute the
+# allowlist but can never rewrite it; a missing user simply yields "no".
+user_path_test() {
+    local op="$1"
+    local path="$2"
+    # Guard for the command-string fallback: every current caller passes a
+    # path validated by ALLOWLIST_PATH_RE, and these characters are inert
+    # inside single quotes. Anything else must not reach the shell below.
+    if [ -z "$path" ] || printf '%s' "$path" | grep -Eq '[^A-Za-z0-9_@+=.,:/-]' || printf '%s' "$op" | grep -Eq '[^-wx]'; then
+        return 2
+    fi
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$USER_NAME" -- test "$op" "$path" 2>/dev/null
+    else
+        su -s /bin/sh "$USER_NAME" -c "test '$op' '$path'" 2>/dev/null
+    fi
+}
+
 install_allowlist() {
     log "Installing command allowlist to ${ALLOWLIST_PATH}"
     if [ "$DRY_RUN" -eq 1 ]; then
         log "[dry-run] would install allowlist script ${ALLOWLIST_PATH}"
         return 0
     fi
-    if [ ! -d "${ALLOWLIST_DIR}" ]; then
-        if ! mkdir -p "${ALLOWLIST_DIR}"; then
-            fail "Could not create ${ALLOWLIST_DIR}"
+    local allowlist_parent
+    allowlist_parent=$(dirname "${ALLOWLIST_DIR}")
+    if [ -d "${ALLOWLIST_DIR}" ]; then
+        # Pre-existing directory: never silently take ownership. It must already
+        # be root-owned and closed to the SSH user, otherwise the forced command
+        # could be replaced by the very user it restricts.
+        if [ "$(stat -c %u "${ALLOWLIST_DIR}" 2>/dev/null)" != "0" ]; then
+            fail "${ALLOWLIST_DIR} must be owned by root so ${USER_NAME} cannot replace the forced-command script (chown it to root with mode 0755, or choose another location with --allowlist-dir)"
             return 1
         fi
+        if user_path_test -w "${ALLOWLIST_DIR}"; then
+            fail "${ALLOWLIST_DIR} is writable by ${USER_NAME}; the forced-command script could be replaced with an unrestricted one (make the directory root-owned 0755, or choose another location with --allowlist-dir)"
+            return 1
+        fi
+    else
+        if ! mkdir -p "${ALLOWLIST_DIR}"; then
+            fail "Could not create ${ALLOWLIST_DIR}"
+            if [ "$IS_SCALE" -eq 1 ]; then
+                log "TrueNAS SCALE mounts its root filesystem read-only: system paths such as"
+                log "/usr/local/sbin cannot be written and do not survive reboots. Point"
+                log "--allowlist-dir at a persistent, root-owned directory on a data pool,"
+                log "for example: --allowlist-dir /mnt/<pool>/.buddybackup"
+            fi
+            return 1
+        fi
+        if ! chown 0:0 "${ALLOWLIST_DIR}"; then
+            fail "Could not enforce root ownership on ${ALLOWLIST_DIR}"
+            return 1
+        fi
+        if ! chmod 755 "${ALLOWLIST_DIR}"; then
+            fail "Could not set 0755 on ${ALLOWLIST_DIR}"
+            return 1
+        fi
+    fi
+    # Even with the directory itself locked down, a user-writable parent would
+    # let the user remove it and plant a replacement in its place.
+    if user_path_test -w "${allowlist_parent}"; then
+        fail "${allowlist_parent} is writable by ${USER_NAME}; the allowlist directory could be removed and replaced (make it root-owned 0755, or choose another location with --allowlist-dir)"
+        return 1
     fi
     # Write to a temp file in the same directory and rename atomically, so the
     # forced-command target never exists as a partially written file.
@@ -415,6 +519,7 @@ BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF
         rm -f "${tmp_file}"
         return 1
     fi
+    chown 0:0 "${ALLOWLIST_PATH}" >/dev/null 2>&1 || true
 }
 
 set_sudo_flag() {
@@ -769,6 +874,21 @@ verify() {
         else
             check_fail "allowlist script is not executable"
         fi
+        if [ "$(stat -c %u "${ALLOWLIST_PATH}" 2>/dev/null)" = "0" ] && ! user_path_test -w "${ALLOWLIST_PATH}"; then
+            check_pass "allowlist script is root-owned and not writable by ${USER_NAME}"
+        else
+            check_fail "allowlist script is writable by ${USER_NAME}; the forced command could be replaced with an unrestricted script (re-run this script)"
+        fi
+        if user_path_test -x "${ALLOWLIST_PATH}"; then
+            check_pass "allowlist script is executable by ${USER_NAME}"
+        else
+            check_fail "allowlist script is not executable by ${USER_NAME} (check ownership and permissions of ${ALLOWLIST_DIR})"
+        fi
+        local allowlist_parent
+        allowlist_parent=$(dirname "${ALLOWLIST_DIR}")
+        if user_path_test -w "${ALLOWLIST_DIR}" || user_path_test -w "${allowlist_parent}"; then
+            check_fail "allowlist location is writable by ${USER_NAME}; the forced-command script could be removed or replaced (make ${ALLOWLIST_DIR} and ${allowlist_parent} root-owned 0755, or re-run this script)"
+        fi
     else
         check_fail "allowlist script missing at ${ALLOWLIST_PATH}"
     fi
@@ -970,6 +1090,9 @@ if [ "$IS_SCALE" -eq 1 ]; then
     log "TrueNAS reminders:"
     log "  - Editing the user's SSH keys in the UI rewrites authorized_keys and removes the"
     log "    forced-command line. Re-run this script (or --verify) afterwards."
+    log "  - The forced-command allowlist lives at ${ALLOWLIST_PATH} (root-owned;"
+    log "    TrueNAS system dirs are read-only). Deleting or moving it breaks SSH"
+    log "    access for ${USER_NAME}."
     log "  - Raw encrypted receives require feature@encryption on the destination pool."
 fi
 

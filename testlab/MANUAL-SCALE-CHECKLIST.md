@@ -7,7 +7,7 @@ generic ZFS host support.
 
 Prerequisites for the checklist host:
 
-- TrueNAS SCALE 24.04 (Electric Eel) or newer with a pool that has `feature@encryption` enabled.
+- TrueNAS SCALE 24.04 (Dragonfish) or newer with a pool that has `feature@encryption` enabled.
 - A Unraid server running the BuddyBackup plugin version under test.
 
 ## Setup
@@ -18,6 +18,11 @@ Prerequisites for the checklist host:
 4. On TrueNAS (shell as root, e.g. web shell + `sudo -i`):
    - Run the setup command (or download the script, review it, then run it).
    - Confirm it prints the SCALE-specific blocks (sudo values + SSH Auxiliary Parameters).
+   - Confirm the allowlist was installed on persistent storage: TrueNAS 24.04+ mounts its
+     root filesystem read-only, so the script places the allowlist in a hidden root-owned
+     `.buddybackup` directory on the dataset's pool (e.g. `/mnt/<pool>/.buddybackup/`), or
+     wherever `--allowlist-dir` pointed. Confirm the script prints that path and that the
+     directory is root-owned 0755.
 5. In the TrueNAS UI:
    - System Settings → Services → SSH: enable, set the TCP port used above.
    - Credentials → Users: create the user (no password login, shell `/usr/bin/bash`), paste
@@ -81,6 +86,8 @@ Prerequisites for the checklist host:
    - `ssh -i <key> buddybackup@localhost "echo ok && ls"` → no output from `ls` (blocked).
    - `ssh -i <key> buddybackup@localhost "zfs destroy <received dataset>"` → blocked.
    - `ssh -i <key> buddybackup@localhost "sudo -i"` → blocked (no tty, not allowlisted).
+   - Writing to the allowlist location fails: `touch /mnt/<pool>/.buddybackup/test` →
+     permission denied (the user must never be able to replace the forced-command script).
 2. On Unraid with `AllowUnencryptedRemoteBackups=no`: a pull from an unencrypted dataset
    aborts with "is not encrypted!".
 
