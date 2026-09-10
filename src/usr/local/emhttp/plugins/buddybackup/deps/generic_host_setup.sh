@@ -13,17 +13,34 @@ so an Unraid server running the BuddyBackup plugin can push backups to this host
 (role receiver) or pull backups from this host (role sender).
 
 Run as root on the remote host. Idempotent: safe to re-run (e.g. after editing SSH
-keys in the TrueNAS UI). Self-verifying: finishes with a PASS/FAIL checklist, and
---verify runs only the checks.
+keys in the TrueNAS UI). --dataset may be repeated; every run converges the zfs
+allow grants it manages: datasets no longer requested (or whose role changed)
+are revoked. Grants are tracked in a root-owned state file next to the allowlist.
+Self-verifying: finishes with a PASS/FAIL checklist, and --verify runs only the
+checks.
 
-Required:
+Setup (creates/updates the restricted user, allowlist and delegations):
   --role receiver|sender    receiver: this Unraid pushes backups to this host.
                             sender:   this Unraid pulls backups from this host.
-  --dataset NAME            receiver: parent dataset backups are received into
-                            (created with mountpoint=none if missing; an existing
-                            dataset is only accepted if nothing below it is mounted).
+  --dataset NAME            repeatable. receiver: parent dataset backups are
+                            received into (created with mountpoint=none if
+                            missing; an existing dataset is only accepted if
+                            nothing below it is mounted).
                             sender:   dataset (or parent of datasets) to serve.
   --pubkey KEY              Unraid's SSH public key (single line).
+
+Revocation and uninstall:
+  --revoke NAME             revoke all zfs delegations for the user on NAME and
+                            drop it from the tracked grant set. Can be combined
+                            with a normal setup run, or used alone to only
+                            revoke.
+  --clean                   full uninstall for this user: revoke every tracked
+                            (and discovered) zfs delegation, remove the
+                            allowlist script(s), sudo flag files, sudoers entry,
+                            sshd drop-in and the forced-command line from
+                            authorized_keys. Never touches datasets or data.
+  --delete-user             with --clean only: also delete the user account
+                            (TrueNAS: printed as UI instructions).
 
 Optional:
   --user NAME               SSH user to create/use (default: buddybackup; must be
@@ -59,6 +76,10 @@ ROLE=""
 USER_NAME=""
 USER_ARG=""
 DATASET=""
+DATASET_LIST=()
+REVOKE_LIST=()
+DO_CLEAN=0
+DELETE_USER=0
 PUBKEY=""
 PORT="22"
 SUDO_MODE="auto"
@@ -70,7 +91,7 @@ ERRORS=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --role|--user|--dataset|--pubkey|--port|--sudo-mode|--allowlist-dir)
+        --role|--user|--dataset|--revoke|--pubkey|--port|--sudo-mode|--allowlist-dir)
             # Guard: shift 2 with only one argument left would silently keep $1,
             # looping forever on the same option.
             if [ $# -lt 2 ]; then
@@ -82,10 +103,13 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --role) ROLE="$2"; shift 2 ;;
         --user) USER_ARG="$2"; shift 2 ;;
-        --dataset) DATASET="$2"; shift 2 ;;
+        --dataset) DATASET_LIST+=("$2"); shift 2 ;;
+        --revoke) REVOKE_LIST+=("$2"); shift 2 ;;
         --pubkey) PUBKEY="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --sudo-mode) SUDO_MODE="$2"; shift 2 ;;
+        --clean) DO_CLEAN=1; shift ;;
+        --delete-user) DELETE_USER=1; shift ;;
         --allowlist-dir)
             if [ -z "$2" ]; then
                 fail "--allowlist-dir requires a non-empty value"
@@ -101,7 +125,25 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$ROLE" ] || { [ "$ROLE" != "receiver" ] && [ "$ROLE" != "sender" ]; }; then
+MODE="setup"
+if [ "$DO_CLEAN" -eq 1 ]; then
+    MODE="clean"
+elif [ "${#REVOKE_LIST[@]}" -gt 0 ] && [ "${#DATASET_LIST[@]}" -eq 0 ]; then
+    MODE="revoke"
+fi
+if [ "$DO_CLEAN" -eq 1 ] && { [ "${#REVOKE_LIST[@]}" -gt 0 ] || [ "${#DATASET_LIST[@]}" -gt 0 ]; }; then
+    fail "--clean cannot be combined with --dataset or --revoke"
+    exit 1
+fi
+if [ "$DELETE_USER" -eq 1 ] && [ "$DO_CLEAN" -eq 0 ]; then
+    fail "--delete-user requires --clean"
+    exit 1
+fi
+if [ "$VERIFY_ONLY" -eq 1 ] && { [ "$DO_CLEAN" -eq 1 ] || [ "${#REVOKE_LIST[@]}" -gt 0 ]; }; then
+    fail "--verify cannot be combined with --clean or --revoke"
+    exit 1
+fi
+if [ "$MODE" = "setup" ] && { [ -z "$ROLE" ] || { [ "$ROLE" != "receiver" ] && [ "$ROLE" != "sender" ]; }; }; then
     fail "--role must be 'receiver' or 'sender'"
     usage >&2
     exit 1
@@ -119,10 +161,28 @@ USER_ARG="${USER_ARG:-buddybackup}"
 USER_NAME="$USER_ARG"
 
 DATASET_RE='^[A-Za-z0-9_][A-Za-z0-9_ /-]*(/[A-Za-z0-9_][A-Za-z0-9_ /-]*)*$'
-if ! printf '%s' "$DATASET" | grep -Eq "$DATASET_RE" || printf '%s' "$DATASET" | grep -qE '(//|/$)'; then
-    fail "--dataset '$DATASET' is not a valid ZFS dataset name (characters allowed: letters, digits, '_', ' ', '-', '/'; no '@' or double slashes)"
-    exit 1
+candidate=""
+for candidate in "${DATASET_LIST[@]}" "${REVOKE_LIST[@]}"; do
+    if ! printf '%s' "$candidate" | grep -Eq "$DATASET_RE" || printf '%s' "$candidate" | grep -qE '(//|/$)'; then
+        fail "Dataset name '$candidate' is not a valid ZFS dataset name (characters allowed: letters, digits, '_', ' ', '-', '/'; no '@' or double slashes)"
+        exit 1
+    fi
+done
+if [ "$MODE" = "setup" ] || [ "$VERIFY_ONLY" -eq 1 ]; then
+    if [ "${#DATASET_LIST[@]}" -eq 0 ]; then
+        fail "--dataset is required (repeat the option for more than one dataset)"
+        exit 1
+    fi
+    for candidate in "${DATASET_LIST[@]}"; do
+        for revoked in "${REVOKE_LIST[@]}"; do
+            if [ "$candidate" = "$revoked" ]; then
+                fail "Dataset '$candidate' is named by both --dataset and --revoke; use one or the other"
+                exit 1
+            fi
+        done
+    done
 fi
+DATASET="${DATASET_LIST[0]:-}"
 
 if ! [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]{0,31}\$?$ ]]; then
     fail "--user '$USER_NAME' is not a valid POSIX user name"
@@ -182,23 +242,29 @@ truenas_allowlist_dir() {
 
 if [ -n "$ALLOWLIST_DIR_ARG" ]; then
     ALLOWLIST_DIR="$ALLOWLIST_DIR_ARG"
-elif [ "$IS_SCALE" -eq 1 ]; then
+elif [ "$IS_SCALE" -eq 1 ] && [ -n "$DATASET" ]; then
     ALLOWLIST_DIR=$(truenas_allowlist_dir)
+elif [ "$IS_SCALE" -eq 1 ]; then
+    # clean/revoke without a dataset: relevant directories are found by scanning
+    # the pool roots (collect_buddybackup_dirs), not derived here.
+    ALLOWLIST_DIR=""
 else
     ALLOWLIST_DIR="/usr/local/sbin"
 fi
 # ALLOWLIST_PATH is embedded verbatim inside a double-quoted sshd forced-command
 # option, so characters that would terminate or escape that quoting (quotes,
 # backslashes, whitespace, shell metacharacters) must never reach it.
-ALLOWLIST_PATH_RE='^/[A-Za-z0-9_@+=.,:/-]+$'
-if ! printf '%s' "$ALLOWLIST_DIR" | grep -Eq "$ALLOWLIST_PATH_RE"; then
-    fail "--allowlist-dir must be an absolute path using only letters, digits, '_', '-', '/', '.', '@', '+', '=', ',' and ':'"
-    exit 1
-fi
-if [ "$ROLE" = "receiver" ]; then
-    ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs"
-else
-    ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs_send"
+if [ -n "$ALLOWLIST_DIR" ]; then
+    ALLOWLIST_PATH_RE='^/[A-Za-z0-9_@+=.,:/-]+$'
+    if ! printf '%s' "$ALLOWLIST_DIR" | grep -Eq "$ALLOWLIST_PATH_RE"; then
+        fail "--allowlist-dir must be an absolute path using only letters, digits, '_', '-', '/', '.', '@', '+', '=', ',' and ':'"
+        exit 1
+    fi
+    if [ "$ROLE" = "receiver" ]; then
+        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs"
+    else
+        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs_send"
+    fi
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -206,18 +272,22 @@ if [ "$DRY_RUN" -eq 0 ]; then
         fail "This script must run as root (try: sudo -i). Use --dry-run to preview without root."
         exit 1
     fi
-    if ! command -v zfs >/dev/null 2>&1; then
-        fail "zfs binary not found for root. This host does not have OpenZFS?"
-        exit 1
+    if [ "$MODE" != "clean" ]; then
+        if ! command -v zfs >/dev/null 2>&1; then
+            fail "zfs binary not found for root. This host does not have OpenZFS?"
+            exit 1
+        fi
     fi
-    if ! command -v sshd >/dev/null 2>&1 && ! [ -x /usr/sbin/sshd ]; then
-        fail "sshd not found. An SSH server must be installed."
-        exit 1
+    if [ "$MODE" = "setup" ] || [ "$VERIFY_ONLY" -eq 1 ]; then
+        if ! command -v sshd >/dev/null 2>&1 && ! [ -x /usr/sbin/sshd ]; then
+            fail "sshd not found. An SSH server must be installed."
+            exit 1
+        fi
     fi
 fi
 
 zfs_quiet() { zfs "$@" >/dev/null 2>&1; }
-zfs_prop() { zfs get -H -o value "$1" "$DATASET" 2>/dev/null | tr -d '\n'; }
+zfs_prop() { zfs get -H -o value "$2" "$1" 2>/dev/null | tr -d '\n'; }
 
 user_home() {
     getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6
@@ -638,19 +708,21 @@ create_user() {
 }
 
 apply_zfs_allow() {
+    local perms="$1"
+    local ds="$2"
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "[dry-run] would run: zfs allow -u ${USER_NAME} $1 ${DATASET}"
+        log "[dry-run] would run: zfs allow -u ${USER_NAME} ${perms} ${ds}"
         return 0
     fi
-    local perms="$1"
-    if ! zfs allow -u "$USER_NAME" "$perms" "$DATASET"; then
-        fail "zfs allow -u ${USER_NAME} ${perms} ${DATASET} failed"
+    if ! zfs allow -u "$USER_NAME" "$perms" "$ds"; then
+        fail "zfs allow -u ${USER_NAME} ${perms} ${ds} failed"
         return 1
     fi
 }
 
 has_plain_send_grant() {
-    zfs allow "$DATASET" 2>/dev/null | awk -v u="$USER_NAME" '
+    local ds="$1"
+    zfs allow "$ds" 2>/dev/null | awk -v u="$USER_NAME" '
         $1 == "user" && $2 == u {
             n = split($3, perms, ",")
             for (i = 1; i <= n; i++) {
@@ -665,56 +737,58 @@ has_plain_send_grant() {
 # encrypted dataset. Any pre-existing plain 'send' grant is removed afterwards,
 # because with both grants present the raw-only guarantee would be void.
 apply_zfs_allow_send() {
+    local ds="$1"
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "[dry-run] would try: zfs allow -u ${USER_NAME} send:raw ${DATASET} (raw-only, OpenZFS 2.4+)"
-        log "[dry-run]          and remove any plain 'send' grant: zfs unallow -u ${USER_NAME} send ${DATASET}"
-        log "[dry-run]          fallback on older OpenZFS: zfs allow -u ${USER_NAME} send ${DATASET}"
+        log "[dry-run] would try: zfs allow -u ${USER_NAME} send:raw ${ds} (raw-only, OpenZFS 2.4+)"
+        log "[dry-run]          and remove any plain 'send' grant: zfs unallow -u ${USER_NAME} send ${ds}"
+        log "[dry-run]          fallback on older OpenZFS: zfs allow -u ${USER_NAME} send ${ds}"
         return 0
     fi
-    if zfs allow -u "$USER_NAME" "send:raw" "$DATASET" 2>/dev/null; then
+    if zfs allow -u "$USER_NAME" "send:raw" "$ds" 2>/dev/null; then
         log "Raw-only send delegation (send:raw, OpenZFS 2.4+): enabled"
-        if has_plain_send_grant; then
-            if zfs unallow -u "$USER_NAME" "send" "$DATASET" 2>/dev/null; then
+        if has_plain_send_grant "$ds"; then
+            if zfs unallow -u "$USER_NAME" "send" "$ds" 2>/dev/null; then
                 log "Removed plain 'send' delegation so only raw sends remain possible"
             else
                 warn "Could not remove the plain 'send' delegation; raw-only is NOT enforced."
-                warn "Remove it manually: zfs unallow -u ${USER_NAME} send ${DATASET}"
+                warn "Remove it manually: zfs unallow -u ${USER_NAME} send ${ds}"
             fi
         fi
         return 0
     fi
     if [ "$ROLE" = "sender" ]; then
         warn "send:raw delegation not supported by this OpenZFS version (< 2.4); falling back to plain 'send'."
-        warn "With plain 'send', a compromised Unraid server could request DECRYPTED streams of ${DATASET}."
+        warn "With plain 'send', a compromised Unraid server could request DECRYPTED streams of ${ds}."
         warn "Upgrade this host to OpenZFS 2.4+ and re-run this script to enforce raw-only sends."
     else
         log "send:raw delegation not supported by this ZFS version; plain 'send' covers raw streams"
     fi
-    if ! zfs allow -u "$USER_NAME" "send" "$DATASET"; then
-        fail "zfs allow -u ${USER_NAME} send ${DATASET} failed"
+    if ! zfs allow -u "$USER_NAME" "send" "$ds"; then
+        fail "zfs allow -u ${USER_NAME} send ${ds} failed"
         return 1
     fi
 }
 
 ensure_receiver_dataset() {
+    local ds="$1"
     if [ "$DRY_RUN" -eq 1 ]; then
-        if zfs_prop "name" >/dev/null 2>&1; then
-            log "[dry-run] dataset ${DATASET} exists; would ensure mountpoint=none (or legacy)"
+        if zfs_prop "$ds" "name" >/dev/null 2>&1; then
+            log "[dry-run] dataset ${ds} exists; would ensure mountpoint=none (or legacy)"
         else
-            log "[dry-run] would create parent dataset ${DATASET} with mountpoint=none"
+            log "[dry-run] would create parent dataset ${ds} with mountpoint=none"
         fi
         return 0
     fi
-    if ! zfs_prop "name" >/dev/null 2>&1; then
-        log "Creating parent dataset ${DATASET} with mountpoint=none"
-        if ! zfs create -p -o mountpoint=none "$DATASET"; then
-            fail "Could not create dataset ${DATASET}"
+    if ! zfs_prop "$ds" "name" >/dev/null 2>&1; then
+        log "Creating parent dataset ${ds} with mountpoint=none"
+        if ! zfs create -p -o mountpoint=none "$ds"; then
+            fail "Could not create dataset ${ds}"
             return 1
         fi
         return 0
     fi
     local mp
-    mp=$(zfs_prop "mountpoint" || echo "")
+    mp=$(zfs_prop "$ds" "mountpoint" || echo "")
     case "$mp" in
         none|legacy)
             ;;
@@ -725,21 +799,436 @@ ensure_receiver_dataset() {
             # (grep without -q consumes all input: no SIGPIPE/pipefail pitfalls
             # on large dataset trees.)
             local mounted_yes
-            mounted_yes=$(zfs list -r -H -o mounted "$DATASET" 2>/dev/null | grep -x "yes" || true)
+            mounted_yes=$(zfs list -r -H -o mounted "$ds" 2>/dev/null | grep -x "yes" || true)
             if [ -n "$mounted_yes" ]; then
-                fail "Dataset ${DATASET} or a dataset below it is currently MOUNTED (mountpoint '${mp}')."
+                fail "Dataset ${ds} or a dataset below it is currently MOUNTED (mountpoint '${mp}')."
                 log "Refusing to set mountpoint=none on mounted data, as that would unmount it while in use."
                 log "Pick a dataset path that does not exist yet (this script creates it with mountpoint=none),"
                 log "or unmount the dataset and its children yourself first and re-run."
                 return 1
             fi
-            log "Setting mountpoint=none on ${DATASET} (was: '${mp}', nothing mounted). Received backups must never mount on this host - Linux cannot mount as a non-root user, and receive fails if mount is attempted."
-            if ! zfs set mountpoint=none "$DATASET"; then
-                fail "Could not set mountpoint=none on ${DATASET}"
+            log "Setting mountpoint=none on ${ds} (was: '${mp}', nothing mounted). Received backups must never mount on this host - Linux cannot mount as a non-root user, and receive fails if mount is attempted."
+            if ! zfs set mountpoint=none "$ds"; then
+                fail "Could not set mountpoint=none on ${ds}"
                 return 1
             fi
             ;;
     esac
+}
+
+# --- grant tracking, revocation and uninstall ---------------------------------
+# Every setup run records the datasets it granted (one "<dataset><TAB><role>"
+# line each) in a root-owned state file next to the allowlist. Later runs use
+# it to converge: datasets no longer requested, or whose role changed, are
+# revoked. --revoke removes single datasets; --clean uninstalls everything.
+
+state_file_name() {
+    printf 'buddybackup-%s-zfs-grants.txt' "$USER_NAME"
+}
+
+state_file_path() {
+    printf '%s/%s' "$ALLOWLIST_DIR" "$(state_file_name)"
+}
+
+# Prints validated "<ds><TAB><role>" lines from a state file; corrupt or
+# foreign lines are skipped rather than trusted.
+read_tracked_grants() {
+    local f="$1"
+    [ -n "$f" ] && [ -f "$f" ] || return 0
+    local ds role
+    while IFS=$'\t' read -r ds role || [ -n "$ds" ]; do
+        [ -n "$ds" ] || continue
+        case "$ds" in '#'*) continue ;; esac
+        if printf '%s' "$ds" | grep -Eq "$DATASET_RE" && ! printf '%s' "$ds" | grep -qE '(//|/$)'; then
+            printf '%s\t%s\n' "$ds" "$role"
+        fi
+    done < "$f"
+}
+
+write_tracked_grants() {
+    local f="$1"
+    local entries="$2"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would record granted datasets in ${f}"
+        return 0
+    fi
+    if [ -z "$ALLOWLIST_DIR" ] || [ ! -d "$ALLOWLIST_DIR" ]; then
+        warn "Could not record grant state: ${ALLOWLIST_DIR:-no allowlist directory} is not available"
+        return 1
+    fi
+    if user_path_test -w "$ALLOWLIST_DIR"; then
+        warn "Grant state not recorded: ${ALLOWLIST_DIR} is writable by ${USER_NAME}"
+        return 1
+    fi
+    local tmp_file
+    tmp_file=$(mktemp "${ALLOWLIST_DIR}/.buddybackup-grants.XXXXXX") || { warn "Could not create a grant state temp file in ${ALLOWLIST_DIR}"; return 1; }
+    printf '%s\n' "$entries" > "${tmp_file}" || { warn "Could not write grant state"; rm -f "${tmp_file}"; return 1; }
+    if ! mv -f "${tmp_file}" "$f"; then
+        warn "Could not install grant state file ${f}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    chmod 644 "$f" 2>/dev/null || true
+    log "Grant state recorded in ${f}"
+}
+
+# Directories (root-owned) that contain BuddyBackup state or allowlist files:
+# the resolved one, the generic default, and every pool root's .buddybackup
+# dir - catches stranded files after the allowlist location changed.
+collect_buddybackup_dirs() {
+    local d mp seen=""
+    for d in "$ALLOWLIST_DIR" "/usr/local/sbin"; do
+        [ -n "$d" ] || continue
+        [ -d "$d" ] || continue
+        if ls "${d}/buddybackup-restrict_zfs"* >/dev/null 2>&1 || [ -f "${d}/$(state_file_name)" ]; then
+            case "$seen" in *"|${d}|"*) ;; *) seen="${seen}|${d}|"; printf '%s\n' "$d" ;; esac
+        fi
+    done
+    if command -v zfs >/dev/null 2>&1; then
+        while IFS= read -r mp; do
+            case "$mp" in
+                /*)
+                    d="${mp}/.buddybackup"
+                    if [ -d "$d" ] && ls "${d}/buddybackup-"* >/dev/null 2>&1; then
+                        case "$seen" in *"|${d}|"*) ;; *) seen="${seen}|${d}|"; printf '%s\n' "$d" ;; esac
+                    fi
+                    ;;
+            esac
+        done < <(zfs list -H -o mountpoint -d 1 -t filesystem 2>/dev/null)
+    fi
+}
+
+# Every dataset whose zfs allow output names this user (used by --clean to
+# catch delegations made outside recorded state, e.g. by older script versions
+# or manually).
+discover_user_delegations() {
+    local ds
+    while IFS= read -r ds; do
+        [ -n "$ds" ] || continue
+        if zfs allow "$ds" 2>/dev/null | grep -Eq "user ${USER_NAME}( |\$)"; then
+            printf '%s\n' "$ds"
+        fi
+    done < <(zfs list -H -o name -t filesystem,volume 2>/dev/null)
+}
+
+# Revokes ALL zfs delegations the user holds on one dataset. Tolerates datasets
+# that never had a delegation or no longer exist.
+revoke_dataset_grants() {
+    local ds="$1"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would run: zfs unallow -u ${USER_NAME} ${ds}"
+        return 0
+    fi
+    if ! zfs allow "$ds" 2>/dev/null | grep -Eq "user ${USER_NAME}( |\$)"; then
+        log "No zfs delegation for ${USER_NAME} on ${ds}; nothing to revoke"
+        return 0
+    fi
+    if zfs unallow -u "$USER_NAME" "$ds"; then
+        log "Revoked all zfs delegations for ${USER_NAME} on ${ds}"
+    else
+        fail "zfs unallow -u ${USER_NAME} ${ds} failed"
+        return 1
+    fi
+}
+
+# Drops the --revoke datasets from a state file, rewriting it atomically.
+filter_state_file() {
+    local f="$1"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would drop revoked entries from ${f}"
+        return 0
+    fi
+    local tmp_file
+    tmp_file=$(mktemp "$(dirname "$f")/.buddybackup-grants.XXXXXX") || { warn "Could not create a temp file in $(dirname "$f")"; return 1; }
+    local ds role skip rev
+    : > "${tmp_file}"
+    while IFS=$'\t' read -r ds role || [ -n "$ds" ]; do
+        [ -n "$ds" ] || continue
+        skip="no"
+        for rev in "${REVOKE_LIST[@]}"; do
+            if [ "$ds" = "$rev" ]; then skip="yes"; fi
+        done
+        if [ "$skip" = "no" ]; then
+            printf '%s\t%s\n' "$ds" "$role" >> "${tmp_file}"
+        fi
+    done < "$f"
+    if ! mv -f "${tmp_file}" "$f"; then
+        warn "Could not update ${f}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    log "Removed revoked entries from ${f}"
+}
+
+# Points at grant state files outside the current allowlist dir, so operators
+# learn about stranded grants instead of silently missing them.
+warn_stranded_state() {
+    local d f
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        if [ "$d" = "$ALLOWLIST_DIR" ]; then continue; fi
+        f="${d}/$(state_file_name)"
+        if [ -f "$f" ]; then
+            warn "Another grant state file exists at ${f}; its datasets are not touched by this run. Revoke them with --revoke, or uninstall with --clean."
+        fi
+    done < <(collect_buddybackup_dirs)
+}
+
+# Applies the role's delegations for every requested dataset and converges the
+# tracked grant set: previously granted datasets that are no longer in the
+# --dataset list (or whose role changed) are revoked first, then the requested
+# ones are granted, then the state file is rewritten to exactly this run's set.
+apply_grants_and_converge() {
+    local tracked_file
+    tracked_file=$(state_file_path)
+    local -a tracked_ds=() tracked_role=() applied_ds=()
+    local ds role keep i j rev entries=""
+    while IFS=$'\t' read -r ds role || [ -n "$ds" ]; do
+        [ -n "$ds" ] || continue
+        tracked_ds+=("$ds")
+        tracked_role+=("$role")
+    done < <(read_tracked_grants "$tracked_file")
+
+    for rev in "${REVOKE_LIST[@]}"; do
+        revoke_dataset_grants "$rev" || true
+    done
+
+    for i in "${!tracked_ds[@]}"; do
+        ds="${tracked_ds[$i]}"
+        role="${tracked_role[$i]}"
+        keep="no"
+        for j in "${!DATASET_LIST[@]}"; do
+            if [ "${DATASET_LIST[$j]}" = "$ds" ]; then
+                keep="yes"
+            fi
+        done
+        if [ "$keep" = "yes" ] && [ "$role" = "$ROLE" ]; then
+            continue
+        fi
+        revoke_dataset_grants "$ds" || true
+    done
+
+    for ds in "${DATASET_LIST[@]}"; do
+        if [ "$ROLE" = "receiver" ]; then
+            if ensure_receiver_dataset "$ds"; then
+                apply_zfs_allow "create,mount,receive" "$ds" || true
+                apply_zfs_allow_send "$ds" || true
+                applied_ds+=("$ds")
+            else
+                log "Skipping ZFS delegations because dataset ${ds} is not ready."
+            fi
+        else
+            if zfs_prop "$ds" "name" >/dev/null 2>&1; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    log "[dry-run] dataset ${ds} exists"
+                fi
+                apply_zfs_allow "hold" "$ds" || true
+                apply_zfs_allow_send "$ds" || true
+                applied_ds+=("$ds")
+            else
+                fail "Dataset ${ds} does not exist; sender role needs an existing dataset"
+            fi
+        fi
+    done
+
+    for i in "${!applied_ds[@]}"; do
+        if [ -n "$entries" ]; then entries+=$'\n'; fi
+        entries+="${applied_ds[$i]}"$'\t'"$ROLE"
+    done
+    write_tracked_grants "$tracked_file" "$entries"
+    warn_stranded_state
+}
+
+# Standalone revocation: only the requested datasets lose their delegations;
+# allowlist, SSH keys and the user are untouched.
+run_revoke_mode() {
+    log "Revoking zfs delegations for user ${USER_NAME}..."
+    local rev d f
+    for rev in "${REVOKE_LIST[@]}"; do
+        revoke_dataset_grants "$rev" || true
+    done
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        f="${d}/$(state_file_name)"
+        if [ -f "$f" ]; then
+            filter_state_file "$f"
+        fi
+    done < <(collect_buddybackup_dirs)
+    if [ "$ERRORS" -gt 0 ]; then return 1; fi
+    log "Revocation complete."
+    return 0
+}
+
+remove_buddybackup_files() {
+    local d f p
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        for f in "buddybackup-restrict_zfs" "buddybackup-restrict_zfs.sudo" \
+                 "buddybackup-restrict_zfs_send" "buddybackup-restrict_zfs_send.sudo" \
+                 "$(state_file_name)"; do
+            p="${d}/${f}"
+            if [ -f "$p" ]; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    log "[dry-run] would remove ${p}"
+                elif rm -f "$p"; then
+                    log "Removed ${p}"
+                else
+                    warn "Could not remove ${p}"
+                fi
+            fi
+        done
+    done < <(collect_buddybackup_dirs)
+}
+
+remove_sshd_dropin() {
+    if [ "$IS_SCALE" -eq 1 ]; then
+        return 0
+    fi
+    local dropin_file="/etc/ssh/sshd_config.d/buddybackup-${USER_NAME}.conf"
+    if [ ! -f "$dropin_file" ]; then
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would remove ${dropin_file}"
+        return 0
+    fi
+    if ! rm -f "$dropin_file"; then
+        warn "Could not remove ${dropin_file}"
+        return 1
+    fi
+    log "Removed ${dropin_file}"
+    local sshd_bin
+    sshd_bin=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+    if ! "$sshd_bin" -t >/dev/null 2>&1; then
+        warn "sshd config validation failed after drop-in removal; check the SSH configuration"
+        return 1
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        if ! systemctl reload ssh >/dev/null 2>&1 && ! systemctl reload sshd >/dev/null 2>&1; then
+            warn "Could not reload the SSH service automatically; reload it manually"
+        else
+            log "SSH service reloaded"
+        fi
+    fi
+    return 0
+}
+
+# Removes every line whose forced command points at a BuddyBackup allowlist,
+# regardless of which directory it was installed in.
+strip_forced_command_lines() {
+    local home_dir
+    home_dir=$(user_home)
+    if [ -z "$home_dir" ] || [ ! -f "${home_dir}/.ssh/authorized_keys" ]; then
+        log "No authorized_keys found for ${USER_NAME}; nothing to strip"
+        return 0
+    fi
+    local ak_file="${home_dir}/.ssh/authorized_keys"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would remove buddybackup forced-command lines from ${ak_file}"
+        return 0
+    fi
+    local tmp_file
+    tmp_file=$(mktemp "${home_dir}/.ssh/.authorized_keys.XXXXXX") || { warn "Could not create a temp file in ${home_dir}/.ssh"; return 1; }
+    if ! grep -Ev 'command="[^"]*buddybackup-restrict_zfs' "${ak_file}" > "${tmp_file}"; then
+        : > "${tmp_file}"
+    fi
+    if ! mv -f "${tmp_file}" "${ak_file}"; then
+        warn "Could not rewrite ${ak_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    chmod 600 "${ak_file}"
+    local owner_group
+    owner_group="$(getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f3):$(id -g "$USER_NAME" 2>/dev/null || echo "")"
+    chown "$owner_group" "${ak_file}" 2>/dev/null || true
+    log "Removed buddybackup forced-command lines from ${ak_file}"
+}
+
+delete_user_cleanup() {
+    if [ "$IS_SCALE" -eq 1 ]; then
+        log "TrueNAS SCALE detected: delete the user in the UI"
+        log "(Credentials -> Users -> ${USER_NAME} -> Delete); the middleware manages"
+        log "user accounts, so this script does not run userdel on TrueNAS."
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would delete user ${USER_NAME} and its home directory"
+        return 0
+    fi
+    if id "$USER_NAME" >/dev/null 2>&1; then
+        if userdel -r "$USER_NAME" >/dev/null 2>&1; then
+            log "Deleted user ${USER_NAME} and its home directory"
+        else
+            fail "Could not delete user ${USER_NAME}"
+            return 1
+        fi
+    else
+        log "User ${USER_NAME} does not exist; nothing to delete"
+    fi
+}
+
+clean_host() {
+    log "Uninstalling everything this script set up for user ${USER_NAME}..."
+    if command -v zfs >/dev/null 2>&1; then
+        local -a to_revoke=()
+        local -A seen_ds=()
+        local d f ds dsr
+        while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            f="${d}/$(state_file_name)"
+            if [ -f "$f" ]; then
+                while IFS=$'\t' read -r ds _role || [ -n "$ds" ]; do
+                    [ -n "$ds" ] || continue
+                    if [ -z "${seen_ds[$ds]-}" ]; then
+                        seen_ds[$ds]=1
+                        to_revoke+=("$ds")
+                    fi
+                done < "$f"
+            fi
+        done < <(collect_buddybackup_dirs)
+        log "Scanning all datasets for zfs delegations held by ${USER_NAME}..."
+        while IFS= read -r ds; do
+            [ -n "$ds" ] || continue
+            if [ -z "${seen_ds[$ds]-}" ]; then
+                seen_ds[$ds]=1
+                to_revoke+=("$ds")
+            fi
+        done < <(discover_user_delegations)
+        if [ "${#to_revoke[@]}" -gt 0 ]; then
+            for dsr in "${to_revoke[@]}"; do
+                revoke_dataset_grants "$dsr" || true
+            done
+        else
+            log "No zfs delegations found for ${USER_NAME}"
+        fi
+    else
+        log "zfs not found; skipping delegation cleanup"
+    fi
+    remove_buddybackup_files
+    if [ "$IS_SCALE" -eq 0 ] && [ -f "/etc/sudoers.d/buddybackup-${USER_NAME}" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "[dry-run] would remove /etc/sudoers.d/buddybackup-${USER_NAME}"
+        elif rm -f "/etc/sudoers.d/buddybackup-${USER_NAME}"; then
+            log "Removed /etc/sudoers.d/buddybackup-${USER_NAME}"
+        else
+            warn "Could not remove /etc/sudoers.d/buddybackup-${USER_NAME}"
+        fi
+    fi
+    remove_sshd_dropin
+    strip_forced_command_lines
+    if [ "$DELETE_USER" -eq 1 ]; then
+        delete_user_cleanup
+    fi
+    if [ "$IS_SCALE" -eq 1 ]; then
+        log ""
+        log "TrueNAS UI cleanup steps (not done by this script):"
+        log "  - Remove the 'Match User ${USER_NAME}' block from the SSH service's 'Auxiliary"
+        log "    Parameters' (System Settings -> Services -> SSH)."
+        log "  - Remove the user's SSH public key, or delete the user, in Credentials -> Users."
+    fi
+    log "Uninstall complete. Datasets and their data were not touched."
+    if [ "$ERRORS" -gt 0 ]; then return 1; fi
+    return 0
 }
 
 write_authorized_keys() {
@@ -935,30 +1424,33 @@ verify() {
     fi
 
     if [ "$DRY_RUN" -eq 0 ]; then
-        if zfs_prop "name" >/dev/null 2>&1; then
-            check_pass "dataset ${DATASET} exists"
-            local perms
-            perms=$(zfs allow "$DATASET" 2>/dev/null | grep "${USER_NAME}" || echo "")
-            if [ -n "$perms" ]; then
-                check_pass "zfs allow delegation present: ${perms}"
+        local ds
+        for ds in "${DATASET_LIST[@]}"; do
+            if zfs_prop "$ds" "name" >/dev/null 2>&1; then
+                check_pass "dataset ${ds} exists"
+                local perms
+                perms=$(zfs allow "$ds" 2>/dev/null | grep "${USER_NAME}" || echo "")
+                if [ -n "$perms" ]; then
+                    check_pass "zfs allow delegation present: ${perms}"
+                else
+                    check_fail "no zfs allow delegation for ${USER_NAME} on ${ds} (re-run this script)"
+                fi
+                if [ "$ROLE" = "receiver" ]; then
+                    local mp
+                    mp=$(zfs_prop "$ds" "mountpoint" || echo "")
+                    case "$mp" in
+                        none|legacy) check_pass "mountpoint is '${mp}' (received data will not mount)" ;;
+                        *) check_fail "mountpoint is '${mp}'; expected none or legacy" ;;
+                    esac
+                fi
             else
-                check_fail "no zfs allow delegation for ${USER_NAME} on ${DATASET} (re-run this script)"
+                if [ "$ROLE" = "receiver" ]; then
+                    check_fail "dataset ${ds} does not exist (re-run this script to create it)"
+                else
+                    check_fail "dataset ${ds} does not exist (sender requires an existing dataset)"
+                fi
             fi
-            if [ "$ROLE" = "receiver" ]; then
-                local mp
-                mp=$(zfs_prop "mountpoint" || echo "")
-                case "$mp" in
-                    none|legacy) check_pass "mountpoint is '${mp}' (received data will not mount)" ;;
-                    *) check_fail "mountpoint is '${mp}'; expected none or legacy" ;;
-                esac
-            fi
-        else
-            if [ "$ROLE" = "receiver" ]; then
-                check_fail "dataset ${DATASET} does not exist (re-run this script to create it)"
-            else
-                check_fail "dataset ${DATASET} does not exist (sender requires an existing dataset)"
-            fi
-        fi
+        done
 
         if [ "$IS_SCALE" -eq 0 ]; then
             if [ -f "/etc/ssh/sshd_config.d/buddybackup-${USER_NAME}.conf" ]; then
@@ -995,22 +1487,33 @@ verify() {
     return 0
 }
 
-if [ -n "$PUBKEY" ]; then
-    log "Configuration:"
+log "Configuration:"
+log "  mode:       ${MODE}"
+if [ "$MODE" = "clean" ]; then
+    if [ "$DELETE_USER" -eq 1 ]; then
+        log "  delete-user: yes"
+    else
+        log "  delete-user: no (account kept; add --delete-user to remove it)"
+    fi
+    log "  user:       ${USER_NAME}"
+elif [ "$MODE" = "revoke" ]; then
+    log "  user:       ${USER_NAME}"
+    log "  datasets:   ${REVOKE_LIST[*]}"
+else
     log "  role:       ${ROLE}"
     log "  user:       ${USER_NAME}"
-    log "  dataset:    ${DATASET}"
+    log "  datasets:   ${DATASET_LIST[*]}"
     log "  port:       ${PORT}"
     log "  sudo-mode:  ${SUDO_MODE}"
-    log ""
 fi
+log ""
 
 if [ "$VERIFY_ONLY" -eq 1 ]; then
     verify
     exit $?
 fi
 
-if [ "$DRY_RUN" -eq 0 ] && [ -z "$PUBKEY" ]; then
+if [ "$MODE" = "setup" ] && [ "$DRY_RUN" -eq 0 ] && [ -z "$PUBKEY" ]; then
     fail "--pubkey is required (Unraid's SSH public key from the plugin's Backup page)"
     exit 1
 fi
@@ -1018,6 +1521,25 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
     log "DRY RUN - no changes will be made"
     log ""
+fi
+
+if [ "$MODE" = "clean" ]; then
+    clean_host
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log ""
+        log "Dry run complete. No changes were made."
+        exit 0
+    fi
+    exit $?
+fi
+if [ "$MODE" = "revoke" ]; then
+    run_revoke_mode
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log ""
+        log "Dry run complete. No changes were made."
+        exit 0
+    fi
+    exit $?
 fi
 
 if [ "$IS_SCALE" -eq 1 ]; then
@@ -1055,36 +1577,7 @@ else
     remove_sudoers || true
 fi
 
-if [ "$DRY_RUN" -eq 0 ]; then
-    if [ "$ROLE" = "receiver" ]; then
-        if ensure_receiver_dataset; then
-            apply_zfs_allow "create,mount,receive" || true
-            apply_zfs_allow_send || true
-        else
-            log "Skipping ZFS delegations because dataset ${DATASET} is not ready."
-        fi
-    else
-        if ! zfs_prop "name" >/dev/null 2>&1; then
-            fail "Dataset ${DATASET} does not exist; sender role needs an existing dataset"
-        fi
-        apply_zfs_allow "hold" || true
-        apply_zfs_allow_send || true
-    fi
-else
-    if [ "$ROLE" = "receiver" ]; then
-        ensure_receiver_dataset
-        apply_zfs_allow "create,mount,receive"
-        apply_zfs_allow_send
-    else
-        if zfs_prop "name" >/dev/null 2>&1; then
-            log "[dry-run] dataset ${DATASET} exists"
-        else
-            log "[dry-run] would require existing dataset ${DATASET} (sender role)"
-        fi
-        apply_zfs_allow "hold"
-        apply_zfs_allow_send
-    fi
-fi
+apply_grants_and_converge
 
 write_authorized_keys || true
 write_sshd_dropin || true
@@ -1099,6 +1592,8 @@ if [ "$IS_SCALE" -eq 1 ]; then
     log "    TrueNAS system dirs are read-only). Deleting or moving it breaks SSH"
     log "    access for ${USER_NAME}."
     log "  - Raw encrypted receives require feature@encryption on the destination pool."
+    log "  - Run with --clean (optionally --delete-user) to uninstall everything this"
+    log "    script set up; --revoke DATASET removes single datasets from the grant set."
 fi
 
 log ""

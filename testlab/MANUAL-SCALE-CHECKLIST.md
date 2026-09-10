@@ -80,6 +80,21 @@ Prerequisites for the checklist host:
    - Confirm snapshots that do not match the `autosnap_*` naming (e.g. ones created with TrueNAS's
      default naming schema) are left untouched and would accumulate forever.
 
+## Teardown / grant changes
+
+- Changing the served datasets: re-run the setup script with the new `--dataset` list (repeat
+  the option for each dataset). The run converges: grants for previously set-up datasets that
+  are no longer listed are revoked automatically (tracked in the root-owned
+  `buddybackup-<user>-zfs-grants.txt` state file next to the allowlist).
+- Removing a single dataset's access: `--revoke <dataset>` (can be combined with a normal
+  setup run or used alone).
+- Full uninstall: `--clean` revokes every recorded and discovered delegation, removes the
+  allowlist script(s), sudo flag files, sudoers entry, sshd drop-in and the forced-command
+  line from authorized_keys; add `--delete-user` to also delete the user. Datasets and their
+  data are never touched. If a custom `--allowlist-dir` was used, pass it to `--clean` so its
+  files are found. Confirm the TrueNAS UI leftovers (Auxiliary Parameters block, SSH key /
+  user) are removed manually as printed by the script.
+
 ## Negative checks
 
 1. From the TrueNAS shell as the restricted user, confirm these fail or are blocked:

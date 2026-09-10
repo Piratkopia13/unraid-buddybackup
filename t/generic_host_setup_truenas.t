@@ -78,13 +78,35 @@ subtest 'allowlist is untouchable by the SSH user' => sub {
 subtest 'override flag plumbing' => sub {
     like($setup_source, qr/--allowlist-dir PATH/, 'usage documents --allowlist-dir');
     like($setup_source, qr/ALLOWLIST_DIR_ARG/, 'allowlist dir override is parsed');
-    like($setup_source, qr/--role\|--user\|--dataset\|--pubkey\|--port\|--sudo-mode\|--allowlist-dir\)/, 'override value is presence-checked like the other options');
+    like($setup_source, qr/--role\|--user\|--dataset\|--revoke\|--pubkey\|--port\|--sudo-mode\|--allowlist-dir\)/, 'override value is presence-checked like the other options');
     like($setup_source, qr/if \[ -n "\$ALLOWLIST_DIR_ARG" \]; then/, 'override takes precedence over the defaults');
 };
 
 subtest 'TrueNAS operator guidance' => sub {
     like($setup_source, qr/The forced-command allowlist lives at \$\{ALLOWLIST_PATH\}/, 'reminders point at the installed allowlist location');
     like($setup_source, qr/Deleting or moving it breaks SSH/, 'reminders warn against removing the allowlist');
+};
+
+subtest 'grant convergence, revocation and clean uninstall' => sub {
+    like($setup_source, qr/buddybackup-%s-zfs-grants\.txt/, 'grant state file is per-user next to the allowlist');
+    like($setup_source, qr/apply_grants_and_converge/, 'setup runs converge the recorded grant set');
+    like($setup_source, qr/whose role changed/, 'role flips trigger revocation');
+    like($setup_source, qr/zfs unallow -u "\$USER_NAME" "\$ds"/, 'revocation runs zfs unallow for the restricted user');
+    like($setup_source, qr/--dataset is required \(repeat the option for more than one dataset\)/, 'multi-dataset usage is documented in the error path');
+    like($setup_source, qr/--revoke NAME/, 'usage documents --revoke');
+    like($setup_source, qr/--clean\s/, 'usage documents --clean');
+    like($setup_source, qr/--delete-user\s/, 'usage documents --delete-user');
+    like($setup_source, qr/--clean cannot be combined with --dataset or --revoke/, '--clean is mutually exclusive with the dataset flags');
+    like($setup_source, qr/--delete-user requires --clean/, 'user deletion is opt-in and only valid with --clean');
+    like($setup_source, qr/--verify cannot be combined with --clean or --revoke/, '--verify does not mix with revoke/clean modes');
+    like($setup_source, qr/is named by both --dataset and --revoke/, 'contradictory dataset and revoke names are rejected');
+    like($setup_source, qr/userdel -r "\$USER_NAME"/, 'user deletion uses userdel off TrueNAS');
+    like($setup_source, qr/does not run userdel on TrueNAS/, 'TrueNAS user deletion is left to the UI');
+    like($setup_source, qr/collect_buddybackup_dirs/, 'stranded state discovery is present');
+    like($setup_source, qr/discover_user_delegations/, 'clean discovers delegations made outside recorded state');
+    like($setup_source, qr/Datasets and their data were not touched/, 'clean documents that data is untouched');
+    unlike($setup_source, qr/zfs destroy/, 'the script never destroys datasets');
+    like($setup_source, qr/--revoke DATASET removes single datasets/, 'TrueNAS reminder mentions --revoke');
 };
 
 done_testing();
