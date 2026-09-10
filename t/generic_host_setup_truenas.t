@@ -46,6 +46,9 @@ my $setup_source = do {
 };
 
 subtest 'TrueNAS SCALE allowlist location' => sub {
+    like($setup_source, qr/grep -qi truenas \/etc\/version/, 'TrueNAS detection keeps the /etc/version probe');
+    like($setup_source, qr/command -v midclt/, 'TrueNAS detection also probes midclt (present on every SCALE release)');
+    like($setup_source, qr/"Linux" \] && command -v midclt/, 'midclt marker is guarded to Linux hosts (TrueNAS CORE excluded)');
     like($setup_source, qr/ALLOWLIST_DIR="\/usr\/local\/sbin"/, 'generic hosts keep the /usr/local/sbin default');
     like($setup_source, qr/truenas_allowlist_dir\(\)/, 'TrueNAS allowlist dir derivation present');
     like($setup_source, qr/\$\{mp\}\/\.buddybackup/, 'TrueNAS allowlist dir is a hidden .buddybackup dir on the pool mountpoint');

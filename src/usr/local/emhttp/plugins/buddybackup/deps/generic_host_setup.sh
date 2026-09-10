@@ -149,7 +149,12 @@ if [ -n "$PUBKEY" ]; then
 fi
 
 IS_SCALE=0
-if [ -f /etc/version ] && grep -qi truenas /etc/version 2>/dev/null; then
+if { [ -f /etc/version ] && grep -qi truenas /etc/version 2>/dev/null; } \
+   || { [ "$(uname -s)" = "Linux" ] && command -v midclt >/dev/null 2>&1; }; then
+    # /etc/version carries the TrueNAS string on most releases, but some
+    # versions drop or reformat it; midclt (the middleware CLI) has shipped on
+    # every TrueNAS SCALE release. Combined with the Linux check this excludes
+    # TrueNAS CORE (FreeBSD), which this Linux-only script does not support.
     IS_SCALE=1
 fi
 
