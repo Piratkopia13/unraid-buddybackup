@@ -1,5 +1,6 @@
 #!/bin/bash
 set -o pipefail
+set -o nounset
 
 export PATH="/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin${PATH:+:${PATH}}"
 
@@ -19,12 +20,14 @@ Required:
   --role receiver|sender    receiver: this Unraid pushes backups to this host.
                             sender:   this Unraid pulls backups from this host.
   --dataset NAME            receiver: parent dataset backups are received into
-                            (created with mountpoint=none if missing).
+                            (created with mountpoint=none if missing; an existing
+                            dataset is only accepted if nothing below it is mounted).
                             sender:   dataset (or parent of datasets) to serve.
   --pubkey KEY              Unraid's SSH public key (single line).
 
 Optional:
-  --user NAME               SSH user to create/use (default: buddybackup)
+  --user NAME               SSH user to create/use (default: buddybackup; must be
+                            a dedicated user, root/UID 0 is refused)
   --port N                  SSH service port, for notes only (default: 22)
   --sudo-mode auto|yes|no   allow validated commands to run via sudo where the
                             zfs binary is not executable by the user
@@ -48,6 +51,7 @@ check_warn() { printf 'WARN: %s\n' "$*" >&2; }
 
 ROLE=""
 USER_NAME=""
+USER_ARG=""
 DATASET=""
 PUBKEY=""
 PORT="22"
@@ -55,22 +59,32 @@ SUDO_MODE="auto"
 VERIFY_ONLY=0
 DRY_RUN=0
 
+ERRORS=0
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        --role) ROLE="${2:-}"; shift 2 ;;
-        --user) USER_ARG="${2:-}"; shift 2 ;;
-        --dataset) DATASET="${2:-}"; shift 2 ;;
-        --pubkey) PUBKEY="${2:-}"; shift 2 ;;
-        --port) PORT="${2:-}"; shift 2 ;;
-        --sudo-mode) SUDO_MODE="${2:-}"; shift 2 ;;
+        --role|--user|--dataset|--pubkey|--port|--sudo-mode)
+            # Guard: shift 2 with only one argument left would silently keep $1,
+            # looping forever on the same option.
+            if [ $# -lt 2 ]; then
+                fail "Option $1 requires a value"
+                exit 1
+            fi
+            ;;
+    esac
+    case "$1" in
+        --role) ROLE="$2"; shift 2 ;;
+        --user) USER_ARG="$2"; shift 2 ;;
+        --dataset) DATASET="$2"; shift 2 ;;
+        --pubkey) PUBKEY="$2"; shift 2 ;;
+        --port) PORT="$2"; shift 2 ;;
+        --sudo-mode) SUDO_MODE="$2"; shift 2 ;;
         --verify) VERIFY_ONLY=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "Unknown option: $1"; usage >&2; exit 1 ;;
     esac
 done
-
-ERRORS=0
 
 if [ -z "$ROLE" ] || { [ "$ROLE" != "receiver" ] && [ "$ROLE" != "sender" ]; }; then
     fail "--role must be 'receiver' or 'sender'"
@@ -100,21 +114,24 @@ if ! [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]{0,31}\$?$ ]]; then
     exit 1
 fi
 
+# Never manage root (or any UID-0 alias): the SSH restrictions installed below
+# (forced command, PasswordAuthentication no, PermitTTY no) would break
+# administrative SSH access and could lock the operator out of the host.
+if [ "$(id -u "$USER_NAME" 2>/dev/null)" = "0" ]; then
+    fail "--user '$USER_NAME' resolves to UID 0; refusing to restrict administrative SSH access. Use a dedicated user (default: buddybackup)."
+    exit 1
+fi
+
 PUBKEY_ALGO_RE='^(ssh-(rsa|dss|ed25519)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)@openssh\.com)) [A-Za-z0-9+/]+={0,2}( [^ ].*)?$'
 if [ -n "$PUBKEY" ]; then
-    if [ "$(printf '%s' "$PUBKEY" | wc -l)" -gt 1 ] || ! printf '%s' "$PUBKEY" | grep -Eq "$PUBKEY_ALGO_RE"; then
+    # Any embedded newline (wc -l > 0) is rejected outright: grep validates line by
+    # line, so a second line could otherwise smuggle an unrestricted key into
+    # authorized_keys.
+    if [ "$(printf '%s' "$PUBKEY" | wc -l)" -gt 0 ] || ! printf '%s' "$PUBKEY" | grep -Eq "$PUBKEY_ALGO_RE"; then
         fail "--pubkey is not a valid single-line OpenSSH public key"
         exit 1
     fi
 fi
-
-run_as_user() {
-    if command -v runuser >/dev/null 2>&1; then
-        runuser -u "$USER_NAME" -- "$@"
-    else
-        su -s /bin/bash "$USER_NAME" -c "$*"
-    fi
-}
 
 IS_SCALE=0
 if [ -f /etc/version ] && grep -qi truenas /etc/version 2>/dev/null; then
@@ -164,8 +181,17 @@ install_allowlist() {
         log "[dry-run] would install allowlist script ${ALLOWLIST_PATH}"
         return 0
     fi
+    if [ ! -d "${ALLOWLIST_DIR}" ]; then
+        if ! mkdir -p "${ALLOWLIST_DIR}"; then
+            fail "Could not create ${ALLOWLIST_DIR}"
+            return 1
+        fi
+    fi
+    # Write to a temp file in the same directory and rename atomically, so the
+    # forced-command target never exists as a partially written file.
+    local tmp_file="${ALLOWLIST_PATH}.tmp.$$"
     if [ "$ROLE" = "receiver" ]; then
-        cat > "${ALLOWLIST_PATH}" <<'BUDDYBACKUP_RESTRICT_ZFS_EOF'
+        cat > "${tmp_file}" <<'BUDDYBACKUP_RESTRICT_ZFS_EOF'
 #!/usr/bin/env perl
 
 use strict;
@@ -272,7 +298,7 @@ foreach my $command (split /;/, $original_command) {
 closelog();
 BUDDYBACKUP_RESTRICT_ZFS_EOF
     else
-        cat > "${ALLOWLIST_PATH}" <<'BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF'
+        cat > "${tmp_file}" <<'BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF'
 #!/usr/bin/env perl
 
 use strict;
@@ -373,7 +399,22 @@ foreach my $command (split /;/, $original_command) {
 closelog();
 BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF
     fi
-    chmod 755 "${ALLOWLIST_PATH}" || fail "Could not chmod ${ALLOWLIST_PATH}"
+    # Exit status of the if/else above is the exit status of the heredoc cat.
+    if [ $? -ne 0 ]; then
+        fail "Could not write ${tmp_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    if ! chmod 755 "${tmp_file}"; then
+        fail "Could not chmod ${tmp_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    if ! mv -f "${tmp_file}" "${ALLOWLIST_PATH}"; then
+        fail "Could not install ${ALLOWLIST_PATH}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
 }
 
 set_sudo_flag() {
@@ -420,25 +461,54 @@ install_sudoers() {
         log "[dry-run]     ${USER_NAME} ALL=(root) NOPASSWD: /usr/bin/bash -c *"
         return 0
     fi
+    if ! command -v visudo >/dev/null 2>&1; then
+        fail "visudo not found; cannot safely install a sudoers entry (is sudo installed?)"
+        return 1
+    fi
+    # Temp file lives in /etc/sudoers.d itself so the final rename is atomic.
+    # The dot in its name makes sudo skip it while it exists (sudo ignores
+    # includedir entries containing a '.'), so a half-written file can never be
+    # parsed and break sudo for everyone.
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "/etc/sudoers.d/.buddybackup-${USER_NAME}.XXXXXX") || { fail "Could not create a temp file in /etc/sudoers.d"; return 1; }
     {
         printf 'Defaults:%s !requiretty\n' "$USER_NAME"
         printf '%s ALL=(root) NOPASSWD: /usr/bin/bash -c *\n' "$USER_NAME"
-    } > "${tmp_file}"
+    } > "${tmp_file}" || { fail "Could not write sudoers temp file"; rm -f "${tmp_file}"; return 1; }
     if ! visudo -cf "${tmp_file}" >/dev/null 2>&1; then
         fail "Generated sudoers file failed visudo validation"
         rm -f "${tmp_file}"
         return 1
     fi
-    install -m 440 -o root -g root "${tmp_file}" "${sudoers_file}" || fail "Could not install ${sudoers_file}"
-    rm -f "${tmp_file}"
+    chmod 440 "${tmp_file}"
+    if ! mv -f "${tmp_file}" "${sudoers_file}"; then
+        fail "Could not install ${sudoers_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
     log "Installed ${sudoers_file} (coarse sudo grant; allowlist remains the fine-grained gate)"
+}
+
+remove_sudoers() {
+    local sudoers_file="/etc/sudoers.d/buddybackup-${USER_NAME}"
+    # TrueNAS SCALE manages sudo grants through its UI; nothing for us to remove.
+    [ "$IS_SCALE" -eq 1 ] && return 0
+    if [ -e "${sudoers_file}" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "[dry-run] would remove leftover ${sudoers_file} (sudo mode disabled)"
+        elif rm -f "${sudoers_file}"; then
+            log "Removed leftover ${sudoers_file} (sudo mode disabled)"
+        else
+            fail "Could not remove ${sudoers_file}"
+            return 1
+        fi
+    fi
+    return 0
 }
 
 create_user() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "[dry-run] would create user ${USER_NAME} (locked random password, home dir, bash shell)"
+        log "[dry-run] would create user ${USER_NAME} (random undisclosed password, home dir, bash shell)"
         return 0
     fi
     if id "$USER_NAME" >/dev/null 2>&1; then
@@ -460,7 +530,6 @@ create_user() {
 apply_zfs_allow() {
     if [ "$DRY_RUN" -eq 1 ]; then
         log "[dry-run] would run: zfs allow -u ${USER_NAME} $1 ${DATASET}"
-        log "[dry-run] would attempt: zfs allow -u ${USER_NAME} send:raw ${DATASET}"
         return 0
     fi
     local perms="$1"
@@ -468,10 +537,52 @@ apply_zfs_allow() {
         fail "zfs allow -u ${USER_NAME} ${perms} ${DATASET} failed"
         return 1
     fi
+}
+
+has_plain_send_grant() {
+    zfs allow "$DATASET" 2>/dev/null | awk -v u="$USER_NAME" '
+        $1 == "user" && $2 == u {
+            n = split($3, perms, ",")
+            for (i = 1; i <= n; i++) {
+                if (perms[i] == "send") found = 1
+            }
+        }
+        END { exit(found ? 0 : 1) }'
+}
+
+# Grant send access, preferring the raw-only send:raw permission (OpenZFS 2.4+).
+# With send:raw, the user is physically unable to request a decrypted stream of an
+# encrypted dataset. Any pre-existing plain 'send' grant is removed afterwards,
+# because with both grants present the raw-only guarantee would be void.
+apply_zfs_allow_send() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would try: zfs allow -u ${USER_NAME} send:raw ${DATASET} (raw-only, OpenZFS 2.4+)"
+        log "[dry-run]          and remove any plain 'send' grant: zfs unallow -u ${USER_NAME} send ${DATASET}"
+        log "[dry-run]          fallback on older OpenZFS: zfs allow -u ${USER_NAME} send ${DATASET}"
+        return 0
+    fi
     if zfs allow -u "$USER_NAME" "send:raw" "$DATASET" 2>/dev/null; then
-        log "Raw send delegation (send:raw, OpenZFS 2.4+): enabled"
+        log "Raw-only send delegation (send:raw, OpenZFS 2.4+): enabled"
+        if has_plain_send_grant; then
+            if zfs unallow -u "$USER_NAME" "send" "$DATASET" 2>/dev/null; then
+                log "Removed plain 'send' delegation so only raw sends remain possible"
+            else
+                warn "Could not remove the plain 'send' delegation; raw-only is NOT enforced."
+                warn "Remove it manually: zfs unallow -u ${USER_NAME} send ${DATASET}"
+            fi
+        fi
+        return 0
+    fi
+    if [ "$ROLE" = "sender" ]; then
+        warn "send:raw delegation not supported by this OpenZFS version (< 2.4); falling back to plain 'send'."
+        warn "With plain 'send', a compromised Unraid server could request DECRYPTED streams of ${DATASET}."
+        warn "Upgrade this host to OpenZFS 2.4+ and re-run this script to enforce raw-only sends."
     else
         log "send:raw delegation not supported by this ZFS version; plain 'send' covers raw streams"
+    fi
+    if ! zfs allow -u "$USER_NAME" "send" "$DATASET"; then
+        fail "zfs allow -u ${USER_NAME} send ${DATASET} failed"
+        return 1
     fi
 }
 
@@ -498,7 +609,21 @@ ensure_receiver_dataset() {
         none|legacy)
             ;;
         *)
-            log "Setting mountpoint=none on ${DATASET} (was: '${mp}'). Received backups must never mount on this host - Linux cannot mount as a non-root user, and receive fails if mount is attempted."
+            # Never flip the mountpoint of a dataset (or tree) that is currently
+            # mounted: zfs set mountpoint=none would unmount live data and could
+            # disrupt running services. Only touch idle datasets.
+            # (grep without -q consumes all input: no SIGPIPE/pipefail pitfalls
+            # on large dataset trees.)
+            local mounted_yes
+            mounted_yes=$(zfs list -r -H -o mounted "$DATASET" 2>/dev/null | grep -x "yes" || true)
+            if [ -n "$mounted_yes" ]; then
+                fail "Dataset ${DATASET} or a dataset below it is currently MOUNTED (mountpoint '${mp}')."
+                log "Refusing to set mountpoint=none on mounted data, as that would unmount it while in use."
+                log "Pick a dataset path that does not exist yet (this script creates it with mountpoint=none),"
+                log "or unmount the dataset and its children yourself first and re-run."
+                return 1
+            fi
+            log "Setting mountpoint=none on ${DATASET} (was: '${mp}', nothing mounted). Received backups must never mount on this host - Linux cannot mount as a non-root user, and receive fails if mount is attempted."
             if ! zfs set mountpoint=none "$DATASET"; then
                 fail "Could not set mountpoint=none on ${DATASET}"
                 return 1
@@ -526,22 +651,24 @@ write_authorized_keys() {
     chmod 600 "${ak_file}"
     local key_b64
     key_b64=$(printf '%s' "$PUBKEY" | awk '{print $2}')
+    # Temp file lives next to authorized_keys so the final rename is atomic;
+    # sshd only ever reads the real filename, never the dotfile temp.
     local tmp_file
-    tmp_file=$(mktemp)
+    tmp_file=$(mktemp "${ssh_dir}/.authorized_keys.XXXXXX") || { fail "Could not create a temp file in ${ssh_dir}"; return 1; }
     if ! grep -Fv -e "command=\"${ALLOWLIST_PATH}\"" -e "${key_b64}" "${ak_file}" > "${tmp_file}"; then
         : > "${tmp_file}"
     fi
     printf 'restrict,command="%s" %s\n' "${ALLOWLIST_PATH}" "${PUBKEY}" >> "${tmp_file}"
-    mv "${tmp_file}" "${ak_file}"
+    if ! mv -f "${tmp_file}" "${ak_file}"; then
+        fail "Could not replace ${ak_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
     chmod 600 "${ak_file}"
     local owner_group
     owner_group=$(getent passwd "$USER_NAME" | cut -d: -f3):"$(id -g "$USER_NAME")"
     chown "$owner_group" "${ssh_dir}" "${ak_file}" || fail "Could not chown ${ssh_dir}"
     log "Wrote forced-command key line to ${ak_file}"
-}
-
-user_home() {
-    getent passwd "$USER_NAME" 2>/dev/null | cut -d: -f6
 }
 
 write_sshd_dropin() {
@@ -578,11 +705,28 @@ write_sshd_dropin() {
         printf '%s\n' "$match_block" | sed 's/^/    /'
         return 0
     fi
-    printf '%s\n' "$match_block" > "${dropin_file}" || { fail "Could not write ${dropin_file}"; return 1; }
     local sshd_bin
     sshd_bin=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+    # Write to a dotfile temp in the same directory, then rename atomically.
+    # sshd's Include glob never matches a dotfile, so a partially written
+    # drop-in can never be parsed and break sshd on its next start.
+    local tmp_file
+    tmp_file=$(mktemp "${dropin_dir}/.buddybackup-${USER_NAME}.XXXXXX") || { fail "Could not create a temp file in ${dropin_dir}"; return 1; }
+    if ! printf '%s\n' "$match_block" > "${tmp_file}"; then
+        fail "Could not write drop-in content"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    chmod 644 "${tmp_file}"
+    if ! mv -f "${tmp_file}" "${dropin_file}"; then
+        fail "Could not install ${dropin_file}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    # Validate the whole sshd config (now including the drop-in); on failure,
+    # roll back so the host's SSH config is exactly as we found it.
     if ! "$sshd_bin" -t >/dev/null 2>&1; then
-        fail "sshd config validation failed after writing ${dropin_file}"
+        fail "sshd config validation failed with ${dropin_file} installed; drop-in removed again"
         rm -f "${dropin_file}"
         return 1
     fi
@@ -602,7 +746,9 @@ show_port_note() {
 }
 
 verify() {
-    ERRORS=0
+    # Note: ERRORS is deliberately not reset here. Errors already recorded by the
+    # setup steps above must still fail the overall run; verify() re-checks state
+    # and adds any problems it finds on top.
     log "Verification checklist:"
     if getent passwd "$USER_NAME" >/dev/null 2>&1; then
         check_pass "user ${USER_NAME} exists"
@@ -627,23 +773,23 @@ verify() {
         check_fail "allowlist script missing at ${ALLOWLIST_PATH}"
     fi
 
-    if [ "$SUDO_MODE" = "yes" ]; then
-        if [ -f "${ALLOWLIST_PATH}.sudo" ]; then
-            check_pass "sudo mode flag present (${ALLOWLIST_PATH}.sudo)"
-        else
-            check_fail "sudo mode flag missing (${ALLOWLIST_PATH}.sudo)"
-        fi
+    # Sudo mode is judged by the installed state (flag file), not only by the
+    # --sudo-mode argument: with --sudo-mode auto the flag is what counts.
+    if [ -f "${ALLOWLIST_PATH}.sudo" ]; then
+        check_pass "sudo mode flag present (${ALLOWLIST_PATH}.sudo)"
         if [ "$IS_SCALE" -eq 1 ]; then
             check_warn "sudoers entry must be configured via the TrueNAS UI (script cannot check it)"
         elif [ -f "/etc/sudoers.d/buddybackup-${USER_NAME}" ]; then
             check_pass "sudoers entry installed (/etc/sudoers.d/buddybackup-${USER_NAME})"
         else
-            check_fail "sudoers entry missing (/etc/sudoers.d/buddybackup-${USER_NAME})"
+            check_fail "sudo mode flag present but sudoers entry missing (/etc/sudoers.d/buddybackup-${USER_NAME}); re-run this script"
         fi
+    elif [ "$SUDO_MODE" = "yes" ]; then
+        check_fail "sudo mode requested (--sudo-mode yes) but flag missing (${ALLOWLIST_PATH}.sudo); re-run this script"
     elif user_can_exec_zfs; then
         check_pass "user ${USER_NAME} can execute zfs directly (no sudo mode needed)"
-        if [ -e "${ALLOWLIST_PATH}.sudo" ]; then
-            check_warn "sudo mode flag present although zfs is directly executable; remove with --sudo-mode no"
+        if [ "$IS_SCALE" -eq 0 ] && [ -f "/etc/sudoers.d/buddybackup-${USER_NAME}" ]; then
+            check_warn "leftover sudoers entry (/etc/sudoers.d/buddybackup-${USER_NAME}); re-run with --sudo-mode no to remove it"
         fi
     else
         check_fail "user ${USER_NAME} cannot execute zfs and sudo mode is not enabled (re-run with --sudo-mode yes)"
@@ -663,42 +809,41 @@ verify() {
         check_fail "authorized_keys not found for ${USER_NAME}"
     fi
 
-    if [ "$DRY_RUN" -eq 1 ]; then
-        check_warn "dry-run: ZFS and SSH state not checked"
-        return 0
-    fi
-
-    if zfs_prop "name" >/dev/null 2>&1; then
-        check_pass "dataset ${DATASET} exists"
-        local perms
-        perms=$(zfs allow "$DATASET" 2>/dev/null | grep "${USER_NAME}" || echo "")
-        if [ -n "$perms" ]; then
-            check_pass "zfs allow delegation present: ${perms}"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        if zfs_prop "name" >/dev/null 2>&1; then
+            check_pass "dataset ${DATASET} exists"
+            local perms
+            perms=$(zfs allow "$DATASET" 2>/dev/null | grep "${USER_NAME}" || echo "")
+            if [ -n "$perms" ]; then
+                check_pass "zfs allow delegation present: ${perms}"
+            else
+                check_fail "no zfs allow delegation for ${USER_NAME} on ${DATASET} (re-run this script)"
+            fi
+            if [ "$ROLE" = "receiver" ]; then
+                local mp
+                mp=$(zfs_prop "mountpoint" || echo "")
+                case "$mp" in
+                    none|legacy) check_pass "mountpoint is '${mp}' (received data will not mount)" ;;
+                    *) check_fail "mountpoint is '${mp}'; expected none or legacy" ;;
+                esac
+            fi
         else
-            check_fail "no zfs allow delegation for ${USER_NAME} on ${DATASET} (re-run this script)"
+            if [ "$ROLE" = "receiver" ]; then
+                check_fail "dataset ${DATASET} does not exist (re-run this script to create it)"
+            else
+                check_fail "dataset ${DATASET} does not exist (sender requires an existing dataset)"
+            fi
         fi
-        if [ "$ROLE" = "receiver" ]; then
-            local mp
-            mp=$(zfs_prop "mountpoint" || echo "")
-            case "$mp" in
-                none|legacy) check_pass "mountpoint is '${mp}' (received data will not mount)" ;;
-                *) check_fail "mountpoint is '${mp}'; expected none or legacy" ;;
-            esac
+
+        if [ "$IS_SCALE" -eq 0 ]; then
+            if [ -f "/etc/ssh/sshd_config.d/buddybackup-${USER_NAME}.conf" ]; then
+                check_pass "sshd drop-in installed"
+            else
+                check_warn "sshd drop-in missing (only a warning: the key options already restrict sessions)"
+            fi
         fi
     else
-        if [ "$ROLE" = "receiver" ]; then
-            check_fail "dataset ${DATASET} does not exist (re-run this script to create it)"
-        else
-            check_fail "dataset ${DATASET} does not exist (sender requires an existing dataset)"
-        fi
-    fi
-
-    if [ "$IS_SCALE" -eq 0 ]; then
-        if [ -f "/etc/ssh/sshd_config.d/buddybackup-${USER_NAME}.conf" ]; then
-            check_pass "sshd drop-in installed"
-        else
-            check_warn "sshd drop-in missing (only a warning: the key options already restrict sessions)"
-        fi
+        check_warn "dry-run: ZFS and SSH state not checked"
     fi
 
     local helper_bin=""
@@ -770,32 +915,49 @@ case "$SUDO_MODE" in
 esac
 
 install_allowlist || true
-set_sudo_flag "$ALLOW_SUDO"
 if [ "$ALLOW_SUDO" = "yes" ]; then
-    install_sudoers || true
+    # Only enable the sudo flag after the sudoers entry is actually in place;
+    # otherwise the allowlist would run validated commands through a sudo grant
+    # that does not exist yet.
+    if install_sudoers; then
+        set_sudo_flag "yes"
+    else
+        log "Sudo mode left disabled because the sudoers entry could not be installed."
+        set_sudo_flag "no"
+    fi
+else
+    set_sudo_flag "no"
+    remove_sudoers || true
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
     if [ "$ROLE" = "receiver" ]; then
-        ensure_receiver_dataset || true
-        apply_zfs_allow "create,mount,receive,send" || true
+        if ensure_receiver_dataset; then
+            apply_zfs_allow "create,mount,receive" || true
+            apply_zfs_allow_send || true
+        else
+            log "Skipping ZFS delegations because dataset ${DATASET} is not ready."
+        fi
     else
         if ! zfs_prop "name" >/dev/null 2>&1; then
             fail "Dataset ${DATASET} does not exist; sender role needs an existing dataset"
         fi
-        apply_zfs_allow "send,hold" || true
+        apply_zfs_allow "hold" || true
+        apply_zfs_allow_send || true
     fi
 else
     if [ "$ROLE" = "receiver" ]; then
         ensure_receiver_dataset
-        log "[dry-run] would run: zfs allow -u ${USER_NAME} create,mount,receive,send ${DATASET}"
+        apply_zfs_allow "create,mount,receive"
+        apply_zfs_allow_send
     else
         if zfs_prop "name" >/dev/null 2>&1; then
             log "[dry-run] dataset ${DATASET} exists"
         else
             log "[dry-run] would require existing dataset ${DATASET} (sender role)"
         fi
-        log "[dry-run] would run: zfs allow -u ${USER_NAME} send,hold ${DATASET}"
+        apply_zfs_allow "hold"
+        apply_zfs_allow_send
     fi
 fi
 

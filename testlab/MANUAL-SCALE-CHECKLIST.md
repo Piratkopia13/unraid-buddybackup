@@ -56,7 +56,9 @@ Prerequisites for the checklist host:
 4. Click **Send backup now** (runs the pull preflight and pull) and confirm
    "Successfully pulled backup from <host>!".
 5. On TrueNAS: confirm the sender user cannot receive, destroy or snapshot (`zfs allow` shows
-   only `send`/`hold` and the allowlist blocks everything else).
+   only `send:raw` (OpenZFS 2.4+) or `send` (older versions) plus `hold`, and the allowlist
+   blocks everything else). On OpenZFS 2.4+ also confirm plain `send` is NOT granted, so only
+   raw encrypted streams can ever be served.
 6. On Unraid: restore from the pulled dataset via the local restore path.
 7. On Unraid: snapshot pruning of the pulled dataset:
    - Before pulling, set the TrueNAS periodic snapshot task's Naming Schema to a sanoid-compatible

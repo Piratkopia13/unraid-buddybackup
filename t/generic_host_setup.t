@@ -100,4 +100,20 @@ subtest 'setup script structure' => sub {
     like($setup_source, qr/grep -qi truenas \/etc\/version/, 'TrueNAS SCALE detection present');
 };
 
+subtest 'setup script safety properties' => sub {
+    like($setup_source, qr/set -o nounset/, 'nounset enabled');
+    like($setup_source, qr/Option \$1 requires a value/, 'option values are presence-checked (no infinite loop on a missing value)');
+    like($setup_source, qr/wc -l\)" -gt 0/, 'pubkey containing any newline is rejected (authorized_keys injection guard)');
+    like($setup_source, qr/resolves to UID 0/, 'root/UID-0 user is refused (SSH lockout guard)');
+    like($setup_source, qr/currently MOUNTED/, 'mountpoint=none is never forced onto a mounted dataset');
+    like($setup_source, qr/zfs unallow -u "\$USER_NAME" "send"/, 'stale plain send grant is removed when send:raw is available');
+    like($setup_source, qr/mktemp "\/etc\/sudoers\.d\/\.buddybackup-/, 'sudoers entry is installed atomically from a dot-skipped temp file');
+    like($setup_source, qr/mktemp "\$\{ssh_dir\}\/\.authorized_keys\.XXXXXX"/, 'authorized_keys is replaced atomically');
+    like($setup_source, qr/mktemp "\$\{dropin_dir\}\/\.buddybackup-\$\{USER_NAME\}\.XXXXXX"/, 'sshd drop-in is installed atomically from a dotfile temp');
+    like($setup_source, qr/drop-in removed again/, 'sshd drop-in is rolled back when config validation fails');
+    like($setup_source, qr/remove_sudoers/, 'leftover sudoers entry is removed when sudo mode is disabled');
+    like($setup_source, qr/ERRORS is deliberately not reset/, 'verify() preserves setup errors');
+    like($setup_source, qr/sudo mode requested \(--sudo-mode yes\) but flag missing/, 'verify() detects a missing sudo flag for explicit sudo mode');
+};
+
 done_testing();
