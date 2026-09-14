@@ -188,12 +188,16 @@ The remote host only ever gets the minimum access it needs, never root, and neve
     <li><b>Receiver</b> (this Unraid pushes): the user may create and receive datasets under the configured parent
     (and serve restores back), but cannot delete, list other pools' data, or run anything outside the allowlist.
     Received data is never mounted on the remote host (<code>mountpoint=none</code>).</li>
-    <li><b>Sender</b> (this Unraid pulls): the user may send snapshots of the configured dataset and nothing more.
-    If the remote host runs OpenZFS 2.4+, sends are restricted to raw streams, so this Unraid cannot read the
-    remote data even if this server is compromised.</li>
+    <li><b>Sender</b> (this Unraid pulls): the user may send snapshots of the configured dataset
+    and nothing more - the forced-command allowlist itself only accepts commands naming that
+    dataset (or its children), so even sudo-mode hosts stay limited to the configured tree.
+    If the remote host runs OpenZFS 2.4+, sends are restricted to raw streams, so this Unraid
+    cannot read the remote data even if this server is compromised.</li>
     <li>SSH access is command-restricted (forced command), non-interactive, with no port forwarding and no pty.</li>
     <li>Backups are always raw encrypted snapshot streams: the remote end cannot read your data.</li>
 </ul>
+The allowlist, forced command and dataset scope are installed <b>per user</b>; if one host serves both
+directions, generate and run the setup twice with a different username for each role.
 Raw encrypted sends require <code>feature@encryption</code> on the destination pool. The "Test connection"
 button on a backup entry probes what it can and tells you what to verify manually.
 </p>

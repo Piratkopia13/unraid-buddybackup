@@ -13,7 +13,10 @@ Prerequisites for the checklist host:
 ## Setup
 
 1. On the Unraid server: open Settings → **ZFS Buddy Backup → Generic ZFS hosts**.
-2. Choose role, username (`buddybackup`), parent dataset, port, platform `TrueNAS SCALE`.
+2. Choose role, username, parent dataset, port, platform `TrueNAS SCALE`. Use a
+   **separate user per role** when one host serves both directions (the forced
+   command, allowlist and dataset scope are installed per user), e.g.
+   `buddybackup` for the receiver role and `buddybackupsend` for the sender role.
 3. Copy the generated setup command and the SSH public key.
 4. On TrueNAS (shell as root, e.g. web shell + `sudo -i`):
    - Run the setup command (or download the script, review it, then run it).
@@ -23,6 +26,8 @@ Prerequisites for the checklist host:
      `.buddybackup` directory on the dataset's pool (e.g. `/mnt/<pool>/.buddybackup/`), or
      wherever `--allowlist-dir` pointed. Confirm the script prints that path and that the
      directory is root-owned 0755.
+   - Confirm a sibling `<allowlist>.datasets` scope file exists next to the allowlist and
+     lists exactly the datasets passed with `--dataset`.
 5. In the TrueNAS UI:
    - System Settings → Services → SSH: enable, set the TCP port used above.
    - Credentials → Users: create the user (no password login, shell `/usr/bin/bash`), paste
@@ -56,8 +61,9 @@ Prerequisites for the checklist host:
 1. On TrueNAS: create snapshots of the source dataset (Data Protection → Periodic Snapshot
    Tasks, or one manual snapshot).
 2. On Unraid: Backups → add entry, type **Pull from generic ZFS host**, remote host/port/
-   username per setup, source dataset, local destination dataset.
-3. Click **Test connection** and confirm success plus the encryption status line.
+   username per setup (the sender role's user), source dataset, local destination dataset.
+3. Click **Test connection** and confirm success plus the encryption status line, and confirm
+   it includes **"Send permission verified"** (a dry-run raw send of an existing snapshot).
 4. Click **Send backup now** (runs the pull preflight and pull) and confirm
    "Successfully pulled backup from <host>!".
 5. On TrueNAS: confirm the sender user cannot receive, destroy or snapshot (`zfs allow` shows
@@ -85,7 +91,9 @@ Prerequisites for the checklist host:
 - Changing the served datasets: re-run the setup script with the new `--dataset` list (repeat
   the option for each dataset). The run converges: grants for previously set-up datasets that
   are no longer listed are revoked automatically (tracked in the root-owned
-  `buddybackup-<user>-zfs-grants.txt` state file next to the allowlist).
+  `buddybackup-<user>-zfs-grants.txt` state file next to the allowlist), and the allowlist's
+  `<allowlist>.datasets` scope file is rewritten to the same list so the forced command can no
+  longer reach the removed datasets.
 - Removing a single dataset's access: `--revoke <dataset>` (can be combined with a normal
   setup run or used alone).
 - Full uninstall: `--clean` revokes every recorded and discovered delegation, removes the
@@ -105,6 +113,22 @@ Prerequisites for the checklist host:
      permission denied (the user must never be able to replace the forced-command script).
 2. On Unraid with `AllowUnencryptedRemoteBackups=no`: a pull from an unencrypted dataset
    aborts with "is not encrypted!".
+3. **Datasets outside the configured scope must never pass the connection test** (this is
+   the sudo-mode regression check: on TrueNAS the validated commands run as root, so only
+   the allowlist scope can stop them):
+   - Create a dataset on TrueNAS that is NOT in either role's `--dataset` list (or pick an
+     existing unrelated one) and snapshot it.
+   - On Unraid, add a pull backup entry pointing at that dataset with the sender user and
+     click **Test connection**: it must report the dataset as inaccessible ("does not exist
+     ... or the SSH user is not permitted to access it") and must **never** print
+     "Send permission verified".
+   - Repeat for a push entry pointing outside the receiver's configured parent: it must
+     report "Neither dataset ... nor its parent exists" and must **never** print
+     "ZFS receive permissions verified".
+4. From the TrueNAS shell as root, remove one dataset line from the sender's
+   `<allowlist>.datasets` scope file; the pull connection test above must still reject that
+   dataset (a missing or drifted scope file is reported by `--verify` so it can be restored
+   by re-running the setup script).
 
 ## Pass criteria
 

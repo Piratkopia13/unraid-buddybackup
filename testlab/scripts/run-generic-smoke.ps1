@@ -103,6 +103,11 @@ function Get-GenericTestConfig {
         $genericUser = "buddybackup"
     }
 
+    $genericSendUser = [string](Get-ObjectValue -Object $functionalCfg -Name "genericSendUser")
+    if ([string]::IsNullOrWhiteSpace($genericSendUser)) {
+        $genericSendUser = "buddybackupsend"
+    }
+
     $genericSshPort = [string](Get-ObjectValue -Object $functionalCfg -Name "genericSshPort")
     if ([string]::IsNullOrWhiteSpace($genericSshPort)) {
         $genericSshPort = "22"
@@ -118,6 +123,7 @@ function Get-GenericTestConfig {
         hostGatewayIp = $hostGatewayIp
         nodeCAliasIp = $nodeCAliasIp
         genericUser = $genericUser
+        genericSendUser = $genericSendUser
         genericSshPort = $genericSshPort
         allowUnencryptedRemoteBackups = $allowUnencryptedRemoteBackups
     }
@@ -435,6 +441,42 @@ function Test-GenericSendOutput {
     }
 }
 
+function Test-GenericConnectionRejectedPull {
+    param(
+        [string[]]$Output,
+        [string]$NodeName
+    )
+
+    # Regression check for the "pull from a dataset that was never allowed"
+    # scenario: the test must never report send success for a dataset outside
+    # the sender's configured scope, even on sudo-mode hosts where zfs
+    # delegation checks do not apply (only the allowlist scope does).
+    $joined = ($Output -join [Environment]::NewLine)
+    if ($joined -match 'Send permission verified') {
+        throw "BuddyBackup generic test_connection unexpectedly verified send permission for a dataset outside the configured scope on node '$NodeName'.`n$joined"
+    }
+    if ($joined -match 'not permitted to access') {
+        return
+    }
+    throw "BuddyBackup generic test_connection did not reject the unallowed pull dataset on node '$NodeName'.`n$joined"
+}
+
+function Test-GenericConnectionRejectedPush {
+    param(
+        [string[]]$Output,
+        [string]$NodeName
+    )
+
+    $joined = ($Output -join [Environment]::NewLine)
+    if ($joined -match 'ZFS receive permissions verified') {
+        throw "BuddyBackup generic test_connection unexpectedly verified receive permissions for a dataset outside the configured scope on node '$NodeName'.`n$joined"
+    }
+    if ($joined -match 'Neither dataset|does not exist') {
+        return
+    }
+    throw "BuddyBackup generic test_connection did not reject the unallowed push dataset on node '$NodeName'.`n$joined"
+}
+
 function New-GenericNodePrepScript {
     $script = @'
 pool="$1"
@@ -453,9 +495,20 @@ if zfs list -H -o name "$source_dataset" >/dev/null 2>&1; then
     zfs destroy -r "$source_dataset"
 fi
 
+# Dataset that exists on the generic node but is NEVER added to any role's
+# --dataset list: the negative test-connection checks below must be rejected
+# against it (the allowlist scope is the only gate on sudo-mode hosts).
+unscoped_dataset="${pool}/${dataset_root}/never-allowed"
+if zfs list -H -o name "$unscoped_dataset" >/dev/null 2>&1; then
+    zfs destroy -r "$unscoped_dataset"
+fi
+
 if ! zfs list -H -o name "${pool}/${dataset_root}" >/dev/null 2>&1; then
     zfs create -o mountpoint=none "${pool}/${dataset_root}"
 fi
+
+zfs create -o mountpoint=none "$unscoped_dataset"
+zfs snapshot "$unscoped_dataset@$snapshot_name"
 
 zfs create -o mountpoint=/mnt/buddybackup-generic-source "$source_dataset"
 printf 'node=generic\nstage=generic-smoke\n' > /mnt/buddybackup-generic-source/payload.txt
@@ -519,6 +572,7 @@ peer_alias_ip="${14}"
 push_uid="${15}"
 pull_uid="${16}"
 generic_source_dataset="${17}"
+generic_send_user="${18}"
 
 set -euo pipefail
 
@@ -626,7 +680,7 @@ recursive="no"
 backup_cron="0 0 * * *"
 type="remote_pull"
 source_host="${generic_host}"
-source_user="${generic_user}"
+source_user="${generic_send_user}"
 source_port="22"
 destination_host=""
 destination_dataset="${pull_destination_dataset}"
@@ -795,12 +849,18 @@ try {
     Add-ReportAction -Report $report -Result $receiverSetup
     Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "generic_host_setup.sh receiver role failed on nodeC."
 
-    Write-Host "[testlab] Generic smoke: running generic_host_setup.sh sender role on nodeC"
+    Write-Host "[testlab] Generic smoke: running generic_host_setup.sh sender role on nodeC (dedicated sudo-mode user)"
+    # The sender user is separate from the receiver user (one user per role).
+    # Sudo mode deliberately reproduces the TrueNAS SCALE environment where
+    # zfs delegation checks do not apply, so the allowlist scope is the only
+    # remaining gate - exactly the configuration that let an unallowed pull
+    # dataset pass the connection test before the dataset scope was added.
     $senderSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent $setupScriptContent -Arguments @(
         "--role", "sender",
-        "--user", $genericCfg.genericUser,
+        "--user", $genericCfg.genericSendUser,
         "--dataset", $genericSourceDataset,
         "--port", $genericCfg.genericSshPort,
+        "--sudo-mode", "yes",
         "--pubkey", $unraidPublicKey
     ) -Label "nodeC-generic-setup-sender" -MaxAttempts 2 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $senderSetup
@@ -824,7 +884,8 @@ try {
         $genericCfg.nodeCAliasIp,
         $pushUid,
         $pullUid,
-        $genericSourceDataset
+        $genericSourceDataset,
+        $genericCfg.genericSendUser
     ) -Label "nodeA-generic-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $unraidSetup
     Assert-CommandSucceeded -Result $unraidSetup -FailureMessage "Unraid nodeA generic setup failed."
@@ -838,16 +899,43 @@ try {
     Assert-CommandSucceeded -Result $pushConnection -FailureMessage "BuddyBackup test_generic_connection (push) failed on nodeA."
     if ($Execute) {
         Test-GenericConnectionOutput -Output $pushConnection.output -NodeName "nodeA"
+        if ((($pushConnection.output -join "`n") -notmatch 'ZFS receive permissions verified')) {
+            throw "BuddyBackup push test_connection did not verify ZFS receive permissions on nodeA.`n$(($pushConnection.output -join "`n"))"
+        }
     }
 
     Write-Host "[testlab] Generic smoke: testing generic pull connection from nodeA"
     $pullConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
-        $genericCfg.nodeCAliasIp, $genericCfg.genericUser, "22", $genericSourceDataset, "pull"
+        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $genericSourceDataset, "pull"
     ) -Label "nodeA-generic-pull-test-connection" -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $pullConnection
     Assert-CommandSucceeded -Result $pullConnection -FailureMessage "BuddyBackup test_generic_connection (pull) failed on nodeA."
     if ($Execute) {
         Test-GenericConnectionOutput -Output $pullConnection.output -NodeName "nodeA"
+        if ((($pullConnection.output -join "`n") -notmatch 'Send permission verified')) {
+            throw "BuddyBackup pull test_connection did not verify send permission on nodeA.`n$(($pullConnection.output -join "`n"))"
+        }
+    }
+
+    Write-Host "[testlab] Generic smoke: negative checks - datasets outside the configured scope must be rejected"
+    $unscopedDataset = "$genericDatasetRoot/never-allowed"
+
+    $rejectedPullConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
+        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $unscopedDataset, "pull"
+    ) -Label "nodeA-generic-pull-unallowed-test-connection" -DoExecute:$Execute
+    Add-ReportAction -Report $report -Result $rejectedPullConnection
+    Assert-CommandSucceeded -Result $rejectedPullConnection -FailureMessage "BuddyBackup test_generic_connection (unallowed pull) failed on nodeA."
+    if ($Execute) {
+        Test-GenericConnectionRejectedPull -Output $rejectedPullConnection.output -NodeName "nodeA"
+    }
+
+    $rejectedPushConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
+        $genericCfg.nodeCAliasIp, $genericCfg.genericUser, "22", "${unscopedDataset}/from-nodeA", "push"
+    ) -Label "nodeA-generic-push-unallowed-test-connection" -DoExecute:$Execute
+    Add-ReportAction -Report $report -Result $rejectedPushConnection
+    Assert-CommandSucceeded -Result $rejectedPushConnection -FailureMessage "BuddyBackup test_generic_connection (unallowed push) failed on nodeA."
+    if ($Execute) {
+        Test-GenericConnectionRejectedPush -Output $rejectedPushConnection.output -NodeName "nodeA"
     }
 
     Write-Host "[testlab] Generic smoke: creating nodeA source snapshot"
@@ -867,7 +955,7 @@ try {
 
     Write-Host "[testlab] Generic smoke: pulling backup from nodeC to nodeA"
     $pullResult = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "pull_backup" -Arguments @(
-        $genericCfg.nodeCAliasIp, $genericCfg.genericUser, "22", $genericSourceDataset, "no", $pullDestinationDataset, $pullUid
+        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $genericSourceDataset, "no", $pullDestinationDataset, $pullUid
     ) -Label "nodeA-generic-pull" -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $pullResult
     Assert-CommandSucceeded -Result $pullResult -FailureMessage "Generic pull failed for uid '$pullUid' on nodeA."

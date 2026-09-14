@@ -426,9 +426,11 @@ _(Your SSH public key (send this to you buddy))_:
 
         <div style="text-align:center;">
             <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-            <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+            <input class="disable-on-unsaved buddybackup-type-not-pull" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+            <input class="disable-on-unsaved buddybackup-type-pull" style="display:none;" type="button" value="_(Pull backup now)_" onclick="send_backup(this)" <?=$disabled?>>
             <input class="disable-on-unsaved-simple buddybackup-type-not-pull" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
-            <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
+            <input type="button" name="#restore" class="buddybackup-type-not-pull" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
+            <input type="button" name="#restore" class="buddybackup-type-pull" style="display:none;" value="<?=_('Restore pulled data to a local dataset')?>" onclick="restore_from_destination(this)">
             <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
         </div>
 

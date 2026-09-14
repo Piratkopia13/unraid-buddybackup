@@ -116,4 +116,22 @@ subtest 'setup script safety properties' => sub {
     like($setup_source, qr/sudo mode requested \(--sudo-mode yes\) but flag missing/, 'verify() detects a missing sudo flag for explicit sudo mode');
 };
 
+subtest 'dataset scope file management' => sub {
+    like($setup_source, qr/printf '%s\\n' "\$\{scope_ds\}"/, 'scope file writer emits one plain dataset name per line');
+    like($setup_source, qr/one configured dataset per line/, 'scope file documents its plain-name format');
+    like($setup_source, qr/never contain quotes, commas or indentation/, 'scope file writer warns the format must stay plain names');
+    like($setup_source, qr/filter_scope_file "\$f"/, 'revoke mode rewrites scope files with the plain-name filter');
+    like($setup_source, qr/tab-separated or quoted rewrite would silently drop/, 'scope filter documents why the state-file filter must not be used');
+    like($setup_source, qr/filter_scope_file\(\)/, 'scope filter function is defined');
+    like($setup_source, qr/\.buddybackup-scope\.XXXXXX/, 'scope file is rewritten atomically from a dotfile temp');
+    like($setup_source, qr/compare them byte-exactly/, 'verify() compares the scope file byte-exactly against the configured datasets');
+    like($setup_source, qr/dataset scope file at \$\{scope_file\} does not match/, 'verify() detects a scope file that drifted from the configured datasets');
+    like($setup_source, qr/dataset scope file at \$\{scope_file\} is empty/, 'verify() detects an empty scope file (which would deny everything)');
+    like($setup_source, qr/buddybackup-\$\{USER_NAME\}-restrict_zfs_send\.datasets/, 'revoke mode also filters the sender allowlist scope file');
+    like($setup_source, qr/ALLOWLIST_PATH="\$\{ALLOWLIST_DIR\}\/buddybackup-\$\{USER_NAME\}-restrict_zfs"/, 'receiver allowlist path is per-user');
+    like($setup_source, qr/ALLOWLIST_PATH="\$\{ALLOWLIST_DIR\}\/buddybackup-\$\{USER_NAME\}-restrict_zfs_send"/, 'sender allowlist path is per-user');
+    like($setup_source, qr/pre-2026 legacy/, 'clean also removes the legacy shared allowlist names');
+    like($setup_source, qr/once per\s+role with a separate --user/s, 'usage documents one user per role for dual-role hosts');
+};
+
 done_testing();

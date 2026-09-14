@@ -13,9 +13,57 @@ $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr
 # sudo -n; the allowlist below remains the fine-grained gate either way.
 my $use_sudo = (-f "$0.sudo") ? 1 : 0;
 
-my $POOL = qr/'[\w-]+'/;
-my $DATASET = qr/'[\w\/ -]+'/;
-my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+# Dataset scope: generic_host_setup.sh installs this allowlist on generic ZFS
+# hosts together with a sibling "<script>.datasets" file listing the datasets
+# the host was configured for. When that file exists, the dataset-scoped
+# patterns below are narrowed to those datasets (and their child datasets), so
+# a sudo-mode host - where validated commands already run as root and zfs
+# delegation checks are bypassed - can never touch anything outside the
+# configured tree. When the file exists but lists no datasets, every
+# dataset-scoped command is denied (a secure empty scope). Without the file
+# (this script is also the Unraid-to-Unraid receiver allowlist, which is
+# installed without a scope file) the historical unscoped patterns are kept.
+my $scope_loaded = 0;
+my @DATASET_SCOPE;
+if ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
+    $scope_loaded = 1;
+    while ( my $scope_line = <$scope_fh> ) {
+        $scope_line =~ s/\r?\n\z//;
+        next if $scope_line eq q{};
+        next if $scope_line =~ /^#/;
+        push @DATASET_SCOPE, $scope_line
+            if $scope_line =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+    close $scope_fh;
+}
+
+my $POOL;
+my $DATASET;
+my $DATASET_SNAPSHOT;
+if ($scope_loaded) {
+    if (@DATASET_SCOPE) {
+        my %scope_pools;
+        foreach my $scope_ds (@DATASET_SCOPE) {
+            my ($scope_pool) = split( /\//, $scope_ds, 2 );
+            $scope_pools{$scope_pool} = 1;
+        }
+        my $scope_alt        = join( '|', map { quotemeta } @DATASET_SCOPE );
+        my $scope_pools_alt  = join( '|', map { quotemeta } sort keys %scope_pools );
+        $DATASET          = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?'/;
+        $DATASET_SNAPSHOT = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[:\w:-]+'/;
+        $POOL             = qr/'(?:${scope_pools_alt})'/;
+    }
+    else {
+        $DATASET          = qr/(?!)/;
+        $DATASET_SNAPSHOT = qr/(?!)/;
+        $POOL             = qr/(?!)/;
+    }
+}
+else {
+    $DATASET          = qr/'[\w\/ -]+'/;
+    $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+    $POOL             = qr/'[\w-]+'/;
+}
 
 my $SYNCOID_SNAPSHOT = qr/'[\w\/ -]+'@('?)syncoid_[\w:-]+\1/;
 
@@ -38,6 +86,7 @@ my @ALLOWED_COMMANDS = (
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
     qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
     qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
+    qr/zfs allow $DATASET/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/zfs receive -A $DATASET/,
     qr/zfs send -w -nvP $DATASET_SNAPSHOT/,

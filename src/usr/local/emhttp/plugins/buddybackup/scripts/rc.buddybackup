@@ -1254,7 +1254,7 @@ test_generic_connection_cmd() {
             encryption_value=$(zfs_get_remote_prop_line "${host}" "${remote_user}" "${remote_port}" "encryption" "${remote_dataset}")
         else
             if [[ "${direction}" == "pull" ]]; then
-                echo "<span style='color:red'>Source dataset '${remote_dataset_html}' does not exist on ${host_html} (or the user has no access to it).</span><br>"
+                echo "<span style='color:red'>Source dataset '${remote_dataset_html}' does not exist on ${host_html}, or the SSH user is not permitted to access it. If this dataset was never allowed with the generic host setup script (role sender), run that script on ${host_html} with this dataset first.</span><br>"
             else
                 local parent_dataset="${remote_dataset%/*}"
                 if [[ -n "${parent_dataset}" ]] && [[ "${parent_dataset}" != "${remote_dataset}" ]]; then
@@ -1300,6 +1300,70 @@ test_generic_connection_cmd() {
             echo "Resume token support: available on pool '$(html_escape "${pool}")'.<br>"
         else
             echo "<span style='color:#996600'>Resume token support could not be verified (interrupted transfers restart from scratch).</span><br>"
+        fi
+
+        if [[ "${direction}" == "pull" ]]; then
+            local snapshot_probe_raw
+            snapshot_probe_raw=$(run_remote_ssh "${host}" "zfs get -j -p -d 1 -t snapshot guid,creation $(shell_single_quote "${remote_dataset}")" "${remote_user}" "${remote_port}" 2>&1)
+            local probe_snapshot
+            probe_snapshot=$(printf '%s\n' "${snapshot_probe_raw}" | jq -r '(.datasets // {}) | keys_unsorted[]?' 2>/dev/null | grep -m1 '@' || true)
+            if [[ -n "${probe_snapshot}" ]]; then
+                local send_probe_raw
+                send_probe_raw=$(run_remote_ssh "${host}" "zfs send -w -nvP $(shell_single_quote "${probe_snapshot}")" "${remote_user}" "${remote_port}" 2>&1)
+                local send_probe_status=$?
+                local send_probe_output
+                send_probe_output=$(sanitize_ssh_output "${send_probe_raw}")
+                # The allowlist exits 0 even when it blocks a command, and zfs
+                # errors go to stderr, so the exit status alone proves nothing:
+                # only the dry-run estimate line proves the send actually ran.
+                if [[ ${send_probe_status} -eq 0 ]] && [[ "${send_probe_output}" == *"estimated size"* ]]; then
+                    echo "<span style='color:green'>Send permission verified: a dry-run send of '$(html_escape "${probe_snapshot}")' succeeded.</span><br>"
+                elif [[ -n "${send_probe_output}" ]]; then
+                    echo "<span style='color:red'>The remote user '${remote_user}' is not permitted to send snapshots of '${remote_dataset_html}' (dry-run send failed: $(html_escape "${send_probe_output}")). Run the generic host setup script (role sender) on ${host_html} with this dataset first.</span><br>"
+                else
+                    echo "<span style='color:red'>The remote user '${remote_user}' is not permitted to send snapshots of '${remote_dataset_html}' (dry-run send was rejected by the remote allowlist). Run the generic host setup script (role sender) on ${host_html} with this dataset first.</span><br>"
+                fi
+            else
+                echo "<span style='color:#996600'>No snapshots found on '${remote_dataset_html}' yet; send permission could not be verified. Pull backups need existing snapshots on the source dataset (or a parent of it).</span><br>"
+            fi
+        else
+            local grant_probe_dataset="${remote_dataset}"
+            if ! zfs_get_remote_prop_line "${host}" "${remote_user}" "${remote_port}" "name" "${grant_probe_dataset}" >/dev/null 2>&1; then
+                grant_probe_dataset="${remote_dataset%/*}"
+            fi
+            local grant_probe_raw
+            grant_probe_raw=$(run_remote_ssh "${host}" "zfs allow $(shell_single_quote "${grant_probe_dataset}")" "${remote_user}" "${remote_port}" 2>&1)
+            local grant_probe_output
+            grant_probe_output=$(sanitize_ssh_output "${grant_probe_raw}")
+            local grant_probe_perms
+            grant_probe_perms=$(printf '%s\n' "${grant_probe_output}" | awk -v u="${remote_user}" '
+                $1 == "user" && $2 == u { print $3 }' 2>/dev/null)
+            # 'zfs allow <dataset>' prints a "Permissions on ..." header whenever
+            # it can actually read the dataset's delegation list (any user may
+            # view it); the header is absent only when the probe was blocked by
+            # the remote allowlist or the dataset cannot be opened.
+            local grant_probe_listed=""
+            grant_probe_listed=$(printf '%s\n' "${grant_probe_output}" | grep -m1 'Permissions on' || true)
+            local missing_perms=""
+            for perm in create mount receive; do
+                if ! printf '%s\n' "${grant_probe_perms}" | tr ',' '\n' | grep -qx "${perm}"; then
+                    missing_perms+="${perm} "
+                fi
+            done
+            if [[ -z "${missing_perms}" ]]; then
+                echo "<span style='color:green'>ZFS receive permissions verified for user '${remote_user}' on '$(html_escape "${grant_probe_dataset}")'.</span><br>"
+                if ! printf '%s\n' "${grant_probe_perms}" | tr ',' '\n' | grep -Eqx "send(:raw)?"; then
+                    echo "<span style='color:#996600'>Note: user '${remote_user}' has no send permission on '$(html_escape "${grant_probe_dataset}")'; restoring pushed backups from ${host_html} will not work.</span><br>"
+                fi
+            elif [[ -n "${grant_probe_listed}" ]]; then
+                if [[ -z "${grant_probe_perms}" ]]; then
+                    echo "<span style='color:red'>The remote user '${remote_user}' does not hold the required ZFS delegations (create, mount, receive) on '$(html_escape "${grant_probe_dataset}")'. Run the generic host setup script (role receiver) on ${host_html} with this dataset first.</span><br>"
+                else
+                    echo "<span style='color:red'>The remote user '${remote_user}' is missing ZFS delegations on '$(html_escape "${grant_probe_dataset}")': $(html_escape "${missing_perms% }"). Run the generic host setup script (role receiver) on ${host_html} with this dataset first.</span><br>"
+                fi
+            else
+                echo "<span style='color:#996600'>Could not verify ZFS receive permissions on '$(html_escape "${grant_probe_dataset}")' (probe failed or was restricted). Result: $(html_escape "${grant_probe_output}")</span><br>"
+            fi
         fi
 
         local security_validation_raw=""

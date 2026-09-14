@@ -29,6 +29,11 @@ Setup (creates/updates the restricted user, allowlist and delegations):
                             sender:   dataset (or parent of datasets) to serve.
   --pubkey KEY              Unraid's SSH public key (single line).
 
+The installed forced-command allowlist only accepts commands that name one of
+the configured datasets (or their children): it is narrowed to this run's
+--dataset list via a root-owned sibling "<allowlist>.datasets" file. Re-run the
+script to converge the allowlist, grants and scope after changing datasets.
+
 Revocation and uninstall:
   --revoke NAME             revoke all zfs delegations for the user on NAME and
                             drop it from the tracked grant set. Can be combined
@@ -44,7 +49,11 @@ Revocation and uninstall:
 
 Optional:
   --user NAME               SSH user to create/use (default: buddybackup; must be
-                            a dedicated user, root/UID 0 is refused)
+                            a dedicated user, root/UID 0 is refused). The forced
+                            command, allowlist and scope are installed per user,
+                            and each run converges that user to one role: to
+                            serve both roles on one host, run the script once per
+                            role with a separate --user for each.
   --port N                  SSH service port, for notes only (default: 22)
   --sudo-mode auto|yes|no   allow validated commands to run via sudo where the
                             zfs binary is not executable by the user
@@ -261,9 +270,9 @@ if [ -n "$ALLOWLIST_DIR" ]; then
         exit 1
     fi
     if [ "$ROLE" = "receiver" ]; then
-        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs"
+        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-${USER_NAME}-restrict_zfs"
     else
-        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-restrict_zfs_send"
+        ALLOWLIST_PATH="${ALLOWLIST_DIR}/buddybackup-${USER_NAME}-restrict_zfs_send"
     fi
 fi
 
@@ -386,9 +395,57 @@ $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr
 # sudo -n; the allowlist below remains the fine-grained gate either way.
 my $use_sudo = (-f "$0.sudo") ? 1 : 0;
 
-my $POOL = qr/'[\w-]+'/;
-my $DATASET = qr/'[\w\/ -]+'/;
-my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+# Dataset scope: generic_host_setup.sh installs this allowlist on generic ZFS
+# hosts together with a sibling "<script>.datasets" file listing the datasets
+# the host was configured for. When that file exists, the dataset-scoped
+# patterns below are narrowed to those datasets (and their child datasets), so
+# a sudo-mode host - where validated commands already run as root and zfs
+# delegation checks are bypassed - can never touch anything outside the
+# configured tree. When the file exists but lists no datasets, every
+# dataset-scoped command is denied (a secure empty scope). Without the file
+# (this script is also the Unraid-to-Unraid receiver allowlist, which is
+# installed without a scope file) the historical unscoped patterns are kept.
+my $scope_loaded = 0;
+my @DATASET_SCOPE;
+if ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
+    $scope_loaded = 1;
+    while ( my $scope_line = <$scope_fh> ) {
+        $scope_line =~ s/\r?\n\z//;
+        next if $scope_line eq q{};
+        next if $scope_line =~ /^#/;
+        push @DATASET_SCOPE, $scope_line
+            if $scope_line =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+    close $scope_fh;
+}
+
+my $POOL;
+my $DATASET;
+my $DATASET_SNAPSHOT;
+if ($scope_loaded) {
+    if (@DATASET_SCOPE) {
+        my %scope_pools;
+        foreach my $scope_ds (@DATASET_SCOPE) {
+            my ($scope_pool) = split( /\//, $scope_ds, 2 );
+            $scope_pools{$scope_pool} = 1;
+        }
+        my $scope_alt        = join( '|', map { quotemeta } @DATASET_SCOPE );
+        my $scope_pools_alt  = join( '|', map { quotemeta } sort keys %scope_pools );
+        $DATASET          = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?'/;
+        $DATASET_SNAPSHOT = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[:\w:-]+'/;
+        $POOL             = qr/'(?:${scope_pools_alt})'/;
+    }
+    else {
+        $DATASET          = qr/(?!)/;
+        $DATASET_SNAPSHOT = qr/(?!)/;
+        $POOL             = qr/(?!)/;
+    }
+}
+else {
+    $DATASET          = qr/'[\w\/ -]+'/;
+    $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+    $POOL             = qr/'[\w-]+'/;
+}
 
 my $SYNCOID_SNAPSHOT = qr/'[\w\/ -]+'@('?)syncoid_[\w:-]+\1/;
 
@@ -411,6 +468,7 @@ my @ALLOWED_COMMANDS = (
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
     qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
     qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
+    qr/zfs allow $DATASET/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/zfs receive -A $DATASET/,
     qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
@@ -492,9 +550,57 @@ $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr
 # sudo -n; the allowlist below remains the fine-grained gate either way.
 my $use_sudo = (-f "$0.sudo") ? 1 : 0;
 
-my $POOL = qr/'[\w-]+'/;
-my $DATASET = qr/'[\w\/ -]+'/;
-my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+# Dataset scope: generic_host_setup.sh installs this allowlist on generic ZFS
+# hosts together with a sibling "<script>.datasets" file listing the datasets
+# the host was configured for. When that file exists, the dataset-scoped
+# patterns below are narrowed to those datasets (and their child datasets), so
+# a sudo-mode host - where validated commands already run as root and zfs
+# delegation checks are bypassed - can never touch anything outside the
+# configured tree. When the file exists but lists no datasets, every
+# dataset-scoped command is denied (a secure empty scope). Without the file
+# (this script is also installed without a scope file on other setups) the
+# historical unscoped patterns are kept.
+my $scope_loaded = 0;
+my @DATASET_SCOPE;
+if ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
+    $scope_loaded = 1;
+    while ( my $scope_line = <$scope_fh> ) {
+        $scope_line =~ s/\r?\n\z//;
+        next if $scope_line eq q{};
+        next if $scope_line =~ /^#/;
+        push @DATASET_SCOPE, $scope_line
+            if $scope_line =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+    close $scope_fh;
+}
+
+my $POOL;
+my $DATASET;
+my $DATASET_SNAPSHOT;
+if ($scope_loaded) {
+    if (@DATASET_SCOPE) {
+        my %scope_pools;
+        foreach my $scope_ds (@DATASET_SCOPE) {
+            my ($scope_pool) = split( /\//, $scope_ds, 2 );
+            $scope_pools{$scope_pool} = 1;
+        }
+        my $scope_alt        = join( '|', map { quotemeta } @DATASET_SCOPE );
+        my $scope_pools_alt  = join( '|', map { quotemeta } sort keys %scope_pools );
+        $DATASET          = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?'/;
+        $DATASET_SNAPSHOT = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[:\w:-]+'/;
+        $POOL             = qr/'(?:${scope_pools_alt})'/;
+    }
+    else {
+        $DATASET          = qr/(?!)/;
+        $DATASET_SNAPSHOT = qr/(?!)/;
+        $POOL             = qr/(?!)/;
+    }
+}
+else {
+    $DATASET          = qr/'[\w\/ -]+'/;
+    $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+    $POOL             = qr/'[\w-]+'/;
+}
 
 my $REDIRS = qr/(?:\s+(?:2>\/dev\/null|2>&1))?/;
 my $PIPE = qr/\s*\|\s*/;
@@ -514,6 +620,7 @@ my @ALLOWED_COMMANDS = (
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
     qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
     qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
+    qr/zfs allow $DATASET/,
     qr/zfs send\s+-nvP -t \d+/,
     qr/zfs send\s+-t \d+$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
     qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
@@ -595,8 +702,35 @@ BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF
         return 1
     fi
     chown 0:0 "${ALLOWLIST_PATH}" >/dev/null 2>&1 || true
-}
 
+    # Sibling scope file consumed by the installed allowlist: it narrows every
+    # dataset-scoped pattern to the datasets configured in this run. The
+    # allowlist parses plain dataset names (one per line), so this file must
+    # never contain quotes, commas or indentation. Root-owned and not writable
+    # by the SSH user; a missing file makes the allowlist fall back to its
+    # historical unscoped patterns (which is how Unraid-to-Unraid installs of
+    # the plain deps allowlists run).
+    local scope_file="${ALLOWLIST_PATH}.datasets"
+    {
+        printf '# Generated by generic_host_setup.sh: one configured dataset per line.\n'
+        local scope_ds
+        for scope_ds in "${DATASET_LIST[@]}"; do
+            printf '%s\n' "${scope_ds}"
+        done
+    } > "${scope_file}.tmp.$$" || {
+        fail "Could not write ${scope_file}.tmp.$$"
+        rm -f "${scope_file}.tmp.$$"
+        return 1
+    }
+    if ! mv -f "${scope_file}.tmp.$$" "${scope_file}"; then
+        fail "Could not install ${scope_file}"
+        rm -f "${scope_file}.tmp.$$"
+        return 1
+    fi
+    chmod 644 "${scope_file}"
+    chown 0:0 "${scope_file}" >/dev/null 2>&1 || true
+    log "Dataset scope for ${USER_NAME}: ${DATASET_LIST[*]}"
+}
 set_sudo_flag() {
     local flag_path="${ALLOWLIST_PATH}.sudo"
     local want_sudo="$1"
@@ -880,7 +1014,7 @@ collect_buddybackup_dirs() {
     for d in "$ALLOWLIST_DIR" "/usr/local/sbin"; do
         [ -n "$d" ] || continue
         [ -d "$d" ] || continue
-        if ls "${d}/buddybackup-restrict_zfs"* >/dev/null 2>&1 || [ -f "${d}/$(state_file_name)" ]; then
+        if ls "${d}"/buddybackup-*restrict_zfs* >/dev/null 2>&1 || [ -f "${d}/$(state_file_name)" ]; then
             case "$seen" in *"|${d}|"*) ;; *) seen="${seen}|${d}|"; printf '%s\n' "$d" ;; esac
         fi
     done
@@ -950,6 +1084,39 @@ filter_state_file() {
         done
         if [ "$skip" = "no" ]; then
             printf '%s\t%s\n' "$ds" "$role" >> "${tmp_file}"
+        fi
+    done < "$f"
+    if ! mv -f "${tmp_file}" "$f"; then
+        warn "Could not update ${f}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    log "Removed revoked entries from ${f}"
+}
+
+# Drops the --revoke datasets from an allowlist dataset scope file, rewriting
+# it atomically. Unlike the grant state file, the scope file must stay plain
+# dataset names (one per line) because that is exactly what the installed
+# allowlist parses; a tab-separated or quoted rewrite would silently drop
+# every entry and widen the allowlist back to its unscoped fallback.
+filter_scope_file() {
+    local f="$1"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "[dry-run] would drop revoked entries from ${f}"
+        return 0
+    fi
+    local tmp_file
+    tmp_file=$(mktemp "$(dirname "$f")/.buddybackup-scope.XXXXXX") || { warn "Could not create a temp file in $(dirname "$f")"; return 1; }
+    local ds skip rev
+    : > "${tmp_file}"
+    while IFS= read -r ds || [ -n "$ds" ]; do
+        [ -n "$ds" ] || continue
+        skip="no"
+        for rev in "${REVOKE_LIST[@]}"; do
+            if [ "$ds" = "$rev" ]; then skip="yes"; fi
+        done
+        if [ "$skip" = "no" ]; then
+            printf '%s\n' "$ds" >> "${tmp_file}"
         fi
     done < "$f"
     if ! mv -f "${tmp_file}" "$f"; then
@@ -1053,6 +1220,16 @@ run_revoke_mode() {
         if [ -f "$f" ]; then
             filter_state_file "$f"
         fi
+        # Keep the allowlist scope files in sync: a revoked dataset must no
+        # longer be reachable through the forced command either. These files
+        # hold plain dataset names, so they get their own filter.
+        for f in "buddybackup-${USER_NAME}-restrict_zfs.datasets" \
+                 "buddybackup-${USER_NAME}-restrict_zfs_send.datasets"; do
+            f="${d}/${f}"
+            if [ -f "$f" ]; then
+                filter_scope_file "$f"
+            fi
+        done
     done < <(collect_buddybackup_dirs)
     if [ "$ERRORS" -gt 0 ]; then return 1; fi
     log "Revocation complete."
@@ -1063,8 +1240,16 @@ remove_buddybackup_files() {
     local d f p
     while IFS= read -r d; do
         [ -n "$d" ] || continue
-        for f in "buddybackup-restrict_zfs" "buddybackup-restrict_zfs.sudo" \
+        # Per-user allowlist files (current naming) plus the pre-2026 legacy
+        # shared names, so --clean also clears hosts set up by older versions.
+        for f in "buddybackup-${USER_NAME}-restrict_zfs" "buddybackup-${USER_NAME}-restrict_zfs.sudo" \
+                 "buddybackup-${USER_NAME}-restrict_zfs.datasets" \
+                 "buddybackup-${USER_NAME}-restrict_zfs_send" "buddybackup-${USER_NAME}-restrict_zfs_send.sudo" \
+                 "buddybackup-${USER_NAME}-restrict_zfs_send.datasets" \
+                 "buddybackup-restrict_zfs" "buddybackup-restrict_zfs.sudo" \
+                 "buddybackup-restrict_zfs.datasets" \
                  "buddybackup-restrict_zfs_send" "buddybackup-restrict_zfs_send.sudo" \
+                 "buddybackup-restrict_zfs_send.datasets" \
                  "$(state_file_name)"; do
             p="${d}/${f}"
             if [ -f "$p" ]; then
@@ -1129,7 +1314,7 @@ strip_forced_command_lines() {
     fi
     local tmp_file
     tmp_file=$(mktemp "${home_dir}/.ssh/.authorized_keys.XXXXXX") || { warn "Could not create a temp file in ${home_dir}/.ssh"; return 1; }
-    if ! grep -Ev 'command="[^"]*buddybackup-restrict_zfs' "${ak_file}" > "${tmp_file}"; then
+    if ! grep -Ev 'command="[^"]*restrict_zfs' "${ak_file}" > "${tmp_file}"; then
         : > "${tmp_file}"
     fi
     if ! mv -f "${tmp_file}" "${ak_file}"; then
@@ -1451,6 +1636,29 @@ verify() {
                 fi
             fi
         done
+
+        # Dataset scope file: the allowlist must be narrowed to exactly the
+        # datasets configured in this run. The file is written as plain
+        # dataset names (one per line), so compare them byte-exactly.
+        local scope_file="${ALLOWLIST_PATH}.datasets"
+        local scope_wanted scope_entries=""
+        for scope_wanted in "${DATASET_LIST[@]}"; do
+            if [ -n "$scope_entries" ]; then scope_entries+=$'\n'; fi
+            scope_entries+="${scope_wanted}"
+        done
+        local scope_found
+        scope_found=$(grep -Ev '^(#|[[:space:]]*$)' "${scope_file}" 2>/dev/null | sort || true)
+        local scope_expected
+        scope_expected=$(printf '%s\n' "${scope_entries}" | sort)
+        if [ ! -f "${scope_file}" ]; then
+            check_fail "dataset scope file missing at ${scope_file} (re-run this script)"
+        elif [ -z "$(printf '%s' "${scope_found}" | tr -d '[:space:]')" ]; then
+            check_fail "dataset scope file at ${scope_file} is empty (re-run this script)"
+        elif [ "${scope_found}" != "${scope_expected}" ]; then
+            check_fail "dataset scope file at ${scope_file} does not match the configured datasets (re-run this script)"
+        else
+            check_pass "dataset scope file matches the configured datasets (${scope_entries})"
+        fi
 
         if [ "$IS_SCALE" -eq 0 ]; then
             if [ -f "/etc/ssh/sshd_config.d/buddybackup-${USER_NAME}.conf" ]; then
