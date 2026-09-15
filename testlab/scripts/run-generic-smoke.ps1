@@ -103,11 +103,6 @@ function Get-GenericTestConfig {
         $genericUser = "buddybackup"
     }
 
-    $genericSendUser = [string](Get-ObjectValue -Object $functionalCfg -Name "genericSendUser")
-    if ([string]::IsNullOrWhiteSpace($genericSendUser)) {
-        $genericSendUser = "buddybackupsend"
-    }
-
     $genericSshPort = [string](Get-ObjectValue -Object $functionalCfg -Name "genericSshPort")
     if ([string]::IsNullOrWhiteSpace($genericSshPort)) {
         $genericSshPort = "22"
@@ -123,7 +118,6 @@ function Get-GenericTestConfig {
         hostGatewayIp = $hostGatewayIp
         nodeCAliasIp = $nodeCAliasIp
         genericUser = $genericUser
-        genericSendUser = $genericSendUser
         genericSshPort = $genericSshPort
         allowUnencryptedRemoteBackups = $allowUnencryptedRemoteBackups
     }
@@ -431,34 +425,14 @@ function Test-GenericSendOutput {
     )
 
     $joined = ($Output -join [Environment]::NewLine)
-    if ($joined -match 'Aborting backup\.' -or $joined -match 'Sending backup failed\.' -or $joined -match 'Pulling backup failed\.') {
+    if ($joined -match 'Aborting backup\.' -or $joined -match 'Sending backup failed\.') {
         throw "BuddyBackup generic $Flow reported a failure on node '$NodeName'.`n$joined"
     }
 
-    $successMarker = if ($Flow -eq "push") { "Successfully synced backup to buddy!" } else { "Successfully pulled backup from" }
+    $successMarker = "Successfully synced backup to buddy!"
     if ($joined -notmatch [regex]::Escape($successMarker)) {
         throw "BuddyBackup generic $Flow did not report success on node '$NodeName'.`n$joined"
     }
-}
-
-function Test-GenericConnectionRejectedPull {
-    param(
-        [string[]]$Output,
-        [string]$NodeName
-    )
-
-    # Regression check for the "pull from a dataset that was never allowed"
-    # scenario: the test must never report send success for a dataset outside
-    # the sender's configured scope, even on sudo-mode hosts where zfs
-    # delegation checks do not apply (only the allowlist scope does).
-    $joined = ($Output -join [Environment]::NewLine)
-    if ($joined -match 'Send permission verified') {
-        throw "BuddyBackup generic test_connection unexpectedly verified send permission for a dataset outside the configured scope on node '$NodeName'.`n$joined"
-    }
-    if ($joined -match 'not permitted to access') {
-        return
-    }
-    throw "BuddyBackup generic test_connection did not reject the unallowed pull dataset on node '$NodeName'.`n$joined"
 }
 
 function Test-GenericConnectionRejectedPush {
@@ -519,36 +493,8 @@ if [ -z "$existing_snapshot" ]; then
     zfs snapshot "$source_dataset@$snapshot_name"
 fi
 
-# Seed sanoid-compatible autosnap_*_hourly snapshots (the naming a customized TrueNAS
-# naming schema produces) so the pull replicates names that sanoid can prune. Backdate their
-# creation times when OpenZFS supports setting the creation property at snapshot creation
-# time; otherwise fall back to fresh snapshots and the Unraid-side scenario switches to
-# retention hourly=0 (prune everything).
-probe_dataset="${source_dataset}@bb_creation_probe"
-backdated_creation="no"
-if zfs snapshot -o creation=1000000000 "$probe_dataset" 2>/dev/null; then
-    probe_creation=$(zfs get -H -o value creation "$probe_dataset")
-    if [ "$probe_creation" = "1000000000" ]; then
-        backdated_creation="yes"
-    fi
-    zfs destroy "$probe_dataset"
-fi
-
-for hours_ago in 7 5 3 1; do
-    snap_time=$(( $(date +%s) - hours_ago * 3600 ))
-    snap_label=$(date -u -d "@${snap_time}" '+%Y-%m-%d_%H:%M:%S')
-    snap_name="autosnap_${snap_label}_hourly"
-    if [ "$backdated_creation" = "yes" ]; then
-        zfs snapshot -o creation="$snap_time" "$source_dataset@$snap_name"
-    else
-        zfs snapshot "$source_dataset@$snap_name"
-    fi
-done
-
 echo "generic_source_dataset=${source_dataset}"
 echo "generic_snapshot=${source_dataset}@${snapshot_name}"
-echo "autosnap_backdated=${backdated_creation}"
-echo "autosnap_hourly_count=4"
 '@
     return $script
 }
@@ -559,20 +505,16 @@ node_name="$1"
 source_dataset="$2"
 source_mountpoint="$3"
 push_destination_dataset="$4"
-pull_destination_dataset="$5"
-restore_destination_dataset="$6"
-generic_host="${7}"
-generic_user="${8}"
-generic_port="${9}"
-allow_unencrypted="${10}"
-peer_public_key="${11}"
-host_gateway_ip="${12}"
-peer_port="${13}"
-peer_alias_ip="${14}"
-push_uid="${15}"
-pull_uid="${16}"
-generic_source_dataset="${17}"
-generic_send_user="${18}"
+restore_destination_dataset="$5"
+generic_host="${6}"
+generic_user="${7}"
+generic_port="${8}"
+allow_unencrypted="${9}"
+peer_public_key="${10}"
+host_gateway_ip="${11}"
+peer_port="${12}"
+peer_alias_ip="${13}"
+push_uid="${14}"
 
 set -euo pipefail
 
@@ -648,7 +590,7 @@ if ! zfs list -H -o name "$functional_root" >/dev/null 2>&1; then
   zfs create -o mountpoint=none "$functional_root"
 fi
 
-for dataset in "$source_dataset" "$pull_destination_dataset" "$restore_destination_dataset"; do
+for dataset in "$source_dataset" "$restore_destination_dataset"; do
   ensure_dataset_absent "$dataset"
 done
 
@@ -672,18 +614,6 @@ destination_host="${generic_host}"
 destination_dataset="${push_destination_dataset}"
 destination_user="${generic_user}"
 destination_port="22"
-
-[${pull_uid}]
-enable="yes"
-source_dataset="${generic_source_dataset}"
-recursive="no"
-backup_cron="0 0 * * *"
-type="remote_pull"
-source_host="${generic_host}"
-source_user="${generic_send_user}"
-source_port="22"
-destination_host=""
-destination_dataset="${pull_destination_dataset}"
 EOF
 
 if [[ "$peer_port" != "22" ]]; then
@@ -701,59 +631,6 @@ fi
 
 echo "configured_node=${node_name}"
 echo "configured_generic_host=${generic_host}"
-'@
-    return $script
-}
-
-function New-UnraidPullPruneSetupScript {
-    $script = @'
-pull_destination_dataset="$1"
-backdated="$2"
-
-set -euo pipefail
-
-plugin_dir="/boot/config/plugins/buddybackup"
-snapshots_cfg="${plugin_dir}/snapshots.cfg"
-rc_php="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php"
-
-mkdir -p "$plugin_dir"
-touch "$snapshots_cfg"
-
-# Remove any previous test pruning section, then append a fresh one
-awk '
-  /^\[/ { in_target = ($0 == "[apru0001]") }
-  !in_target { print }
-' "$snapshots_cfg" > "${snapshots_cfg}.tmp"
-mv "${snapshots_cfg}.tmp" "$snapshots_cfg"
-
-retention_hourly=2
-if [ "$backdated" != "yes" ]; then
-    # OpenZFS could not backdate snapshot creation times; prune every recognized
-    # snapshot instead (maxage = now, min count = 0).
-    retention_hourly=0
-fi
-
-cat >> "$snapshots_cfg" <<EOF
-[apru0001]
-dataset="${pull_destination_dataset}"
-recursive="no"
-autosnap="no"
-autoprune="yes"
-hourly="${retention_hourly}"
-daily="0"
-weekly="0"
-monthly="0"
-yearly="0"
-EOF
-
-"$rc_php" update
-
-if ! grep -Fq "[${pull_destination_dataset}]" /usr/local/emhttp/plugins/buddybackup/sanoid.conf; then
-    echo "ERROR: sanoid.conf does not contain a pruning section for ${pull_destination_dataset}" >&2
-    exit 1
-fi
-
-echo "prune_retention_hourly=${retention_hourly}"
 '@
     return $script
 }
@@ -789,10 +666,8 @@ $pushDestinationDataset = "$genericReceiveParent/from-nodeA"
 $unraidGenericRoot = "$($zfsValues.DatasetRoot)/generic"
 $unraidSourceDataset = "$unraidGenericRoot/nodeA-source"
 $unraidSourceMountpoint = "/mnt/buddybackup-generic/nodeA-source"
-$pullDestinationDataset = "$unraidGenericRoot/nodeA-pull"
 $restoreDestinationDataset = "$unraidGenericRoot/nodeA-restore"
 $pushUid = "agen0001"
-$pullUid = "apul0001"
 
 $logsRoot = if ($lab.logsRoot) { Resolve-TestLabPath ([string]$lab.logsRoot) } else { Resolve-TestLabPath ".testlab/logs" }
 Ensure-Dir $logsRoot
@@ -838,33 +713,15 @@ try {
     Assert-CommandSucceeded -Result $keyResult -FailureMessage "Failed to read BuddyBackup public key on nodeA."
     $unraidPublicKey = (($keyResult.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
 
-    Write-Host "[testlab] Generic smoke: running generic_host_setup.sh receiver role on nodeC"
+    Write-Host "[testlab] Generic smoke: running generic_host_setup.sh receiver on nodeC"
     $receiverSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent $setupScriptContent -Arguments @(
-        "--role", "receiver",
         "--user", $genericCfg.genericUser,
         "--dataset", $genericReceiveParent,
         "--port", $genericCfg.genericSshPort,
         "--pubkey", $unraidPublicKey
     ) -Label "nodeC-generic-setup-receiver" -MaxAttempts 2 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $receiverSetup
-    Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "generic_host_setup.sh receiver role failed on nodeC."
-
-    Write-Host "[testlab] Generic smoke: running generic_host_setup.sh sender role on nodeC (dedicated sudo-mode user)"
-    # The sender user is separate from the receiver user (one user per role).
-    # Sudo mode deliberately reproduces the TrueNAS SCALE environment where
-    # zfs delegation checks do not apply, so the allowlist scope is the only
-    # remaining gate - exactly the configuration that let an unallowed pull
-    # dataset pass the connection test before the dataset scope was added.
-    $senderSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent $setupScriptContent -Arguments @(
-        "--role", "sender",
-        "--user", $genericCfg.genericSendUser,
-        "--dataset", $genericSourceDataset,
-        "--port", $genericCfg.genericSshPort,
-        "--sudo-mode", "yes",
-        "--pubkey", $unraidPublicKey
-    ) -Label "nodeC-generic-setup-sender" -MaxAttempts 2 -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $senderSetup
-    Assert-CommandSucceeded -Result $senderSetup -FailureMessage "generic_host_setup.sh sender role failed on nodeC."
+    Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "generic_host_setup.sh receiver failed on nodeC."
 
     Write-Host "[testlab] Generic smoke: preparing nodeA backup entries"
     $unraidSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $unraidConnection -ScriptContent (New-UnraidGenericSetupScript) -Arguments @(
@@ -872,7 +729,6 @@ try {
         $unraidSourceDataset,
         $unraidSourceMountpoint,
         $pushDestinationDataset,
-        $pullDestinationDataset,
         $restoreDestinationDataset,
         $genericCfg.nodeCAliasIp,
         $genericCfg.genericUser,
@@ -882,10 +738,7 @@ try {
         $genericCfg.hostGatewayIp,
         [string]$genericConnection.Port,
         $genericCfg.nodeCAliasIp,
-        $pushUid,
-        $pullUid,
-        $genericSourceDataset,
-        $genericCfg.genericSendUser
+        $pushUid
     ) -Label "nodeA-generic-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $unraidSetup
     Assert-CommandSucceeded -Result $unraidSetup -FailureMessage "Unraid nodeA generic setup failed."
@@ -904,30 +757,8 @@ try {
         }
     }
 
-    Write-Host "[testlab] Generic smoke: testing generic pull connection from nodeA"
-    $pullConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
-        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $genericSourceDataset, "pull"
-    ) -Label "nodeA-generic-pull-test-connection" -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $pullConnection
-    Assert-CommandSucceeded -Result $pullConnection -FailureMessage "BuddyBackup test_generic_connection (pull) failed on nodeA."
-    if ($Execute) {
-        Test-GenericConnectionOutput -Output $pullConnection.output -NodeName "nodeA"
-        if ((($pullConnection.output -join "`n") -notmatch 'Send permission verified')) {
-            throw "BuddyBackup pull test_connection did not verify send permission on nodeA.`n$(($pullConnection.output -join "`n"))"
-        }
-    }
-
     Write-Host "[testlab] Generic smoke: negative checks - datasets outside the configured scope must be rejected"
     $unscopedDataset = "$genericDatasetRoot/never-allowed"
-
-    $rejectedPullConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
-        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $unscopedDataset, "pull"
-    ) -Label "nodeA-generic-pull-unallowed-test-connection" -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $rejectedPullConnection
-    Assert-CommandSucceeded -Result $rejectedPullConnection -FailureMessage "BuddyBackup test_generic_connection (unallowed pull) failed on nodeA."
-    if ($Execute) {
-        Test-GenericConnectionRejectedPull -Output $rejectedPullConnection.output -NodeName "nodeA"
-    }
 
     $rejectedPushConnection = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "test_generic_connection" -Arguments @(
         $genericCfg.nodeCAliasIp, $genericCfg.genericUser, "22", "${unscopedDataset}/from-nodeA", "push"
@@ -953,77 +784,10 @@ try {
         Test-GenericSendOutput -Output $pushResult.output -Flow "push" -NodeName "nodeA"
     }
 
-    Write-Host "[testlab] Generic smoke: pulling backup from nodeC to nodeA"
-    $pullResult = Invoke-BuddyBackupShellCommand -NodeConnection $unraidConnection -Action "pull_backup" -Arguments @(
-        $genericCfg.nodeCAliasIp, $genericCfg.genericSendUser, "22", $genericSourceDataset, "no", $pullDestinationDataset, $pullUid
-    ) -Label "nodeA-generic-pull" -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $pullResult
-    Assert-CommandSucceeded -Result $pullResult -FailureMessage "Generic pull failed for uid '$pullUid' on nodeA."
-    if ($Execute) {
-        Test-GenericSendOutput -Output $pullResult.output -Flow "pull" -NodeName "nodeA"
-    }
-
-    Write-Host "[testlab] Generic smoke: verifying pushed and pulled datasets"
-    foreach ($check in @(
-        @{ Connection = $genericConnection; Dataset = $pushDestinationDataset; Label = "nodeC-pushed-dataset-check" },
-        @{ Connection = $unraidConnection; Dataset = $pullDestinationDataset; Label = "nodeA-pulled-dataset-check" }
-    )) {
-        $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
-        Add-ReportAction -Report $report -Result $datasetCheck
-        Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected dataset '$($check.Dataset)' was not found on node '$($check.Connection.NodeName)'."
-    }
-
-    $autosnapBackdated = "yes"
-    if ($Execute) {
-        $prepOutputText = Get-ResultOutputText -Result $genericPrep
-        if ($prepOutputText -match '(?m)^autosnap_backdated=(\S+)\s*$') {
-            $autosnapBackdated = $Matches[1]
-        }
-    }
-    $expectedHourliesAfterPrune = if ($autosnapBackdated -eq "yes") { 2 } else { 0 }
-
-    Write-Host "[testlab] Generic smoke: pull-destination pruning scenario (autosnap_backdated=$autosnapBackdated, expected hourly kept=$expectedHourliesAfterPrune)"
-    $pruneSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $unraidConnection -ScriptContent (New-UnraidPullPruneSetupScript) -Arguments @(
-        $pullDestinationDataset,
-        $autosnapBackdated
-    ) -Label "nodeA-pull-prune-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $pruneSetup
-    Assert-CommandSucceeded -Result $pruneSetup -FailureMessage "Snapshot pruning setup failed on nodeA."
-
-    if ($Execute) {
-        $beforePrune = Invoke-NodeSshCommand -NodeConnection $unraidConnection -Command ("zfs list -H -o name -t snapshot -d1 {0}" -f (Convert-ToShellSingleQuoted -Value $pullDestinationDataset)) -Label "nodeA-pulled-snapshots-before-prune" -DoExecute:$Execute
-        Add-ReportAction -Report $report -Result $beforePrune
-        Assert-CommandSucceeded -Result $beforePrune -FailureMessage "Failed to list pulled snapshots on nodeA."
-        $beforeHourlies = @($beforePrune.output | ForEach-Object { ([string]$_).Split('@')[-1] } | Where-Object { $_ -match '^autosnap_.*_hourly$' })
-        $beforeGeneric = @($beforePrune.output | ForEach-Object { ([string]$_).Split('@')[-1] } | Where-Object { $_ -match '^generic_smoke_' })
-        if ($beforeHourlies.Count -ne 4) {
-            throw "Expected 4 pulled autosnap_*_hourly snapshots on nodeA, found $($beforeHourlies.Count)."
-        }
-        if ($beforeGeneric.Count -ne 1) {
-            throw "Expected the non-matching generic_smoke snapshot to be pulled to nodeA, found $($beforeGeneric.Count)."
-        }
-    }
-
-    Write-Host "[testlab] Generic smoke: running sanoid prune on the nodeA pull destination"
-    $pruneCommand = "/usr/local/emhttp/plugins/buddybackup/deps/sanoid --configdir=/usr/local/emhttp/plugins/buddybackup --force-update --prune-snapshots --verbose"
-    $pruneResult = Invoke-NodeSshCommand -NodeConnection $unraidConnection -Command $pruneCommand -Label "nodeA-sanoid-prune" -DoExecute:$Execute
-    Add-ReportAction -Report $report -Result $pruneResult
-    Assert-CommandSucceeded -Result $pruneResult -FailureMessage "sanoid prune failed on nodeA."
-
-    if ($Execute) {
-        $afterPrune = Invoke-NodeSshCommand -NodeConnection $unraidConnection -Command ("zfs list -H -o name -t snapshot -d1 {0}" -f (Convert-ToShellSingleQuoted -Value $pullDestinationDataset)) -Label "nodeA-pulled-snapshots-after-prune" -DoExecute:$Execute
-        Add-ReportAction -Report $report -Result $afterPrune
-        Assert-CommandSucceeded -Result $afterPrune -FailureMessage "Failed to list pulled snapshots after pruning on nodeA."
-        $afterHourlies = @($afterPrune.output | ForEach-Object { ([string]$_).Split('@')[-1] } | Where-Object { $_ -match '^autosnap_.*_hourly$' })
-        $afterGeneric = @($afterPrune.output | ForEach-Object { ([string]$_).Split('@')[-1] } | Where-Object { $_ -match '^generic_smoke_' })
-        if ($afterHourlies.Count -ne $expectedHourliesAfterPrune) {
-            throw "Expected $expectedHourliesAfterPrune autosnap_*_hourly snapshots to remain after prune on nodeA, found $($afterHourlies.Count): $($afterHourlies -join ', ')"
-        }
-        if ($afterGeneric.Count -ne 1) {
-            throw "The non-matching generic_smoke snapshot must not be pruned on nodeA, found $($afterGeneric.Count)."
-        }
-        Write-Host "[testlab] Generic smoke: pull-destination pruning verified (kept $expectedHourliesAfterPrune autosnap_*_hourly, non-matching snapshot preserved)"
-    }
+    Write-Host "[testlab] Generic smoke: verifying pushed dataset on nodeC"
+    $datasetCheck = Invoke-NodeSshCommand -NodeConnection $genericConnection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $pushDestinationDataset)) -Label "nodeC-pushed-dataset-check" -DoExecute:$Execute
+    Add-ReportAction -Report $report -Result $datasetCheck
+    Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected dataset '$pushDestinationDataset' was not found on node '$($genericConnection.NodeName)'."
 
     $remoteSnapshotSelection = $null
     Write-Host "[testlab] Generic smoke: listing pushed snapshots on the generic receiver"

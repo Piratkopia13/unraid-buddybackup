@@ -69,7 +69,6 @@
     "functionalTests": {
       "nodeCAliasIp": "10.254.0.24",
       "genericUser": "buddybackup",
-      "genericSendUser": "buddybackupsend",
       "genericSshPort": "22",
       "allowUnencryptedRemoteBackups": true
     },

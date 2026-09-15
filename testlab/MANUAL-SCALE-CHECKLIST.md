@@ -56,35 +56,22 @@ Prerequisites for the checklist host:
    forced-command line is gone from `~buddybackup/.ssh/authorized_keys`; re-run the setup
    script and confirm `--verify` passes again.
 
-## Pull smoke (TrueNAS → Unraid)
+## Push smoke (TrueNAS SCALE Replication Task → Unraid)
 
-1. On TrueNAS: create snapshots of the source dataset (Data Protection → Periodic Snapshot
-   Tasks, or one manual snapshot).
-2. On Unraid: Backups → add entry, type **Pull from generic ZFS host**, remote host/port/
-   username per setup (the sender role's user), source dataset, local destination dataset.
-3. Click **Test connection** and confirm success plus the encryption status line, and confirm
-   it includes **"Send permission verified"** (a dry-run raw send of an existing snapshot).
-4. Click **Send backup now** (runs the pull preflight and pull) and confirm
-   "Successfully pulled backup from <host>!".
-5. On TrueNAS: confirm the sender user cannot receive, destroy or snapshot (`zfs allow` shows
-   only `send:raw` (OpenZFS 2.4+) or `send` (older versions) plus `hold`, and the allowlist
-   blocks everything else). On OpenZFS 2.4+ also confirm plain `send` is NOT granted, so only
-   raw encrypted streams can ever be served.
-6. On Unraid: restore from the pulled dataset via the local restore path.
-7. On Unraid: snapshot pruning of the pulled dataset:
-   - Before pulling, set the TrueNAS periodic snapshot task's Naming Schema to a sanoid-compatible
-     pattern matching its schedule, e.g. `autosnap_%Y-%m-%d_%H:%M:%S_hourly` for an hourly task
-     (TrueNAS requires `%Y`, `%m`, `%d`, `%H`, `%M` in the schema). TrueNAS's default
-     `auto-%Y-%m-%d_%H-%M` naming does not match and would never be pruned on Unraid.
-   - Add the pull destination dataset on *Snapshot creation and pruning* with
-     *Prune snapshots automatically* = Yes (Recursive = Yes if the pull is recursive) and a small
-     retention (e.g. hourly = 1, daily = 1).
-   - Confirm the pulled snapshots appear with the sanoid-compatible naming.
-   - Run `/usr/local/emhttp/plugins/buddybackup/deps/sanoid --configdir=/usr/local/emhttp/plugins/buddybackup --prune-snapshots --verbose`
-     and confirm snapshots of each type beyond retention are destroyed (the newest per type is
-     always kept).
-   - Confirm snapshots that do not match the `autosnap_*` naming (e.g. ones created with TrueNAS's
-     default naming schema) are left untouched and would accumulate forever.
+1. On TrueNAS: Data Protection → Periodic Snapshot Tasks:
+   - Configure a periodic snapshot task with Naming Schema formatted to Sanoid conventions,
+     e.g. `autosnap_%Y-%m-%d_%H:%M:%S_daily` (or `_hourly`). TrueNAS requires `%Y`, `%m`, `%d`, `%H`, `%M` in the schema.
+2. On TrueNAS: Data Protection → Replication Tasks → Add:
+   - Source Location: On this System, select the source dataset.
+   - Destination Location: On a Different System.
+   - SSH Connection: Create/select the SSH connection to Unraid's buddy user (port 22 or Unraid SSH port, buddy user, private key matching public key added to Unraid's BuddyBackup buddy list).
+   - Target Dataset: Set to a child of Unraid's configured Receive parent dataset (e.g. `disk1/backups/truenas`).
+   - **Snapshot Retention Policy**: Must be set to **None** (Unraid's `restrict_zfs` allowlist strictly rejects `zfs destroy` to keep received backups immutable).
+3. Run the replication task manually and verify it succeeds.
+4. On Unraid:
+   - Verify received dataset exists under the receive parent dataset.
+   - On *Snapshot creation and pruning*, verify or configure pruning retention on the receive parent dataset (with Recursive = Yes).
+   - Verify that Sanoid automatically prunes old snapshots matching `autosnap_*_<frequency>` according to configured retention.
 
 ## Teardown / grant changes
 
@@ -111,29 +98,20 @@ Prerequisites for the checklist host:
    - `ssh -i <key> buddybackup@localhost "sudo -i"` → blocked (no tty, not allowlisted).
    - Writing to the allowlist location fails: `touch /mnt/<pool>/.buddybackup/test` →
      permission denied (the user must never be able to replace the forced-command script).
-2. On Unraid with `AllowUnencryptedRemoteBackups=no`: a pull from an unencrypted dataset
-   aborts with "is not encrypted!".
-3. **Datasets outside the configured scope must never pass the connection test** (this is
+2. **Datasets outside the configured scope must never pass the connection test** (this is
    the sudo-mode regression check: on TrueNAS the validated commands run as root, so only
    the allowlist scope can stop them):
-   - Create a dataset on TrueNAS that is NOT in either role's `--dataset` list (or pick an
-     existing unrelated one) and snapshot it.
-   - On Unraid, add a pull backup entry pointing at that dataset with the sender user and
-     click **Test connection**: it must report the dataset as inaccessible ("does not exist
-     ... or the SSH user is not permitted to access it") and must **never** print
-     "Send permission verified".
-   - Repeat for a push entry pointing outside the receiver's configured parent: it must
+   - For a push entry pointing outside the receiver's configured parent: it must
      report "Neither dataset ... nor its parent exists" and must **never** print
      "ZFS receive permissions verified".
-4. From the TrueNAS shell as root, remove one dataset line from the sender's
-   `<allowlist>.datasets` scope file; the pull connection test above must still reject that
+3. From the TrueNAS shell as root, remove one dataset line from the receiver's
+   `<allowlist>.datasets` scope file; the push connection test above must still reject that
    dataset (a missing or drifted scope file is reported by `--verify` so it can be restored
    by re-running the setup script).
 
 ## Pass criteria
 
 - All steps complete without unexpected warnings; the setup script's `--verify` checklist
-  reports zero FAIL entries in both roles; no forced-command line is lost after the TrueNAS
+  reports zero FAIL entries; no forced-command line is lost after the TrueNAS
   UI key-edit step once the script has been re-run.
-- Pull-smoke pruning step: pulled `autosnap_*` snapshots beyond retention are destroyed by
-  sanoid; non-matching snapshot names are documented as never pruned.
+- Received snapshots beyond retention on Unraid are pruned by sanoid; snapshots with non-Sanoid naming conventions are preserved.
