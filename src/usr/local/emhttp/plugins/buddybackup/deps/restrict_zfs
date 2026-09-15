@@ -87,6 +87,16 @@ my @ALLOWED_COMMANDS = (
     qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
     qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
     qr/zfs allow $DATASET/,
+    qr/zfs list -H -o name,origin,receive_resume_token -t filesystem,volume(?: -r)? $DATASET$REDIRS/,
+    qr/zfs list -t snapshot -H -o name -s (?:name|creation)(?: -(?:r|d 1))? $DATASET$REDIRS/,
+    qr/zfs list -H -o name -t snapshot(?: -(?:r|d 1))? $DATASET$REDIRS/,
+    qr/zfs get -H -p -o property,value (?:all|[\w:.-]+(?:,[\w:.-]+)*) $DATASET$REDIRS/,
+    qr/zfs get -H -o value receive_resume_token $DATASET$REDIRS/,
+    qr/zfs create (?:-u )?(?:-p )?(?:-o [\w:.-]+=(?:[\w:.-]+|"[^"]*"|'[^']*') )*$DATASET$REDIRS/,
+    qr/zfs (?:recv|receive)\s+$SHORTOPTSVALS$DATASET$REDIRS/,
+    qr/zfs (?:recv|receive) -A $DATASET$REDIRS/,
+    qr/zfs send (?:-[A-Za-z0-9]+ )*$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send (?:-[A-Za-z0-9]+ )*-[iI] $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/zfs receive -A $DATASET/,
     qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
@@ -105,6 +115,31 @@ sub check_allowed {
     return 0;
 }
 
+sub unwrap_command {
+    my ($cmd) = @_;
+    $cmd =~ s/^\s+|\s+$//g;
+
+    # Only unwrap when explicitly wrapped in sh -c '...' or sh -c "..."
+    if ($cmd =~ /^sh\s+-c\s+'(.*)'$/s) {
+        my $inner = $1;
+        $inner =~ s/'\\'''/'/g; # unescape '\''
+        # TrueNAS / Paramiko wrapper format: PATH=$PATH:... <actual_cmd> 2>&1
+        $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
+        $inner =~ s/\s+2>&1$//;
+        $inner =~ s/^\s+|\s+$//g;
+        return $inner;
+    } elsif ($cmd =~ /^sh\s+-c\s+"(.*)"$/s) {
+        my $inner = $1;
+        $inner =~ s/\\"/"/g; # unescape \"
+        $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
+        $inner =~ s/\s+2>&1$//;
+        $inner =~ s/^\s+|\s+$//g;
+        return $inner;
+    }
+
+    return $cmd;
+}
+
 my $dry_run = 0;
 my $verbose = 0;
 my @log = ();
@@ -120,8 +155,11 @@ die "No SSH_ORIGINAL_COMMAND environment variable" unless defined $original_comm
 
 openlog('buddybackup-restrict-ssh', 'pid', LOG_USER);
 
-foreach my $command (split /;/, $original_command) {
+my $unwrapped = unwrap_command($original_command);
+
+foreach my $command (split /;/, $unwrapped) {
     $command =~ s/^\s+|\s+$//g;
+    next if $command eq q{};
     my $is_allowed = check_allowed($command);
 
     my $log_text;
@@ -147,6 +185,10 @@ foreach my $command (split /;/, $original_command) {
         if (grep { $_ eq 'syslog' } @log) {
             syslog(LOG_INFO, $log_text);
         }
+    }
+
+    if (!$is_allowed && !$dry_run) {
+        exit 1;
     }
 }
 

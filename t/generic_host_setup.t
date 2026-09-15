@@ -64,24 +64,19 @@ sub extract_heredoc {
 
 subtest 'embedded allowlist copies match deps' => sub {
     my $restrict_zfs_heredoc = extract_heredoc($setup_source, 'BUDDYBACKUP_RESTRICT_ZFS_EOF', 'receiver allowlist');
-    my $restrict_zfs_send_heredoc = extract_heredoc($setup_source, 'BUDDYBACKUP_RESTRICT_ZFS_SEND_EOF', 'sender allowlist');
 
-    plan skip_all => 'heredoc blocks not found' if !defined $restrict_zfs_heredoc || !defined $restrict_zfs_send_heredoc;
+    plan skip_all => 'heredoc block not found' if !defined $restrict_zfs_heredoc;
 
     my $restrict_zfs_path = File::Spec->catfile(
         $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'deps', 'restrict_zfs'
     );
-    my $restrict_zfs_send_path = File::Spec->catfile(
-        $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'deps', 'restrict_zfs_send'
-    );
 
     is($restrict_zfs_heredoc, read_file($restrict_zfs_path), 'receiver allowlist heredoc is byte-identical to deps/restrict_zfs');
-    is($restrict_zfs_send_heredoc, read_file($restrict_zfs_send_path), 'sender allowlist heredoc is byte-identical to deps/restrict_zfs_send');
 };
 
 subtest 'setup script structure' => sub {
     like($setup_source, qr/Usage: generic_host_setup\.sh/, 'usage text present');
-    like($setup_source, qr/--role receiver\|sender/, 'usage documents role values');
+    like($setup_source, qr/--role\)/, 'accepts role receiver option');
     like($setup_source, qr/--sudo-mode auto\|yes\|no/, 'usage documents sudo-mode values');
     like($setup_source, qr/--verify/, 'usage documents verify mode');
     like($setup_source, qr/DRY_RUN=1/, 'dry-run support present');
@@ -127,11 +122,9 @@ subtest 'dataset scope file management' => sub {
     like($setup_source, qr/compare them byte-exactly/, 'verify() compares the scope file byte-exactly against the configured datasets');
     like($setup_source, qr/dataset scope file at \$\{scope_file\} does not match/, 'verify() detects a scope file that drifted from the configured datasets');
     like($setup_source, qr/dataset scope file at \$\{scope_file\} is empty/, 'verify() detects an empty scope file (which would deny everything)');
-    like($setup_source, qr/buddybackup-\$\{USER_NAME\}-restrict_zfs_send\.datasets/, 'revoke mode also filters the sender allowlist scope file');
+    like($setup_source, qr/buddybackup-\$\{USER_NAME\}-restrict_zfs\.datasets/, 'revoke mode filters the receiver allowlist scope file');
     like($setup_source, qr/ALLOWLIST_PATH="\$\{ALLOWLIST_DIR\}\/buddybackup-\$\{USER_NAME\}-restrict_zfs"/, 'receiver allowlist path is per-user');
-    like($setup_source, qr/ALLOWLIST_PATH="\$\{ALLOWLIST_DIR\}\/buddybackup-\$\{USER_NAME\}-restrict_zfs_send"/, 'sender allowlist path is per-user');
-    like($setup_source, qr/pre-2026 legacy/, 'clean also removes the legacy shared allowlist names');
-    like($setup_source, qr/once per\s+role with a separate --user/s, 'usage documents one user per role for dual-role hosts');
+    like($setup_source, qr/remove_buddybackup_files/, 'clean removes allowlist and state files');
 };
 
 done_testing();

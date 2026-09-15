@@ -48,11 +48,8 @@ uasort($bb_enabled_backups, function($a, $b) {
   return strcasecmp($destA, $destB);
 });
 
-// Destination shown for a backup: local dataset, remote host (pull source for remote_pull)
+// Destination shown for a backup: local dataset or remote host
 function bb_backup_destination($backup) {
-  if (($backup["type"] ?? "") == "remote_pull") {
-    return $backup["source_host"] ?? "";
-  }
   return (($backup["type"] ?? "") == "local") ? ($backup["destination_dataset"] ?? "") : ($backup["destination_host"] ?? "");
 }
 
@@ -108,21 +105,6 @@ foreach ($bb_enabled_backups as $uid => $cfg) {
 
 $bb_buddys_backup_table_content = "";
 
-// Warn about pull destinations that have no automatic snapshot pruning configured
-$bb_pull_prune_warning_content = "";
-foreach ($bb_enabled_backups as $bb_pull_uid => $bb_pull_cfg) {
-  if (($bb_pull_cfg["type"] ?? "") == "remote_pull" && !empty($bb_pull_cfg["destination_dataset"])
-      && !bb_pull_destination_has_autoprune($bb_pull_cfg["destination_dataset"], $bb_pull_cfg["recursive"] ?? "")) {
-    $bb_pull_dataset = htmlspecialchars($bb_pull_cfg["destination_dataset"]);
-    $bb_pull_prune_warning_content .=
-    <<<EOT
-    <tr><td>
-    <span style="color:#c87f0a;"><i class="fa fa-fw fa-exclamation-triangle"></i> Pulled snapshots in $bb_pull_dataset are not pruned automatically. Add this dataset on the Snapshot creation and pruning page with 'Prune snapshots automatically' = Yes.</span>
-    </td></tr>
-    EOT;
-  }
-}
-
 if (!empty($bb_buddys_backup)) {
   $dest = $bb_cfg["ReceiveDestinationDataset"];
   $info = bb_info("/tmp/buddybackup-buddy", true);
@@ -156,7 +138,6 @@ Enabled: $bb_num_enabled_backups backup(s), autosnap $bb_num_autosnap dataset(s)
   <span class="w12">Dest size<span>
 </td></tr>
 $bb_backups_table_content
-$bb_pull_prune_warning_content
 $bb_buddys_backup_table_content
 </tbody>
 EOT;

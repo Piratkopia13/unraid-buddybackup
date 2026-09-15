@@ -90,7 +90,7 @@ subtest 'TrueNAS operator guidance' => sub {
 subtest 'grant convergence, revocation and clean uninstall' => sub {
     like($setup_source, qr/buddybackup-%s-zfs-grants\.txt/, 'grant state file is per-user next to the allowlist');
     like($setup_source, qr/apply_grants_and_converge/, 'setup runs converge the recorded grant set');
-    like($setup_source, qr/whose role changed/, 'role flips trigger revocation');
+    like($setup_source, qr/datasets no longer requested are revoked/, 'grant convergence revokes dropped datasets');
     like($setup_source, qr/zfs unallow -u "\$USER_NAME" "\$ds"/, 'revocation runs zfs unallow for the restricted user');
     like($setup_source, qr/--dataset is required \(repeat the option for more than one dataset\)/, 'multi-dataset usage is documented in the error path');
     like($setup_source, qr/--revoke NAME/, 'usage documents --revoke');

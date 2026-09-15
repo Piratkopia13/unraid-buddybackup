@@ -56,27 +56,31 @@ Title="Generic ZFS hosts"
     }
 
     function generic_hosts_update() {
-        var role = $('select[name="bb-role"]').val();
+        var direction = $('select[name="bb-direction"]').val();
         var platform = $('select[name="bb-platform"]').val();
         var user = $('input[name="bb-user"]').val() || 'buddybackup';
-        var dataset = $('input[name="bb-dataset"]').val();
+        var dataset = $('input[name="bb-dataset"]').val() || 'tank/backups/unraid';
         var port = $('input[name="bb-port"]').val() || '22';
 
-        $('#bb-generic-hosts-role-label').text(role == 'sender' ? 'Source dataset (or parent) to serve pulls from:' : 'Parent dataset to receive backups into:');
-        $('#bb-generic-hosts-sender-note').toggle(role == 'sender');
-        $('.bb-generic-hosts-instructions').hide();
-        $('#bb-generic-hosts-instructions-'+(platform == 'scale' ? 'scale' : 'generic')).show();
+        if (direction === 'unraid_pushes') {
+            $('#bb-generic-hosts-push-to-remote').show();
+            $('#bb-generic-hosts-push-to-unraid').hide();
+            $('.bb-generic-hosts-instructions').hide();
+            $('#bb-generic-hosts-instructions-'+(platform == 'scale' ? 'scale' : 'generic')).show();
 
-        var setup_cmd = 'curl -fsSL '+bb_setup_script_url+' | bash -s --';
-        setup_cmd += ' --role '+role;
-        setup_cmd += ' --user '+shell_quote(user);
-        setup_cmd += ' --dataset '+shell_quote(dataset);
-        setup_cmd += ' --port '+shell_quote(port);
-        setup_cmd += ' --pubkey '+shell_quote('<?=$public_ssh_key;?>');
-        $('#bb-generic-hosts-cmd').text(setup_cmd);
+            var setup_cmd = 'curl -fsSL '+bb_setup_script_url+' | bash -s --';
+            setup_cmd += ' --dataset '+shell_quote(dataset);
+            setup_cmd += ' --user '+shell_quote(user);
+            setup_cmd += ' --port '+shell_quote(port);
+            setup_cmd += ' --pubkey '+shell_quote('<?=$public_ssh_key;?>');
+            $('#bb-generic-hosts-cmd').text(setup_cmd);
+        } else {
+            $('#bb-generic-hosts-push-to-remote').hide();
+            $('#bb-generic-hosts-push-to-unraid').show();
+        }
     }
     $(function() {
-        $('select[name="bb-role"], select[name="bb-platform"], input[name="bb-user"], input[name="bb-dataset"], input[name="bb-port"]').each(function(){
+        $('select[name="bb-direction"], select[name="bb-platform"], input[name="bb-user"], input[name="bb-dataset"], input[name="bb-port"]').each(function(){
             $(this).on('input change', generic_hosts_update);
         });
         generic_hosts_update();
@@ -84,41 +88,33 @@ Title="Generic ZFS hosts"
 </script>
 <div id="bb-generic-hosts-page">
 <p>
-Backups can run to and from any OpenZFS system: TrueNAS SCALE, Proxmox VE or a generic Linux box with ZFS.
-This page generates a one-time setup command that you run <b>on the remote host</b> (as root). It creates a
-restricted user, installs a command allowlist, delegates the exact ZFS permissions needed and wires up SSH
-so the host can only ever run what BuddyBackup requires - nothing else.
+Backups can run between Unraid and any generic OpenZFS system: TrueNAS SCALE, Proxmox VE, or a Debian/Ubuntu Linux server with ZFS.
 </p>
 
+<dl>
+    <dt>_(Backup direction)_:</dt>
+    <dd>
+        <select name="bb-direction" class="align">
+            <?=mk_option("unraid_pushes", "unraid_pushes", "_(Push from Unraid to generic host)_");?>
+            <?=mk_option("host_pushes", "host_pushes", "_(Push from generic host to Unraid (TrueNAS, Proxmox, Debian))_");?>
+        </select>
+        <div class="buddybackup-field-note">
+            Select whether this Unraid server is pushing backups to a remote ZFS host, or receiving pushed backups from one.
+        </div>
+    </dd>
+</dl>
+
+<div id="bb-generic-hosts-push-to-remote">
+<br>
 _(Your SSH public key (give this to the remote host setup))_:
 : <input disabled type="text" class="align" style="opacity:1;" value="<?=$public_ssh_key;?>">
   <input type="button" value="_(Copy)_" onclick="copy_text(this, '<?=$public_ssh_key;?>')">
 
 <table>
-<tr><th scope="col">Remote host setup</th></tr>
+<tr><th scope="col">Remote host receiver setup</th></tr>
 <tr><td>
 <dl>
-    <dt>_(Role)_:</dt>
-    <dd>
-        <select name="bb-role" class="align">
-            <?=mk_option("receiver", "receiver", "_(Receive from this Unraid)_");?>
-            <?=mk_option("sender", "sender", "_(Send to this Unraid)_");?>
-        </select>
-        <div class="buddybackup-field-note">Receiver: this Unraid pushes backups to the remote host.<br>
-        Sender: this Unraid pulls backups from the remote host.</div>
-        <div class="buddybackup-field-note" id="bb-generic-hosts-sender-note" style="display:none;">
-        Pruning of pulled snapshots depends on the source's snapshot <b>names</b>: Unraid only prunes snapshots
-        whose names start with <code>autosnap</code> and end with <code>_hourly</code> / <code>_daily</code> /
-        <code>_weekly</code> / <code>_monthly</code> / <code>_yearly</code>. Sources running sanoid match this; a
-        TrueNAS periodic snapshot task needs its Naming Schema customized accordingly (for example
-        <code>autosnap_%Y-%m-%d_%H:%M:%S_hourly</code>) — the default <code>auto-%Y-%m-%d_%H-%M</code> naming is
-        never pruned and will accumulate. Proxmox's default <code>zfs-auto-snapshot</code> names do not match either —
-        run sanoid on such sources instead. Also add the local pull destination dataset on the
-        'Snapshot creation and pruning' page with 'Prune snapshots automatically' = Yes.</div>
-    </dd>
-</dl>
-<dl>
-    <dt id="bb-generic-hosts-role-label">_(Parent dataset to receive backups into)_:</dt>
+    <dt>_(Parent dataset on remote host to receive into)_:</dt>
     <dd><input type="text" name="bb-dataset" class="align" placeholder="tank/backups/unraid"></dd>
 </dl>
 <dl>
@@ -150,8 +146,8 @@ _(Your SSH public key (give this to the remote host setup))_:
 <input type="button" value="_(Copy setup script (review before running))_" onclick="copy_text(this, bb_setup_script_content)" <?=($setup_script_content === "")?"disabled":""?>>
 <div class="buddybackup-field-note">Prefer downloading the script and reviewing it before running:
 <code>curl -fsSL <?=$setup_script_url?> -o /tmp/bb-setup.sh</code>, inspect it, then run
-<code>bash /tmp/bb-setup.sh --role receiver --user buddybackup --dataset 'tank/backups/unraid'</code>.<br>
-The script is idempotent and self-verifying; re-run it with <code>--verify</code> after changing SSH keys on the remote host.</div>
+<code>bash /tmp/bb-setup.sh --dataset 'tank/backups/unraid'</code>.<br>
+The script is idempotent and self-verifying; re-run it with <code>--verify</code> to confirm everything is in place.</div>
 
 <div class="bb-generic-hosts-instructions" id="bb-generic-hosts-instructions-generic">
 <h3>Steps (Proxmox VE / Debian / Ubuntu)</h3>
@@ -160,7 +156,7 @@ The script is idempotent and self-verifying; re-run it with <code>--verify</code
     <li>Paste and run the setup command above.</li>
     <li>Follow its output. It creates the user with a locked password, applies the ZFS delegations,
     writes the forced-command SSH key line and adds an SSH restriction drop-in.</li>
-    <li>Re-run with <code>--verify</code> to confirm everything is in place.</li>
+    <li>In Unraid, go to <b>Backup and restore</b>, add a new backup entry with type <b>Remote (generic ZFS host)</b>, and test the connection.</li>
 </ol>
 </div>
 
@@ -176,29 +172,86 @@ The script is idempotent and self-verifying; re-run it with <code>--verify</code
     <b>"Allowed sudo commands with no password"</b> field in the UI and re-run the script.</li>
     <li><b>SSH restriction</b>: paste the <code>Match</code> block printed by the script into the SSH service's
     <b>"Auxiliary Parameters"</b> field (System Settings → Services → SSH).</li>
-    <li><b>Important</b>: editing the user's keys in the TrueNAS UI later rewrites authorized_keys and removes the
-    forced-command line. Re-run the setup script (it is idempotent) afterwards.</li>
+    <li>In Unraid, go to <b>Backup and restore</b>, add a new backup entry with type <b>Remote (generic ZFS host)</b>, and test the connection.</li>
+</ol>
+</div>
+</div>
+
+<div id="bb-generic-hosts-push-to-unraid" style="display:none;">
+<h3>Pushing backups from a generic host to this Unraid server</h3>
+<p>
+This Unraid server acts as the receiver. Incoming replication connections are strictly restricted by BuddyBackup's
+command allowlist (<code>restrict_zfs</code>): the remote host can receive snapshots and inspect dataset properties,
+but <b>destructive operations (such as <code>zfs destroy</code>) are strictly blocked</b> to guarantee backup immutability.
+</p>
+
+<h4>1. Enable incoming backups on Unraid</h4>
+<ol>
+    <li>Navigate to the <b>Buddy's Backups</b> page in BuddyBackup.</li>
+    <li>Set <b>Enable</b> to <b>Yes</b>.</li>
+    <li>Select a <b>Destination parent dataset</b> (e.g. <code>tank/backups/buddy</code>).</li>
+    <li>Configure your desired <b>Snapshot retention</b> policy (Hourly, Daily, Weekly, Monthly, Yearly).</li>
+</ol>
+
+<h4>2. TrueNAS SCALE Setup (via GUI)</h4>
+<ol>
+    <li><b>SSH Connection</b>: In TrueNAS SCALE, go to <b>Credentials → Backup Credentials → SSH Connections → Add</b>:
+        <ul>
+            <li><b>Name</b>: <code>Unraid-BuddyBackup</code></li>
+            <li><b>Host</b>: Your Unraid server IP or hostname</li>
+            <li><b>Port</b>: Your Unraid SSH port (default: <code>22</code>)</li>
+            <li><b>Username</b>: <code>buddybackup</code></li>
+            <li><b>Authentication</b>: Generate a new keypair (or select an existing one).</li>
+        </ul>
+    </li>
+    <li><b>Authorize TrueNAS on Unraid</b>:
+        <ul>
+            <li>Copy the public key generated in TrueNAS.</li>
+            <li>On this Unraid server, go to <b>Buddy's Backups</b> and paste it into <b>Buddy's SSH public key</b>. Click <b>Apply</b>.</li>
+        </ul>
+    </li>
+    <li><b>Periodic Snapshot Task</b>: In TrueNAS SCALE, go to <b>Data Protection → Periodic Snapshot Tasks → Add</b>:
+        <ul>
+            <li>Select your source dataset and schedule.</li>
+            <li><b>Important - Naming Schema</b>: Customize the Naming Schema to:
+                <br><code>autosnap_%Y-%m-%d_%H:%M:%S_daily</code> (or <code>_hourly</code>, <code>_weekly</code>, <code>_monthly</code>)
+                <br><span style="color:#996600">Note: Sanoid autopruning on Unraid relies on snapshot names starting with <code>autosnap_</code> and ending with the frequency tag. TrueNAS default <code>auto-*</code> names are not recognized by Sanoid.</span>
+            </li>
+        </ul>
+    </li>
+    <li><b>Replication Task</b>: In TrueNAS SCALE, go to <b>Data Protection → Replication Tasks → Add</b>:
+        <ul>
+            <li><b>Source</b>: Select your local TrueNAS dataset and the periodic snapshot task.</li>
+            <li><b>Destination</b>: Select the remote SSH connection and specify the target dataset under Unraid's parent dataset (e.g. <code>tank/backups/buddy/truenas-data</code>).</li>
+            <li><b style="color:#cc0000;">Critical - Snapshot Retention Policy</b>: Set to <b>"None"</b>.
+                <br>Do <b>NOT</b> configure TrueNAS to manage snapshot retention on the destination. TrueNAS would attempt to run <code>zfs destroy</code> on Unraid, which BuddyBackup strictly rejects to protect your backups. Unraid's Sanoid service manages snapshot retention locally.
+            </li>
+        </ul>
+    </li>
+</ol>
+
+<h4>3. Proxmox VE / Debian / Ubuntu Setup (CLI)</h4>
+<ol>
+    <li>Generate an SSH keypair on the remote host (as root):
+        <pre>ssh-keygen -t ed25519 -f /root/.ssh/id_buddybackup -N ""</pre>
+    </li>
+    <li>Copy the public key (<code>cat /root/.ssh/id_buddybackup.pub</code>) and paste it into Unraid's <b>Buddy's Backups → Buddy's SSH public key</b>. Click <b>Apply</b>.</li>
+    <li>Send snapshots using <code>syncoid</code> or native <code>zfs send</code>:
+        <pre>syncoid --no-privilege-elevation --sshkey=/root/.ssh/id_buddybackup pool/dataset buddybackup@&lt;unraid-ip&gt;:tank/backups/buddy/dataset</pre>
+    </li>
+    <li>Add the command to cron or a systemd timer to run automatically. Older snapshots matching the <code>autosnap_*</code> convention are automatically pruned by Sanoid on Unraid.</li>
 </ol>
 </div>
 
+<hr>
 <h3>Security model</h3>
 <p>
-The remote host only ever gets the minimum access it needs, never root, and never a shell:
+BuddyBackup enforces least-privilege access using SSH forced commands and a fine-grained OpenZFS allowlist:
 <ul>
-    <li><b>Receiver</b> (this Unraid pushes): the user may create and receive datasets under the configured parent
-    (and serve restores back), but cannot delete, list other pools' data, or run anything outside the allowlist.
-    Received data is never mounted on the remote host (<code>mountpoint=none</code>).</li>
-    <li><b>Sender</b> (this Unraid pulls): the user may send snapshots of the configured dataset
-    and nothing more - the forced-command allowlist itself only accepts commands naming that
-    dataset (or its children), so even sudo-mode hosts stay limited to the configured tree.
-    If the remote host runs OpenZFS 2.4+, sends are restricted to raw streams, so this Unraid
-    cannot read the remote data even if this server is compromised.</li>
-    <li>SSH access is command-restricted (forced command), non-interactive, with no port forwarding and no pty.</li>
-    <li>Backups are always raw encrypted snapshot streams: the remote end cannot read your data.</li>
+    <li><b>Unraid pushing to Generic Host</b>: The remote host runs the <code>generic_host_setup.sh</code> script. Validated commands are restricted to the configured parent dataset. Received data is never mounted (<code>mountpoint=none</code>).</li>
+    <li><b>Generic Host pushing to Unraid</b>: The remote host connects via Unraid's <code>restrict_zfs</code> allowlist. It is permitted to send replication streams and query snapshot/resume tokens, but <b>destructive commands like <code>zfs destroy</code> are strictly blocked</b> to prevent remote malware or misconfigurations from wiping backup data.</li>
+    <li><b>SSH Restrictions</b>: All connections use dedicated keys with forced commands, non-interactive execution, no PTY allocation, and no port forwarding.</li>
+    <li><b>Encryption</b>: Data is transferred as raw encrypted ZFS snapshot streams. Neither server can decrypt the other's datasets without the original encryption key.</li>
 </ul>
-The allowlist, forced command and dataset scope are installed <b>per user</b>; if one host serves both
-directions, generate and run the setup twice with a different username for each role.
-Raw encrypted sends require <code>feature@encryption</code> on the destination pool. The "Test connection"
-button on a backup entry probes what it can and tells you what to verify manually.
 </p>
 </div>

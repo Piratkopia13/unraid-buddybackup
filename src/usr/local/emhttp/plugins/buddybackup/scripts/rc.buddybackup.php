@@ -259,35 +259,12 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
         ));
     }
 
-    if ($cfg['type'] == 'remote_pull') {
-        $identity = resolve_remote_identity_from_cfg($cfg, 'source', $error_message);
-        if ($identity === null) {
-            return null;
-        }
-        return build_shell_command(array(
-            $rc,
-            'pull_backup',
-            $cfg['source_host'],
-            $identity['user'],
-            $identity['port'],
-            $cfg['source_dataset'],
-            $cfg['recursive'],
-            $cfg['destination_dataset'],
-            $uid,
-        ));
-    }
-
     $error_message = "Unknown backup type: ".($cfg['type'] ?? '');
     return null;
 }
 
 function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = null) {
     global $rc;
-
-    if ($cfg['type'] == 'remote_pull') {
-        $error_message = "Pull backups are cron-driven and do not support 'create fresh snapshot and send'.";
-        return null;
-    }
 
     $parts = array(
         $rc,
@@ -481,11 +458,10 @@ function update_backups_from_config() {
         $type = $cfg['type'] ?? '';
         $is_local = $type == "local";
         $destination_host = trim((string)($cfg['destination_host'] ?? ''));
-        $source_host = trim((string)($cfg['source_host'] ?? ''));
 
         // append targets as known hosts. This gets rid of strange hostfile_replace_entries/update_known_hosts errors during remote ssh commands
         // This is done as long as a host is set regardless if backups are enabled or not since we still need to eg. run get_available_snapshots
-        if (!$is_local && $type != 'remote_pull' && $destination_host !== '') {
+        if (!$is_local && $destination_host !== '') {
             $port = '22';
             if ($type == 'remote_generic') {
                 $identity = resolve_remote_identity_from_cfg($cfg, 'destination');
@@ -496,19 +472,11 @@ function update_backups_from_config() {
             $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
         }
 
-        if ($type == 'remote_pull' && $source_host !== '') {
-            $identity = resolve_remote_identity_from_cfg($cfg, 'source');
-            $port = $identity !== null ? $identity['port'] : '22';
-            $destination_hosts[$source_host.'|'.$port] = array('host' => $source_host, 'port' => $port);
-        }
-
         $allow_empty = array();
         if ($is_local) {
             $allow_empty = array('destination_host');
         } else if ($type == 'remote_generic') {
             $allow_empty = array('destination_user', 'destination_port');
-        } else if ($type == 'remote_pull') {
-            $allow_empty = array('destination_host');
         }
 
         $any_empty = false;
@@ -610,7 +578,7 @@ function restore_snapshot($argv) {
         ));
         BB_LOG("remote_generic cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
-    } else if ($cfg["type"] == "local" || $cfg["type"] == "remote_pull") {
+    } else if ($cfg["type"] == "local") {
         $cmd = build_shell_command(array(
             $GLOBALS['rc'],
             'restore_snapshot',
@@ -635,24 +603,6 @@ function preflight_send_backup($uid) {
     $cfg = load_backup_config_entry($uid, $error_message);
     if ($cfg === null) {
         write_json_response(array('status' => 'error', 'message' => $error_message));
-        return;
-    }
-
-    if ($cfg['type'] == 'remote_pull') {
-        $identity = resolve_remote_identity_from_cfg($cfg, 'source', $error_message);
-        if ($identity === null) {
-            write_json_response(array('status' => 'error', 'message' => $error_message));
-            return;
-        }
-        $cmd = build_shell_command(array(
-            $rc,
-            'preflight_pull_backup',
-            $cfg['source_host'],
-            $identity['user'],
-            $identity['port'],
-            $cfg['source_dataset'],
-        ));
-        passthru($cmd);
         return;
     }
 
@@ -691,7 +641,7 @@ function get_available_snapshots($uid) {
             $identity['user'],
             $identity['port'],
         )));
-    } else if ($cfg["type"] == "local" || $cfg["type"] == "remote_pull") {
+    } else if ($cfg["type"] == "local") {
         passthru(build_shell_command(array(
             $rc,
             'get_available_snapshots',
@@ -802,13 +752,12 @@ switch ($argv[1]) {
         $type = $argv[4] ?? 'remote';
         $user = $argv[5] ?? '';
         $port = $argv[6] ?? '';
-        if ($type == 'remote_generic' || $type == 'remote_pull') {
+        if ($type == 'remote_generic') {
             $identity = normalize_remote_identity($user, $port, $error_message);
             if ($identity === null) {
                 echo $error_message;
                 break;
             }
-            $direction = ($type == 'remote_pull') ? 'pull' : 'push';
             passthru(build_shell_command(array(
                 $rc,
                 'test_generic_connection',
@@ -816,7 +765,7 @@ switch ($argv[1]) {
                 $identity['user'],
                 $identity['port'],
                 $argv[3] ?? '',
-                $direction,
+                'push',
             )));
         } else {
             $host = escapeshellarg($argv[2] ?? '');

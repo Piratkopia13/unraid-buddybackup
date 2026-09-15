@@ -246,6 +246,46 @@ subtest 'allowed commands' => sub {
                 'would run command: echo -n',
             ],
         },
+        {
+            label => 'zettarepl wrapped echo ok probe',
+            command => q{sh -c 'PATH=$PATH:/usr/local/sbin:/usr/sbin:/sbin echo ok 2>&1'},
+            expected_lines => ['would run command: echo ok'],
+        },
+        {
+            label => 'zettarepl list snapshots query',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs list -t snapshot -H -o name -s name -d 1 '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs list -t snapshot -H -o name -s name -d 1 'disk11/backups/tim/cache_domains/Windows 11'}],
+        },
+        {
+            label => 'zettarepl list dataset tokens query',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs list -H -o name,origin,receive_resume_token -t filesystem,volume '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs list -H -o name,origin,receive_resume_token -t filesystem,volume 'disk11/backups/tim/cache_domains/Windows 11'}],
+        },
+        {
+            label => 'zettarepl get all properties query',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs get -H -p -o property,value all '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs get -H -p -o property,value all 'disk11/backups/tim/cache_domains/Windows 11'}],
+        },
+        {
+            label => 'zettarepl create child dataset',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs create -u '\\'''disk11/backups/tim/cache_domains/Windows 11/sub'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs create -u 'disk11/backups/tim/cache_domains/Windows 11/sub'}],
+        },
+        {
+            label => 'zettarepl direct receive stream',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs recv -F -s -u '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs recv -F -s -u 'disk11/backups/tim/cache_domains/Windows 11'}],
+        },
+        {
+            label => 'zettarepl receive abort',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs recv -A '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs recv -A 'disk11/backups/tim/cache_domains/Windows 11'}],
+        },
+        {
+            label => 'zettarepl restore send stream',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs send -w -p -e $snap1 2>&1'},
+            expected_lines => [qq{would run command: zfs send -w -p -e $snap1}],
+        },
     );
 
     for my $case (@cases) {
@@ -369,6 +409,21 @@ subtest 'blocked commands' => sub {
             expected_lines => [
                 qq{would run command: zfs get -H name $dataset},
                 'blocked command: rm -rf /',
+            ],
+        },
+        {
+            label => 'zettarepl snapshot destroy attempt',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs destroy '\\'''disk11/backups/tim/cache_domains/Windows 11\@autosnap_2026-04-23_06:15:01_daily'\\''' 2>&1'},
+            expected_lines => [
+                qq{blocked command: zfs destroy 'disk11/backups/tim/cache_domains/Windows 11\@autosnap_2026-04-23_06:15:01_daily'},
+            ],
+        },
+        {
+            label => 'zettarepl chained injection attempt',
+            command => q{sh -c 'PATH=$PATH:/usr/local/sbin:/usr/sbin:/sbin echo ok; id 2>&1'},
+            expected_lines => [
+                'would run command: echo ok',
+                'blocked command: id',
             ],
         },
     );
