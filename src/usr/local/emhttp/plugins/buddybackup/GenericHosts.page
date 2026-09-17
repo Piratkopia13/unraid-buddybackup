@@ -4,9 +4,11 @@ Title="Generic ZFS hosts"
 <?php
     $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
     if (file_exists($public_ssh_key_path)) {
-        $public_ssh_key = trim(file_get_contents($public_ssh_key_path));
-        if ($public_ssh_key === false) {
+        $content = file_get_contents($public_ssh_key_path);
+        if ($content === false) {
             $public_ssh_key = "Failed to read file";
+        } else {
+            $public_ssh_key = trim($content);
         }
     } else {
         $public_ssh_key = "Reinstall plugin. SSH key not found.";
@@ -36,23 +38,18 @@ Title="Generic ZFS hosts"
         return "'" + String(value).replace(/'/g, "'\\''") + "'";
     }
     function copy_text(btn, text) {
-        var done = function() {
-            var old = $(btn).val();
-            $(btn).val("Copied!").prop('disabled', true);
-            window.setTimeout(function() { $(btn).val(old).prop('disabled', false); }, 1500);
-        };
-        if (navigator.clipboard && window.isSecureContext) {
-            navigator.clipboard.writeText(text).then(done, function() { fallback_copy(text); done(); });
+        if (typeof buddybackup_copy_key === 'function') {
+            buddybackup_copy_key(btn, text);
         } else {
-            fallback_copy(text);
-            done();
+            var ta = $("<textarea>").css({position:'fixed', top:0, left:0, opacity:0.01}).val(text).appendTo('body');
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+            var old = $(btn).val();
+            $(btn).val("Copied!");
+            window.setTimeout(function() { $(btn).val(old); }, 2500);
         }
-    }
-    function fallback_copy(text) {
-        var ta = $("<textarea>").css({position:'fixed', opacity:0}).val(text).appendTo('body');
-        ta[0].select();
-        document.execCommand('copy');
-        ta.remove();
     }
 
     function generic_hosts_update() {
@@ -107,8 +104,11 @@ Backups can run between Unraid and any generic OpenZFS system: TrueNAS SCALE, Pr
 <div id="bb-generic-hosts-push-to-remote">
 <br>
 _(Your SSH public key (give this to the remote host setup))_:
-: <input disabled type="text" class="align" style="opacity:1;" value="<?=$public_ssh_key;?>">
-  <input type="button" value="_(Copy)_" onclick="copy_text(this, '<?=$public_ssh_key;?>')">
+: <input readonly type="text" class="align buddybackup-key-input" style="font-family: monospace;" value="<?=htmlspecialchars($public_ssh_key);?>" onclick="this.select()" title="<?=_('Click to select all')?>">
+  <button type="button" class="ur-btn buddybackup-copy-btn" onclick="buddybackup_copy_key(this)">
+      <i class="fa fa-clipboard"></i> <span><?=_('Copy')?></span>
+  </button>
+  <span class="buddybackup-copy-feedback" style="display: none;"></span>
 
 <table>
 <tr><th scope="col">Remote host receiver setup</th></tr>

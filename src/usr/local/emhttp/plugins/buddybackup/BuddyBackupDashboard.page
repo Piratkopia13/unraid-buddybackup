@@ -2,143 +2,333 @@ Menu="Dashboard:0"
 Cond="version_compare(parse_ini_file('/etc/unraid-version')['version'],'6.12.0','>')"
 ---
 <style>
-  span.w30{min-width:30%;max-width:30%;float:left;overflow:hidden;text-overflow:ellipsis}
-  span.w29{min-width:29%;max-width:29%;float:left;overflow:hidden;text-overflow:ellipsis}
-  span.w12{min-width:12%;max-width:12%;float:left;overflow:hidden;text-overflow:ellipsis}
+  #buddybackup_dashboard .tile-header {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: start;
+    gap: 1rem;
+  }
+  #buddybackup_dashboard .tile-header-left {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: start;
+    justify-content: flex-start;
+    gap: 1rem;
+  }
+  #buddybackup_dashboard .tile-header-right {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap-reverse;
+    flex-shrink: 0;
+    align-items: start;
+    justify-content: flex-end;
+    gap: 1rem;
+  }
+  #buddybackup_dashboard .tile-header-right-controls {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .5rem;
+  }
+  #buddybackup_dashboard .tile-header-right-controls a {
+    display: inline-flex;
+  }
+  #buddybackup_dashboard .tile-header-main {
+    font-size: 1.6rem;
+    line-height: 1;
+    margin: 0 0 0.5rem 0;
+    text-transform: uppercase;
+    font-weight: bold;
+  }
+  #buddybackup_dashboard tr.header td,
+  #buddybackup_dashboard tr.buddybackup-dash-row td {
+    display: grid;
+    grid-template-columns: minmax(0, 2.3fr) minmax(0, 2.7fr) minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 0.8fr);
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+  }
+  #buddybackup_dashboard tr.header td {
+    padding: 6px 10px 2px 10px;
+    font-size: 1.1rem !important;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-color, #aaa);
+    font-weight: bold;
+  }
+  .buddybackup-col-source {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .buddybackup-col-dest {
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .buddybackup-col-dest .dest-prefix {
+    font-weight: 600;
+    opacity: 0.85;
+  }
+  .buddybackup-col-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .buddybackup-col-status i.fa-circle {
+    font-size: 8px;
+  }
+  .buddybackup-col-lastran {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .buddybackup-col-size {
+    font-size: 11px;
+    white-space: nowrap;
+    justify-self: end;
+    text-align: right;
+    min-width: 0;
+  }
+  .buddybackup-dash-empty {
+    text-align: center;
+    padding: 16px 8px;
+    color: gray;
+    font-size: 11px;
+  }
 </style>
 <?php
 $pluginname = "buddybackup";
 $docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
 require_once $docroot."/plugins/buddybackup/common.php";
 
-// Backups that are run from cron, or from a snapshot creation trigger count as enabled
 $bb_enabled_backups = array();
+$bb_triggering_snaps = array();
 $bb_num_autosnap = 0;
 $bb_num_autoprune = 0;
 
 $bb_snapshot_cfg_file = "/boot/config/plugins/$pluginname/snapshots.cfg";
 $bb_snapshot_cfg = my_parse_ini_file($bb_snapshot_cfg_file, true);
-foreach ($bb_snapshot_cfg as $uid => $cfg) {
-  if ($cfg["autosnap"] == "yes") { $bb_num_autosnap++; }
-  if ($cfg["autoprune"] == "yes") { $bb_num_autoprune++; }
-  if ($cfg["autosnap"] == "yes" && !empty($cfg["trigger"]) && $cfg["trigger"] != "no") {
-    $bb_enabled_backups[$cfg["trigger"]] = array();
+if (is_array($bb_snapshot_cfg)) {
+  foreach ($bb_snapshot_cfg as $uid => $snap) {
+    if (($snap["autosnap"] ?? "") == "yes") { $bb_num_autosnap++; }
+    if (($snap["autoprune"] ?? "") == "yes") { $bb_num_autoprune++; }
+    if (!empty($snap["trigger"]) && $snap["trigger"] != "no") {
+      $t_uid = $snap["trigger"];
+      $bb_triggering_snaps[$t_uid][] = $snap["dataset"] ?? _('snapshot');
+      if (($snap["autosnap"] ?? "") == "yes") {
+        $bb_enabled_backups[$t_uid] = array();
+      }
+    }
   }
 }
+
 $bb_backup_cfg_file = "/boot/config/plugins/$pluginname/backups.cfg";
 $bb_backup_cfg = my_parse_ini_file($bb_backup_cfg_file, true);
-foreach ($bb_backup_cfg as $uid => $cfg) {
-  if ($cfg["enable"] == "yes" || array_key_exists($uid, $bb_enabled_backups)) {
-    $bb_enabled_backups[$uid] = $cfg;
+if (is_array($bb_backup_cfg)) {
+  foreach ($bb_backup_cfg as $uid => $bcfg) {
+    if (($bcfg["enable"] ?? "") == "yes" || array_key_exists($uid, $bb_enabled_backups)) {
+      $bb_enabled_backups[$uid] = $bcfg;
+    }
   }
 }
+
 $bb_cfg_file = "/boot/config/plugins/$pluginname/$pluginname.cfg";
 $bb_cfg = my_parse_ini_file($bb_cfg_file, false);
-$bb_buddys_backup = ($bb_cfg["ReceiveBackups"] == "enable") ? ", Buddy's backup" : "";
+$bb_receive_enabled = ($bb_cfg["ReceiveBackups"] ?? "") == "enable";
 
 $bb_enabled_backups = array_filter($bb_enabled_backups);
 $bb_num_enabled_backups = count($bb_enabled_backups);
-// Sort by source_dataset name and destination_dataset/destination_host name
-uasort($bb_enabled_backups, function($a, $b) {
-  $cmp = strcasecmp($a["source_dataset"], $b["source_dataset"]);
-  if ($cmp !== 0) return $cmp;
 
-  $destA = bb_backup_destination($a);
-  $destB = bb_backup_destination($b);
+// Sort by source_dataset and destination
+uasort($bb_enabled_backups, function($a, $b) {
+  $cmp = strcasecmp($a["source_dataset"] ?? "", $b["source_dataset"] ?? "");
+  if ($cmp !== 0) return $cmp;
+  $destA = (($a["type"] ?? "") == "local") ? ($a["destination_dataset"] ?? "") : ($a["destination_host"] ?? "");
+  $destB = (($b["type"] ?? "") == "local") ? ($b["destination_dataset"] ?? "") : ($b["destination_host"] ?? "");
   return strcasecmp($destA, $destB);
 });
 
-// Destination shown for a backup: local dataset or remote host
-function bb_backup_destination($backup) {
-  return (($backup["type"] ?? "") == "local") ? ($backup["destination_dataset"] ?? "") : ($backup["destination_host"] ?? "");
-}
-
-function bb_info($file, $buddy = false) {
-  global $bb_cfg;
-  $ret = array();
-  $ret["last_ran"] = "-";
-  $ret["last_ran_style"] = "";
-  $ret["dest_size"] = "-";
-  if (file_exists($file)) {
-    $info = parse_ini_file($file);
-    if (!empty($info["last_ran"])) {
-      $last_ran = (int)$info["last_ran"];
-      $ret["last_ran"] = my_time($last_ran);
-      $current_time = time();
-
-      $warn = ($buddy) ? $bb_cfg["BuddysBackupDaysAgoWarning"] : $bb_cfg["BackupDaysAgoWarning"];
-      $crit = ($buddy) ? $bb_cfg["BuddysBackupDaysAgoCritical"] : $bb_cfg["BackupDaysAgoCritical"];
-
-      $one_week_in_seconds = (int)$warn * 24 * 60 * 60;
-      $one_month_in_seconds = (int)$crit * 24 * 60 * 60;
-      if ((!empty($crit) && $crit != "0") && ($current_time - $last_ran) > $one_month_in_seconds) {
-        $ret["last_ran_style"] = "color: red;";
-      } else if ((!empty($warn) && $warn != "0") && ($current_time - $last_ran) > $one_week_in_seconds) {
-        $ret["last_ran_style"] = "color: yellow;";
-      }
-    }
-    if (!empty($info["dest_size"])) {
-      $ret["dest_size"] = $info["dest_size"];
-    }
-  }
-  return $ret;
-}
-
 $bb_backups_table_content = "";
-foreach ($bb_enabled_backups as $uid => $cfg) {
-  $source = $cfg["source_dataset"];
-  $dest = bb_backup_destination($cfg); // note: if this changes, also update the uasort of $bb_enabled_backups above
-  $info = bb_info("/tmp/buddybackup-$uid");
-  $last_ran = $info["last_ran"];
-  $last_ran_style = $info["last_ran_style"];
-  $dest_size = $info["dest_size"];
-  $bb_backups_table_content .=
-  <<<EOT
-    <tr><td>
-    <span class="w29">$source</span>
-    <span class="w29">$dest</span>
-    <span class="w30" style="$last_ran_style">$last_ran</span>
-    <span class="w12">$dest_size<span>
-  </td></tr>
+foreach ($bb_enabled_backups as $uid => $bcfg) {
+  $source_raw = $bcfg["source_dataset"] ?? "";
+  $source = htmlspecialchars($source_raw);
+  $type = $bcfg["type"] ?? "remote";
+  if ($type == "local") {
+    $dest_display = '<span class="grey-text">local:</span>' . htmlspecialchars($bcfg["destination_dataset"] ?? "");
+    $dest_title = "local:" . ($bcfg["destination_dataset"] ?? "");
+  } else if ($type == "remote_pull") {
+    $source = htmlspecialchars(($bcfg["source_host"] ?? "") . ":" . $source_raw);
+    $dest_display = '<span class="grey-text">local:</span>' . htmlspecialchars($bcfg["destination_dataset"] ?? "");
+    $dest_title = "local:" . ($bcfg["destination_dataset"] ?? "");
+  } else {
+    $dest_display = '<span class="orange-text">' . htmlspecialchars($bcfg["destination_host"] ?? "") . ':</span>' . htmlspecialchars($bcfg["destination_dataset"] ?? "");
+    $dest_title = ($bcfg["destination_host"] ?? "") . ":" . ($bcfg["destination_dataset"] ?? "");
+  }
+
+  $telemetry = bb_task_telemetry($uid, false, $bb_cfg);
+  $is_cron = ($bcfg["enable"] ?? "") == "yes";
+  $cron_expr = trim($bcfg["backup_cron"] ?? "");
+  $has_cron = !empty($cron_expr);
+  $is_triggered = !empty($bb_triggering_snaps[$uid]);
+
+  $status_dot_class = $telemetry["status_class"];
+  $status_text = strtolower(_($telemetry["status_label"]));
+
+  $schedule_badge = "";
+  if ($is_triggered) {
+    $trigger_title = _("Triggered after snapshot of: ") . htmlspecialchars(implode(', ', $bb_triggering_snaps[$uid]));
+    $schedule_badge .= ' <i class="fa fa-bolt orange-text" title="' . $trigger_title . '"></i>';
+  }
+  if ($has_cron) {
+    $cron_title = _("Cron schedule: ") . htmlspecialchars($cron_expr);
+    $schedule_badge .= ' <i class="fa fa-calendar-o grey-text" title="' . $cron_title . '"></i>';
+  }
+
+  $status_tooltip = _($telemetry["status_label"]) . " (" . _("Last run: ") . $telemetry["last_ran"] . ")";
+
+  $bb_backups_table_content .= <<<EOT
+    <tr class="buddybackup-dash-row">
+      <td>
+        <span class="buddybackup-col-source" title="$source">
+          <i class="fa fa-database grey-text"></i> $source
+        </span>
+        <span class="buddybackup-col-dest" title="$dest_title">
+          $dest_display
+        </span>
+        <span class="buddybackup-col-status $status_dot_class" title="$status_tooltip">
+          <i class="fa fa-circle"></i> $status_text$schedule_badge
+        </span>
+        <span class="buddybackup-col-lastran {$telemetry['last_ran_class']}" title="{$telemetry['last_ran']}">
+          {$telemetry['compact_last_ran']}
+        </span>
+        <span class="buddybackup-col-size grey-text" title="{$telemetry['dest_size']}">
+          {$telemetry['dest_size']}
+        </span>
+      </td>
+    </tr>
   EOT;
 }
 
 $bb_buddys_backup_table_content = "";
+if ($bb_receive_enabled) {
+  $dest_ds_raw = $bb_cfg["ReceiveDestinationDataset"] ?? _("Not set");
+  $dest_ds = htmlspecialchars($dest_ds_raw);
+  $buddy_telemetry = bb_task_telemetry("", true, $bb_cfg);
+  $buddy_title = str_replace(array('&apos;', '&#39;', '&#039;'), "'", _("Buddy's Backup"));
+  $buddy_status_text = strtolower(_($buddy_telemetry["status_label"]));
+  $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . _("Last received: ") . $buddy_telemetry["last_ran"] . ")";
 
-if (!empty($bb_buddys_backup)) {
-  $dest = $bb_cfg["ReceiveDestinationDataset"];
-  $info = bb_info("/tmp/buddybackup-buddy", true);
-  $last_ran = $info["last_ran"];
-  $last_ran_style = $info["last_ran_style"];
-  $dest_size = $info["dest_size"];
-  $bb_buddys_backup_table_content =
-  <<<EOT
-    <tr><td><hr></td></tr>
-    <tr><td>
-      <span class="w29">Buddy</span>
-      <span class="w29">$dest</span>
-      <span class="w30" style="$last_ran_style">$last_ran</span>
-      <span class="w12">$dest_size<span>
-    </td></tr>
+  $bb_buddys_backup_table_content = <<<EOT
+    <tr class="buddybackup-dash-row">
+      <td>
+        <span class="buddybackup-col-source" title="$buddy_title">
+          <i class="fa fa-user-circle grey-text"></i> $buddy_title
+        </span>
+        <span class="buddybackup-col-dest" title="$dest_ds">
+          $dest_ds
+        </span>
+        <span class="buddybackup-col-status {$buddy_telemetry['status_class']}" title="$buddy_status_tooltip">
+          <i class="fa fa-circle"></i> $buddy_status_text
+        </span>
+        <span class="buddybackup-col-lastran {$buddy_telemetry['last_ran_class']}" title="{$buddy_telemetry['last_ran']}">
+          {$buddy_telemetry['compact_last_ran']}
+        </span>
+        <span class="buddybackup-col-size grey-text" title="{$buddy_telemetry['dest_size']}">
+          {$buddy_telemetry['dest_size']}
+        </span>
+      </td>
+    </tr>
   EOT;
 }
 
+$has_entries = !empty($bb_backups_table_content) || !empty($bb_buddys_backup_table_content);
+$table_header = "";
+if ($has_entries) {
+  $table_header = <<<EOT
+    <tr class="header">
+      <td>
+        <span class="buddybackup-col-source">_(Source)_</span>
+        <span class="buddybackup-col-dest">_(Destination)_</span>
+        <span class="buddybackup-col-status">_(Status)_</span>
+        <span class="buddybackup-col-lastran">_(Last run)_</span>
+        <span class="buddybackup-col-size">_(Size)_</span>
+      </td>
+    </tr>
+  EOT;
+}
+
+$empty_content = "";
+if (!$has_entries) {
+  $empty_msg = _("No active backup tasks configured.");
+  $empty_content = <<<EOT
+    <tr>
+      <td class="buddybackup-dash-empty">
+        <i class="fa fa-info-circle grey-text"></i> $empty_msg
+      </td>
+    </tr>
+  EOT;
+}
+
+$summary_parts = array();
+$summary_parts[] = "$bb_num_enabled_backups " . _("backup(s)");
+if ($bb_num_autosnap > 0) $summary_parts[] = "$bb_num_autosnap " . _("autosnap");
+if ($bb_num_autoprune > 0) $summary_parts[] = "$bb_num_autoprune " . _("autoprune");
+if ($bb_receive_enabled) $summary_parts[] = _("Incoming active");
+$summary_line = implode(", ", $summary_parts);
+
 $mytiles[$pluginname]['column3'] =
 <<<EOT
-<tbody title="_(BuddyBackup info)_">
-<tr><td><img style="margin-right: 8px; width: 32px; height: 32px" src="/plugins/buddybackup/images/buddybackup.png" alt="BuddyBackup">
-<div class='section'>ZFS Buddy Backup<span><br>
-Enabled: $bb_num_enabled_backups backup(s), autosnap $bb_num_autosnap dataset(s), autoprune $bb_num_autoprune dataset(s)$bb_buddys_backup
-</span><br></div>
-<a href="/Settings/BuddyBackup" title="_(Go to BuddyBackup settings)_"><i class="fa fa-fw fa-cog control"></i></a></td></tr></td></tr>
-<tr class="header"><td>
-  <span class="w29">Source</span>
-  <span class="w29">Dest</span>
-  <span class="w30">Last ran</span>
-  <span class="w12">Dest size<span>
-</td></tr>
+<tbody id="buddybackup_dashboard" title="_(BuddyBackup Information)_">
+<tr>
+  <td>
+    <span class='tile-header'>
+      <span class='tile-header-left'>
+        <img style="width: 32px; height: 32px;" src="/plugins/buddybackup/images/buddybackup.png" alt="BuddyBackup">
+        <div class='section'>
+          <h3 class='tile-header-main'>_(ZFS Buddy Backup)_</h3>
+          <span>$summary_line</span><br>
+        </div>
+      </span>
+      <span class='tile-header-right'>
+        <span class='tile-header-right-controls'>
+          <a href="/Tools/BuddyBackup" title="_(Go to BuddyBackup settings)_"><i class="fa fa-fw fa-cog control"></i></a>
+        </span>
+      </span>
+    </span>
+  </td>
+</tr>
+$table_header
 $bb_backups_table_content
 $bb_buddys_backup_table_content
+$empty_content
 </tbody>
+<script>
+$(function() {
+  setTimeout(function() {
+    var c = $('#buddybackup_dashboard').find('td:first .tile-header-right .tile-header-right-controls');
+    if (c.length && !c.find('.openclose').length) {
+      c.append("<i class='fa fa-fw fa-chevron-up control openclose' onclick='openClose($(this))' title=\"_(Show/Hide Content)_\"></i>");
+    }
+  }, 300);
+});
+</script>
 EOT;
 ?>

@@ -4,14 +4,15 @@ Title="Buddy's Backups"
 <script>
 function update_example() {
   var val = $('form').find('select[name=ReceiveDestinationDataset]').val();
-  $('#buddybackup-destination-example').text("Example for what buddy can use as destination dataset: "+val+"/my-stuff");
+  $('#buddybackup-destination-example').text("<?=_('Example for what buddy can use as destination dataset:')?> "+val+"/my-stuff");
 }
 function update_key_textarea(ta) {
+  if (!ta) return;
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
-  if (ta.value.split('\n').length > 1) {
+  if (ta.value.split('\n').filter(function(l){ return l.trim().length > 0; }).length > 1) {
     $('#buddybackup-multiple-keys span').remove();
-    $('#buddybackup-multiple-keys').append('<span style="color: #ffffa3;">Important: all keys you add will have access to retrieve data from all child datasets in the parent dataset specified below.</span>');
+    $('#buddybackup-multiple-keys').append('<span style="color: #ffffa3; display: block; margin-top: 4px;"><i class="fa fa-info-circle"></i> <?=_('Important: all keys you add will have access to retrieve data from all child datasets in the parent dataset specified below.')?></span>');
   } else {
     $('#buddybackup-multiple-keys span').remove();
   }
@@ -23,69 +24,104 @@ $(function() {
   // Resize textarea for Buddy's SSH public key and add important note when more than one key is added
   $('form').find('textarea[name=DestinationPubSSHKey]').each(function(){$(this).on('input', function() {update_key_textarea(this);})});
   update_key_textarea($('form').find('textarea[name=DestinationPubSSHKey]')[0]);
-})
-
+});
 </script>
 <?php
   $disabled = ($disable_receive) ? "disabled" : "";
+  $buddy_telemetry = bb_task_telemetry("", true);
 ?>
-<form markdown="1" method="POST" action="/update.php" target="progressFrame">
+
+<p class="page-desc" style="margin-bottom: 14px;">
+_(Configure receiving incoming backups from your buddy. When enabled, your buddy can replicate their encrypted ZFS snapshots to your specified destination dataset.)_
+</p>
+
+<?php if ($buddy_telemetry['has_run']): ?>
+<div class="buddybackup-telemetry-banner" style="margin-bottom: 18px;">
+    <span class="metric <?=$buddy_telemetry['status_class']?>">
+        <i class="fa fa-check-circle"></i> <strong><?=_('Status:')?></strong> <?=_($buddy_telemetry['status_label'])?>
+    </span>
+    <span class="metric <?=$buddy_telemetry['last_ran_class']?>">
+        <i class="fa fa-clock-o"></i> <strong><?=_('Last received backup:')?></strong> <?=$buddy_telemetry['last_ran']?>
+    </span>
+    <?php if ($buddy_telemetry['dest_size'] != '-'): ?>
+    <span class="metric">
+        <i class="fa fa-hdd-o"></i> <strong><?=_('Storage used by buddy:')?></strong> <?=$buddy_telemetry['dest_size']?>
+    </span>
+    <?php endif; ?>
+</div>
+<?php endif; ?>
+
+<form method="POST" action="/update.php" target="progressFrame">
 <input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
-_(Enable)_:
-: <select name="ReceiveBackups" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['ReceiveBackups'], "disable", "_(No)_");?>
-    <?=mk_option($cfg['ReceiveBackups'], "enable", "_(Yes)_");?>
-  </select>
 
-:enable_backup_receive_plug:
-    > Enable receival of Buddy's backups. Buddy will not be able to connect to you unless this is enabled.
-:end
-
-<dl>
-  <dt>_(Buddy's SSH public key (get this from your buddy))_:</dt>
+<dl class="buddybackup-form-dl">
+  <dt><?=_('Enable')?>:</dt>
   <dd>
-    <textarea name="DestinationPubSSHKey" class="align" wrap="off" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>>
-    <?=$cfg['DestinationPubSSHKey'];?>
-  </textarea>
+    <select name="ReceiveBackups" class="align" <?=$disabled?>>
+      <?=mk_option($cfg['ReceiveBackups'], "disable", _("No"));?>
+      <?=mk_option($cfg['ReceiveBackups'], "enable", _("Yes"));?>
+    </select>
+    <div class="buddybackup-field-note"><?=_('Enable receival of Buddy\'s backups. Buddy will not be able to connect unless this is enabled.')?></div>
+  </dd>
+</dl>
+
+<dl class="buddybackup-form-dl">
+  <dt><?=_("Buddy's SSH public key")?>:</dt>
+  <dd>
+    <textarea name="DestinationPubSSHKey" class="align" wrap="off" style="width: 100%; max-width: 700px; min-height: 60px; font-family: monospace; font-size: 11px;" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>><?=htmlspecialchars($cfg['DestinationPubSSHKey'] ?? '');?></textarea>
     <div id="buddybackup-multiple-keys" class="buddybackup-field-note">
-      You can add multiple keys, just make sure there is only one key per line.<br>
+      <?=_('Get this key from your buddy. You can add multiple keys, one per line.')?>
     </div>
   </dd>
 </dl>
 
-<dl>
-  <dt>_(Destination parent dataset)_:</dt>
+<dl class="buddybackup-form-dl">
+  <dt><?=_('Destination parent dataset')?>:</dt>
   <dd>
     <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
-  <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
+      <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
     </select>
-    <div class="buddybackup-field-note">Buddy should prefix their destination dataset with this, but always end with a child dataset.
-Buddy can use any child dataset following this as destination, but not this dataset directly.<br>
-<span id="buddybackup-destination-example"></span></div>
+    <div class="buddybackup-field-note">
+      <?=_('Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
+      <span id="buddybackup-destination-example"></span>
+    </div>
   </dd>
 </dl>
 
-_(Snapshot retention)_:
-: <span class="buddy-retention-group">
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> <span>Hourly</span></label>
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> <span>Monthly</span></label>
-    </span>
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> <span>Daily</span></label>
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> <span>Yearly</span></label>
-    </span>
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> <span>Weekly</span></label>
-    </span>
-  </span>
+<dl class="buddybackup-form-dl">
+  <dt><?=_('Snapshot retention')?>:</dt>
+  <dd>
+    <div class="buddybackup-retention-row-clean">
+      <div class="buddybackup-retention-item-clean">
+        <label><?=_('Hourly:')?></label>
+        <input type="number" name="ReceiveDestinationRententionHourly" min="0" value="<?=htmlspecialchars($cfg['ReceiveDestinationRententionHourly'] ?? 0);?>" <?=$disabled?>>
+      </div>
+      <div class="buddybackup-retention-item-clean">
+        <label><?=_('Daily:')?></label>
+        <input type="number" name="ReceiveDestinationRententionDaily" min="0" value="<?=htmlspecialchars($cfg['ReceiveDestinationRententionDaily'] ?? 0);?>" <?=$disabled?>>
+      </div>
+      <div class="buddybackup-retention-item-clean">
+        <label><?=_('Weekly:')?></label>
+        <input type="number" name="ReceiveDestinationRententionWeekly" min="0" value="<?=htmlspecialchars($cfg['ReceiveDestinationRententionWeekly'] ?? 0);?>" <?=$disabled?>>
+      </div>
+      <div class="buddybackup-retention-item-clean">
+        <label><?=_('Monthly:')?></label>
+        <input type="number" name="ReceiveDestinationRententionMonthly" min="0" value="<?=htmlspecialchars($cfg['ReceiveDestinationRententionMonthly'] ?? 0);?>" <?=$disabled?>>
+      </div>
+      <div class="buddybackup-retention-item-clean">
+        <label><?=_('Yearly:')?></label>
+        <input type="number" name="ReceiveDestinationRententionYearly" min="0" value="<?=htmlspecialchars($cfg['ReceiveDestinationRententionYearly'] ?? 0);?>" <?=$disabled?>>
+      </div>
+    </div>
+    <div class="buddybackup-field-note"><?=_('Sanoid policy for how many snapshots containing your buddy\'s backup should be kept.')?></div>
+  </dd>
+</dl>
 
-:retention_plug:
-    > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.
-:end
-
-&nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+<div class="buddybackup-card-actions" style="margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(128, 128, 128, 0.25);">
+  <div class="buddybackup-card-actions-left">
+    <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+  </div>
+</div>
 </form>

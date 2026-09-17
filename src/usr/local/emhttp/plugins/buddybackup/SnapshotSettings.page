@@ -3,7 +3,7 @@ Title="Snapshot creation and pruning"
 ---
 <script>
     function snapshot_input_changed() {
-        var form = $(this).parentsUntil('form').parent();
+        var form = $(this).closest('form.buddybackup-snapshot-dataset');
         if (!form.find("select[name='dataset']").val()) {
             return;
         }
@@ -19,104 +19,222 @@ Title="Snapshot creation and pruning"
         var template = $("#buddybackup-snapshot-creation-dataset-template");
         var list = $("#buddybackup-snapshot-creation-list");
         var new_uid = uid();
-        var new_dataset = $("<div/>").attr("id", new_uid).html(template.html());
-        var new_form = new_dataset.find("form.buddybackup-snapshot-dataset")
+        var new_entry = $(template.html());
+        new_entry.attr("id", "entry-" + new_uid);
+        new_entry.addClass("is-expanded");
+        new_entry.find(".buddybackup-header-chevron").removeClass("fa-chevron-right").addClass("fa-chevron-down");
+        var new_form = new_entry.find("form.buddybackup-snapshot-dataset");
         new_form.attr("method", "POST").attr("action", "/update.php").attr("target", "progressFrame");
         new_form.find("input[name='#section']").val(new_uid);
 
         new_form.find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
             .not('.lock').each(function(){$(this).on('input change', snapshot_input_changed)});
 
-        list.append(new_dataset);
+        list.append(new_entry);
     }
     function remove_dataset_from_snapshot_creation(btn) {
-        swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
-            var form = $(btn).closest("form.buddybackup-snapshot-dataset");
+        swal({title:"_(Proceed)_?", text:"Remove snapshot task", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
+            var card = $(btn).closest(".buddybackup-entry-card");
+            var form = card.find("form.buddybackup-snapshot-dataset");
             var the_uid = form.find("input[name='#section']").val();
             var saved = form.find("input[name='#saved']").val();
             if (saved != "true") {
-                form.remove();
+                card.remove();
                 return;
             }
             $.post(api_url,{cmd:'remove_sanoid_section', 'section':the_uid},function(data) {
                 if (data == '') {
-                    form.remove();
+                    card.remove();
                 } else {
                     alert(data);
                 }
             });
         }});
     }
-    
 </script>
-<span class="pad-left">
-Set up automatic snapshot creation and pruning on your datasets. You do not need to use this section, but it's snapshots that are synced to your buddy and this is an easy way of managing them.
-</span>
+<p class="page-desc" style="margin-bottom: 12px;">
+_(Set up automatic snapshot creation and pruning on your datasets. Snapshots are what gets synced to your buddy.)_
+</p>
+
+<div class="buddybackup-section-toolbar">
+    <div>
+        <input type="button" value="<?=_('Add Snapshot Task')?>" onclick="add_dataset_for_snapshot_creation()">
+    </div>
+    <div>
+        <button type="button" class="alt" onclick="buddybackup_toggle_all('buddybackup-snapshot-creation-list', this)">
+            <i class="fa fa-compress"></i> <span><?=_('Collapse All')?></span>
+        </button>
+    </div>
+</div>
+
 <div id="buddybackup-snapshot-creation-list">
 <?php
     function snapshot_creation_dataset_entry($uid, $data) {
         global $plugin;
         global $rc_script;
+        global $backup_cfg;
+
+        $is_saved = !empty($data);
+        $dataset_name = !empty($data['dataset']) ? htmlspecialchars($data['dataset']) : _('(Select Dataset)');
+        $is_recursive = ($data['recursive'] ?? '') === 'yes';
+        $autosnap = ($data['autosnap'] ?? 'no') === 'yes';
+        $autoprune = ($data['autoprune'] ?? 'no') === 'yes';
+        $is_active = $autosnap || $autoprune;
+
+        if (!$is_saved) {
+            $status_dot_class = "orange-text";
+            $status_text = _("New Task");
+        } else if (!$is_active) {
+            $status_dot_class = "grey-text";
+            $status_text = _("Inactive");
+        } else {
+            $status_dot_class = "green-text";
+            $status_text = _("Active");
+        }
+
+        $ret_parts = [];
+        if (!empty($data['hourly'])) $ret_parts[] = $data['hourly'].'h';
+        if (!empty($data['daily'])) $ret_parts[] = $data['daily'].'d';
+        if (!empty($data['weekly'])) $ret_parts[] = $data['weekly'].'w';
+        if (!empty($data['monthly'])) $ret_parts[] = $data['monthly'].'m';
+        if (!empty($data['yearly'])) $ret_parts[] = $data['yearly'].'y';
+        $retention_summary = !empty($ret_parts) ? implode(', ', $ret_parts) : _('None');
+
+        $trigger_uid = $data['trigger'] ?? 'no';
+        $trigger_label = '';
+        if ($trigger_uid !== 'no' && isset($backup_cfg[$trigger_uid])) {
+            $b = $backup_cfg[$trigger_uid];
+            $b_dest = (($b['type'] ?? '') === 'local') ? 'localhost' : ($b['destination_host'] ?? '');
+            $trigger_label = htmlspecialchars(($b['source_dataset'] ?? '') . ' -> ' . $b_dest);
+        }
         ?>
-        <div id="buddybackup-entry-<?=$uid?>">
-        <form markdown="1" class="buddybackup-snapshot-dataset buddybackup-list-entry" method="POST" action="/update.php" target="progressFrame">
-        <input type="hidden" name="#file" value="<?=$plugin?>/snapshots.cfg">
-        <input type="hidden" name="#section" value="<?=$uid?>">
-        <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
-        <input type="hidden" name="#command" value="<?=$rc_script?>">
-        <input type="hidden" name="#arg[1]" value="update">
+        <div class="buddybackup-entry-card <?= (!$is_saved) ? 'is-expanded' : '' ?>" id="entry-<?=$uid?>">
+            <div class="buddybackup-entry-header" onclick="buddybackup_toggle_card(this)">
+                <div class="buddybackup-header-left">
+                    <i class="fa fa-chevron-<?= (!$is_saved) ? 'down' : 'right' ?> buddybackup-header-chevron"></i>
+                    <span class="<?=$status_dot_class?>"><i class="fa fa-circle buddybackup-status-dot"></i><?=$status_text?></span>
+                    <span class="buddybackup-header-route">
+                        <span><?=$dataset_name?></span>
+                        <?php if ($is_recursive): ?>
+                        <span class="grey-text" style="font-weight:normal; font-size:11px;">(Recursive)</span>
+                        <?php endif; ?>
+                    </span>
+                    <?php if ($is_saved): ?>
+                    <span class="buddybackup-header-telemetry">
+                        <span class="metric-item grey-text" title="<?=_('Retention Policy')?>">
+                            <i class="fa fa-history"></i> <?=_('Retention:')?> <?=$retention_summary?>
+                        </span>
+                        <?php if (!empty($trigger_label)): ?>
+                        <span class="metric-item grey-text" title="<?=_('Triggers Backup')?>">
+                            <i class="fa fa-bolt"></i> <?=_('Triggers:')?> <?=$trigger_label?>
+                        </span>
+                        <?php endif; ?>
+                    </span>
+                    <?php endif; ?>
+                </div>
+                <div class="buddybackup-header-right" onclick="event.stopPropagation()">
+                </div>
+            </div>
 
-        _(Dataset)_:
-        : <select name="dataset" class="align">
-        <?=datasets($data["dataset"], false)?>
-        </select>
+            <div class="buddybackup-entry-body">
+                <form class="buddybackup-snapshot-dataset" method="POST" action="/update.php" target="progressFrame">
+                <input type="hidden" name="#file" value="<?=$plugin?>/snapshots.cfg">
+                <input type="hidden" name="#section" value="<?=$uid?>">
+                <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
+                <input type="hidden" name="#command" value="<?=$rc_script?>">
+                <input type="hidden" name="#arg[1]" value="update">
 
-        _(Recursive)_:
-        : <select name="recursive" class="align">
-            <?=mk_option($data["recursive"]?:"no", "no", "_(No)_");?>
-            <?=mk_option($data["recursive"], "yes", "_(Yes)_");?>
-        </select>
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Dataset')?>:</dt>
+                    <dd>
+                        <select name="dataset" class="align">
+                            <?=datasets($data["dataset"] ?? "", false)?>
+                        </select>
+                    </dd>
+                </dl>
 
-        _(Create snapshots automatically)_:
-        : <select name="autosnap" class="align">
-            <?=mk_option($data["autosnap"]?:"no", "no", "_(No)_");?>
-            <?=mk_option($data["autosnap"], "yes", "_(Yes)_");?>
-        </select>
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Recursive')?>:</dt>
+                    <dd>
+                        <select name="recursive" class="align">
+                            <?=mk_option($data["recursive"] ?? "no", "no", _("No"));?>
+                            <?=mk_option($data["recursive"] ?? "no", "yes", _("Yes"));?>
+                        </select>
+                    </dd>
+                </dl>
 
-        _(Prune snapshots automatically)_:
-        : <select name="autoprune" class="align">
-            <?=mk_option($data["autoprune"]?:"no", "no", "_(No)_");?>
-            <?=mk_option($data["autoprune"], "yes", "_(Yes)_");?>
-        </select>
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Create snapshots automatically')?>:</dt>
+                    <dd>
+                        <select name="autosnap" class="align">
+                            <?=mk_option($data["autosnap"] ?? "no", "no", _("No"));?>
+                            <?=mk_option($data["autosnap"] ?? "no", "yes", _("Yes"));?>
+                        </select>
+                    </dd>
+                </dl>
 
-        _(Snapshot retention)_:
-        : <span class="buddy-retention-group">
-            <span class="buddy-retention-row">
-                <label class="buddy-retention-item"><input type="number" name="hourly" value="<?=$data["hourly"]?:0;?>" class="narrow"> <span>Hourly</span></label>
-                <label class="buddy-retention-item"><input type="number" name="monthly" value="<?=$data["monthly"]?:0;?>" class="narrow"> <span>Monthly</span></label>
-            </span>
-            <span class="buddy-retention-row">
-                <label class="buddy-retention-item"><input type="number" name="daily" value="<?=$data["daily"]?:0;?>" class="narrow"> <span>Daily</span></label>
-                <label class="buddy-retention-item"><input type="number" name="yearly" value="<?=$data["yearly"]?:0;?>" class="narrow"> <span>Yearly</span></label>
-            </span>
-            <span class="buddy-retention-row">
-                <label class="buddy-retention-item"><input type="number" name="weekly" value="<?=$data["weekly"]?:0;?>" class="narrow"> <span>Weekly</span></label>
-            </span>
-        </span>
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Prune snapshots automatically')?>:</dt>
+                    <dd>
+                        <select name="autoprune" class="align">
+                            <?=mk_option($data["autoprune"] ?? "no", "no", _("No"));?>
+                            <?=mk_option($data["autoprune"] ?? "no", "yes", _("Yes"));?>
+                        </select>
+                    </dd>
+                </dl>
 
-        _(Trigger backup after snapshot creation)_:
-        : <select name="trigger" class="align">
-            <?=mk_option($data["trigger"]?:"no", "no", "_(No)_");?>
-            <?=backups($data["trigger"]);?>
-        </select>
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Snapshot retention')?>:</dt>
+                    <dd>
+                        <div class="buddybackup-retention-row-clean">
+                            <div class="buddybackup-retention-item-clean">
+                                <label><?=_('Hourly:')?></label>
+                                <input type="number" name="hourly" min="0" value="<?=htmlspecialchars($data["hourly"] ?? 0);?>">
+                            </div>
+                            <div class="buddybackup-retention-item-clean">
+                                <label><?=_('Daily:')?></label>
+                                <input type="number" name="daily" min="0" value="<?=htmlspecialchars($data["daily"] ?? 7);?>">
+                            </div>
+                            <div class="buddybackup-retention-item-clean">
+                                <label><?=_('Weekly:')?></label>
+                                <input type="number" name="weekly" min="0" value="<?=htmlspecialchars($data["weekly"] ?? 4);?>">
+                            </div>
+                            <div class="buddybackup-retention-item-clean">
+                                <label><?=_('Monthly:')?></label>
+                                <input type="number" name="monthly" min="0" value="<?=htmlspecialchars($data["monthly"] ?? 3);?>">
+                            </div>
+                            <div class="buddybackup-retention-item-clean">
+                                <label><?=_('Yearly:')?></label>
+                                <input type="number" name="yearly" min="0" value="<?=htmlspecialchars($data["yearly"] ?? 0);?>">
+                            </div>
+                        </div>
+                        <div class="buddybackup-field-note"><?=_('Number of snapshots to keep for each interval (managed by Sanoid).')?></div>
+                    </dd>
+                </dl>
 
-        &nbsp;
-        : <input type="submit" name="#apply" value="<?=_('Apply')?>">
-        <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_dataset_from_snapshot_creation(this)">
+                <dl class="buddybackup-form-dl">
+                    <dt><?=_('Trigger backup after snapshot')?>:</dt>
+                    <dd>
+                        <select name="trigger" class="align">
+                            <?=mk_option($data["trigger"] ?? "no", "no", _("No"));?>
+                            <?=backups($data["trigger"] ?? "");?>
+                        </select>
+                    </dd>
+                </dl>
 
-        </form>
+                <div class="buddybackup-card-actions">
+                    <div class="buddybackup-card-actions-left">
+                        <input type="submit" name="#apply" value="<?=_('Apply')?>">
+                    </div>
+                    <div>
+                        <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_dataset_from_snapshot_creation(this)">
+                    </div>
+                </div>
+
+                </form>
+            </div>
         </div>
-    <?
+        <?php
     }
     foreach ($snapshot_cfg as $uid => $data) {
         snapshot_creation_dataset_entry($uid, $data);
@@ -129,4 +247,3 @@ Set up automatic snapshot creation and pruning on your datasets. You do not need
     ?>
 </div>
 
-<span class="pad-left"><input type="button" value="_(Add)_" onclick="add_dataset_for_snapshot_creation()"></span>

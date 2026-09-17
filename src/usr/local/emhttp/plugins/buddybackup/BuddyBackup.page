@@ -28,11 +28,11 @@ Tag="buddybackup"
 <script src="/webGui/javascript/jquery.switchbutton.js"></script></p>
 <style>
     select.align {
-        min-width:300px;
-        max-width:30;
+        min-width: 300px;
+        max-width: 30ch;
     }
     select.hide {
-        display:none;
+        display: none;
     }
     #warning-box {
         background-color: rgba(255, 255, 0, 0.7);
@@ -64,7 +64,11 @@ Tag="buddybackup"
         display: block;
         margin-top: 4px;
         color: gray;
+        font-size: 11px;
+        line-height: 1.35;
         text-align: left !important;
+        max-width: 400px;
+        word-break: break-word;
     }
     .narrow {
         width: 4ch !important;
@@ -102,6 +106,239 @@ Tag="buddybackup"
     }
     .buddybackup-toggle-autoscroll {
         vertical-align: middle !important;
+    }
+
+    /* Resilient Namespaced Styles for Collapsible Entries & Rigid Grid */
+    .buddybackup-entry-card {
+        border: 1px solid rgba(128, 128, 128, 0.4);
+        margin-bottom: 8px;
+        border-radius: 2px;
+        background-color: inherit;
+    }
+    .buddybackup-entry-header {
+        padding: 7px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        user-select: none;
+        background-color: inherit;
+        border-bottom: 1px solid transparent;
+        transition: background-color 0.1s ease;
+    }
+    .buddybackup-entry-header:hover {
+        background-color: rgba(128, 128, 128, 0.08);
+    }
+    .buddybackup-entry-card.is-expanded .buddybackup-entry-header {
+        border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+        background-color: rgba(128, 128, 128, 0.05);
+    }
+    .buddybackup-header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex-wrap: wrap;
+    }
+    .buddybackup-header-chevron {
+        color: gray;
+        font-size: 12px;
+        width: 14px;
+        text-align: center;
+    }
+    .buddybackup-header-route {
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .buddybackup-header-route .route-arrow {
+        color: #e25422;
+        font-size: 10px;
+    }
+    .buddybackup-header-route .route-dest {
+        font-weight: normal;
+        opacity: 0.85;
+    }
+    .buddybackup-header-telemetry {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 11px;
+        margin-left: 6px;
+    }
+    .buddybackup-header-telemetry .metric-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .buddybackup-header-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        margin-left: 12px;
+    }
+    .buddybackup-entry-body {
+        padding: 14px 18px;
+        display: none;
+    }
+    .buddybackup-entry-card.is-expanded .buddybackup-entry-body {
+        display: block;
+    }
+    .buddybackup-telemetry-banner {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 6px 12px;
+        background-color: rgba(128, 128, 128, 0.06);
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 2px;
+        font-size: 11px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+    }
+    .buddybackup-telemetry-banner .metric {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .buddybackup-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 28px;
+        width: 100%;
+        margin-bottom: 16px;
+    }
+    .buddybackup-col-header {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding-bottom: 6px;
+        margin-bottom: 10px;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+    }
+    .buddybackup-form-dl {
+        display: grid;
+        grid-template-columns: 170px 1fr;
+        align-items: start;
+        margin-bottom: 10px;
+        min-height: 32px;
+    }
+    .buddybackup-form-dl dt {
+        text-align: right;
+        padding-right: 12px;
+        padding-top: 5px;
+        font-size: 12px;
+        line-height: 1.3;
+        white-space: normal;
+        word-break: break-word;
+    }
+    .buddybackup-form-dl dd {
+        min-width: 0;
+    }
+    .buddybackup-field-with-btn {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        max-width: 340px;
+    }
+    .buddybackup-field-with-btn input[type="text"] {
+        flex: 1;
+        min-width: 0;
+    }
+    .buddybackup-key-row {
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .buddybackup-key-input {
+        opacity: 1 !important;
+        font-family: monospace;
+        cursor: pointer;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .buddybackup-key-input.is-copied {
+        border-color: #27ae60 !important;
+        box-shadow: 0 0 0 1px #27ae60, 0 0 6px rgba(39, 174, 96, 0.4) !important;
+    }
+    .buddybackup-copy-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .buddybackup-copy-btn.is-copied {
+        color: #27ae60 !important;
+        border-color: #27ae60 !important;
+        background-color: rgba(39, 174, 96, 0.12) !important;
+        font-weight: 600;
+    }
+    .buddybackup-copy-feedback {
+        display: none;
+        align-items: center;
+        gap: 5px;
+        color: #27ae60;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        flex-shrink: 0;
+        animation: buddybackup-fadein 0.2s ease;
+    }
+    .buddybackup-copy-feedback.is-error {
+        color: #e67e22;
+    }
+    @keyframes buddybackup-fadein {
+        from { opacity: 0; transform: translateY(-2px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .buddybackup-card-actions {
+        border-top: 1px solid rgba(128, 128, 128, 0.25);
+        padding-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .buddybackup-card-actions-left {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .buddybackup-retention-row-clean {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .buddybackup-retention-item-clean {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+    }
+    .buddybackup-retention-item-clean input {
+        width: 50px;
+        text-align: center;
+    }
+    .buddybackup-section-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        padding: 0 4px;
+    }
+    .buddybackup-status-dot {
+        font-size: 8px;
+        vertical-align: middle;
+        margin-right: 5px;
     }
 </style>
 <script>
@@ -224,6 +461,179 @@ Tag="buddybackup"
         $('pre#swalbody').addClass("buddybackup-center");
         $('pre#swalbody').find("textarea").addClass(log_class);
         $('.buddybackup-toggle-autoscroll').prop('checked', auto_scroll);
+    }
+
+    function buddybackup_toggle_card(headerElem) {
+        var card = $(headerElem).closest('.buddybackup-entry-card');
+        var icon = card.find('.buddybackup-header-chevron');
+        var is_expanded = card.toggleClass('is-expanded').hasClass('is-expanded');
+        if (icon.length) {
+            icon.removeClass('fa-chevron-down fa-chevron-right')
+                .addClass(is_expanded ? 'fa-chevron-down' : 'fa-chevron-right');
+        }
+    }
+
+    function buddybackup_toggle_all(selector, action) {
+        var container = (typeof selector === 'string' && !selector.startsWith('#') && !selector.startsWith('.')) ? $('#' + selector) : $(selector);
+        var cards = container.find('.buddybackup-entry-card');
+
+        if (typeof action === 'boolean') {
+            if (action) {
+                cards.addClass('is-expanded').find('.buddybackup-header-chevron')
+                    .removeClass('fa-chevron-right').addClass('fa-chevron-down');
+                container.data('collapsed', false);
+            } else {
+                cards.removeClass('is-expanded').find('.buddybackup-header-chevron')
+                    .removeClass('fa-chevron-down').addClass('fa-chevron-right');
+                container.data('collapsed', true);
+            }
+            return;
+        }
+
+        var btn = action;
+        var is_collapsed = container.data('collapsed') === true;
+        if (is_collapsed) {
+            cards.addClass('is-expanded').find('.buddybackup-header-chevron')
+                .removeClass('fa-chevron-right').addClass('fa-chevron-down');
+            container.data('collapsed', false);
+            if (btn) {
+                $(btn).find('span').text("<?=_('Collapse All')?>");
+                $(btn).find('i').removeClass('fa-expand').addClass('fa-compress');
+            }
+        } else {
+            cards.removeClass('is-expanded').find('.buddybackup-header-chevron')
+                .removeClass('fa-chevron-down').addClass('fa-chevron-right');
+            container.data('collapsed', true);
+            if (btn) {
+                $(btn).find('span').text("<?=_('Expand All')?>");
+                $(btn).find('i').removeClass('fa-compress').addClass('fa-expand');
+            }
+        }
+    }
+
+    function buddybackup_copy_to_clipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text).then(function() {
+                return true;
+            }).catch(function() {
+                return buddybackup_fallback_copy(text);
+            });
+        }
+        return Promise.resolve(buddybackup_fallback_copy(text));
+    }
+
+    function buddybackup_fallback_copy(text) {
+        var successful = false;
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '0';
+            ta.style.left = '0';
+            ta.style.width = '2em';
+            ta.style.height = '2em';
+            ta.style.padding = '0';
+            ta.style.border = 'none';
+            ta.style.outline = 'none';
+            ta.style.boxShadow = 'none';
+            ta.style.background = 'transparent';
+            ta.style.opacity = '0.01';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, text.length);
+            successful = document.execCommand('copy');
+            document.body.removeChild(ta);
+        } catch (e) {
+            successful = false;
+        }
+        return successful;
+    }
+
+    function buddybackup_copy_key(btn, text) {
+        var $btn = $(btn);
+        var $input = $btn.siblings('input[type="text"]');
+        if (!$input.length) {
+            $input = $btn.closest('.buddybackup-field-with-btn').find('input[type="text"]');
+        }
+        if (!$input.length) {
+            $input = $('#buddybackup_public_key');
+        }
+
+        if (typeof text === 'undefined' || text === null || text === '') {
+            text = $input.val() || '';
+        }
+        text = String(text).trim();
+
+        var existingTimer = $btn.data('copy-timer');
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            $btn.removeData('copy-timer');
+        }
+
+        var isButtonTag = $btn.is('button');
+        var origHtml = $btn.data('orig-html');
+        var origVal = $btn.data('orig-val');
+        if (!origHtml && isButtonTag) {
+            origHtml = $btn.html();
+            $btn.data('orig-html', origHtml);
+        } else if (!origVal && !isButtonTag) {
+            origVal = $btn.val();
+            $btn.data('orig-val', origVal);
+        }
+
+        var $feedback = $btn.siblings('.buddybackup-copy-feedback');
+        if (!$feedback.length) {
+            $feedback = $btn.closest('.buddybackup-field-with-btn').find('.buddybackup-copy-feedback');
+        }
+
+        if ($input.length) {
+            $input.addClass('is-copied');
+            try {
+                $input[0].focus();
+                $input[0].select();
+            } catch (e) {}
+        }
+
+        buddybackup_copy_to_clipboard(text).then(function(success) {
+            if (success) {
+                $btn.addClass('is-copied');
+                if (isButtonTag) {
+                    $btn.html('<i class="fa fa-check"></i> <span><?=_("Copied!")?></span>');
+                } else {
+                    $btn.val("<?=_('Copied!')?>");
+                }
+                if ($feedback.length) {
+                    $feedback.removeClass('is-error').html('<i class="fa fa-check-circle"></i> <?=_("Copied to clipboard!")?>').css('display', 'inline-flex');
+                }
+            } else {
+                $btn.removeClass('is-copied');
+                if ($feedback.length) {
+                    $feedback.addClass('is-error').html('<i class="fa fa-exclamation-triangle"></i> <?=_("Press Ctrl+C to copy")?>').css('display', 'inline-flex');
+                }
+            }
+
+            var timer = setTimeout(function() {
+                $btn.removeClass('is-copied');
+                if (isButtonTag) {
+                    $btn.html($btn.data('orig-html') || origHtml);
+                } else {
+                    $btn.val($btn.data('orig-val') || origVal);
+                }
+                if ($input.length) {
+                    $input.removeClass('is-copied');
+                }
+                if ($feedback.length) {
+                    $feedback.fadeOut(200, function() {
+                        $(this).empty().css('display', 'none');
+                    });
+                }
+                $btn.removeData('copy-timer');
+            }, 2500);
+
+            $btn.data('copy-timer', timer);
+        });
     }
 
 </script>

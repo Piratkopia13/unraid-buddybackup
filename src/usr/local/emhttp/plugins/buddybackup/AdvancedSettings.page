@@ -2,59 +2,96 @@ Menu="BuddyBackup:4"
 Title="Advanced Settings"
 ---
 
-<button onclick="$('#buddybackup-advanced-settings').toggle('fast')">
-  Show/hide advanced settings
-</button>
-: &nbsp;
+<p class="page-desc" style="margin-bottom: 14px;">
+    <?=_('Configure global daemon settings, dashboard alert thresholds, and security overrides.')?>
+</p>
 
-<form id="buddybackup-advanced-settings" style="display:none;" markdown="1" method="POST" action="/update.php" target="progressFrame">
+<div style="margin-bottom: 16px;">
+    <input type="button" value="<?=_('Show / Hide Advanced Settings')?>" onclick="$('#buddybackup-advanced-settings').toggle('fast')">
+</div>
+
+<form id="buddybackup-advanced-settings" style="display:none;" method="POST" action="/update.php" target="progressFrame">
 <input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
-_(**General**)_
-: &nbsp;
 
-_(Use UTC timezone)_:
-: <select name="UtcTimezone" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['UtcTimezone'], "no", "_(No)_");?>
-    <?=mk_option($cfg['UtcTimezone'], "yes", "_(Yes)_");?>
-  </select>
+<div class="buddybackup-col-header"><?=_('General')?></div>
 
-:use_utc_tz_plug:
-  > Use UTC timestamp when performing snapshot creation/pruning and backup triggers. Useful to correlate timestamps between servers in different timezones.
-:end
+<dl class="buddybackup-form-dl">
+    <dt><?=_('Use UTC timezone')?>:</dt>
+    <dd>
+        <select name="UtcTimezone" class="align" <?=$disabled?>>
+            <?=mk_option($cfg['UtcTimezone'], "no", _("No"));?>
+            <?=mk_option($cfg['UtcTimezone'], "yes", _("Yes"));?>
+        </select>
+        <div class="buddybackup-field-note"><?=_('Use UTC timestamps when performing snapshot creation/pruning and backup triggers. Useful to correlate timestamps between servers in different timezones.')?></div>
+    </dd>
+</dl>
 
-_(**Dashboard panel**)_
-: &nbsp;
+<div class="buddybackup-col-header" style="margin-top: 22px;"><?=_('Dashboard Panel & Alert Thresholds')?></div>
+<div class="buddybackup-field-note" style="margin-bottom: 12px;"><?=_('Configure when backup status indicators turn warning or alert on the dashboard. Leave empty or set to 0 to disable.')?></div>
 
-_(*Set to empty or 0 to disable.*)_
-: &nbsp;
+<dl class="buddybackup-form-dl">
+    <dt><?=_('Backup warning')?>:</dt>
+    <dd>
+        <div class="buddybackup-retention-item-clean">
+            <input type="number" min="0" name="BackupDaysAgoWarning" class="align narrow" value="<?=$cfg['BackupDaysAgoWarning'];?>" <?=$disabled?>>
+            <span class="grey-text"><?=_('days')?></span>
+        </div>
+        <div class="buddybackup-field-note"><?=_('Mark outgoing backup as warning (yellow) if it last ran more than this many days ago.')?></div>
+    </dd>
+</dl>
 
-_(Mark backup as yellow if it last ran more than this many days ago)_:
-: <input type="text" name="BackupDaysAgoWarning" class="align narrow" value="<?=$cfg['BackupDaysAgoWarning'];?>" <?=$disabled?>>
+<dl class="buddybackup-form-dl">
+    <dt><?=_('Backup alert')?>:</dt>
+    <dd>
+        <div class="buddybackup-retention-item-clean">
+            <input type="number" min="0" name="BackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BackupDaysAgoCritical'];?>" <?=$disabled?>>
+            <span class="grey-text"><?=_('days')?></span>
+        </div>
+        <div class="buddybackup-field-note"><?=_('Mark outgoing backup as alert (red) if it last ran more than this many days ago.')?></div>
+    </dd>
+</dl>
 
-_(Mark backup as red if it last ran more than this many days ago)_:
-: <input type="text" name="BackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BackupDaysAgoCritical'];?>" <?=$disabled?>>
+<dl class="buddybackup-form-dl">
+    <dt><?=_("Buddy's backup warning")?>:</dt>
+    <dd>
+        <div class="buddybackup-retention-item-clean">
+            <input type="number" min="0" name="BuddysBackupDaysAgoWarning" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoWarning'];?>" <?=$disabled?>>
+            <span class="grey-text"><?=_('days')?></span>
+        </div>
+        <div class="buddybackup-field-note"><?=_('Mark incoming buddy\'s backup as warning (yellow) if it last ran more than this many days ago.')?></div>
+    </dd>
+</dl>
 
-_(Mark **buddy's** backup as yellow if it last ran more than this many days ago)_:
-: <input type="text" name="BuddysBackupDaysAgoWarning" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoWarning'];?>" <?=$disabled?>>
+<dl class="buddybackup-form-dl">
+    <dt><?=_("Buddy's backup alert")?>:</dt>
+    <dd>
+        <div class="buddybackup-retention-item-clean">
+            <input type="number" min="0" name="BuddysBackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoCritical'];?>" <?=$disabled?>>
+            <span class="grey-text"><?=_('days')?></span>
+        </div>
+        <div class="buddybackup-field-note"><?=_('Mark incoming buddy\'s backup as alert (red) if it last ran more than this many days ago.')?></div>
+    </dd>
+</dl>
 
-_(Mark **buddy's** backup as red if it last ran more than this many days ago)_:
-: <input type="text" name="BuddysBackupDaysAgoCritical" class="align narrow" value="<?=$cfg['BuddysBackupDaysAgoCritical'];?>" <?=$disabled?>>
+<div class="buddybackup-col-header" style="margin-top: 22px;"><?=_('Security Overrides (Danger Zone)')?></div>
 
-_(**Bad choices**)_
-: &nbsp;
+<dl class="buddybackup-form-dl">
+    <dt><?=_('Allow unencrypted remote')?>:</dt>
+    <dd>
+        <select name="AllowUnencryptedRemoteBackups" class="align" <?=$disabled?>>
+            <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "no", _("No"));?>
+            <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "yes", _("Yes"));?>
+        </select>
+        <div class="buddybackup-field-note red-text"><i class="fa fa-exclamation-triangle"></i> <?=_('Do NOT enable this unless you fully understand the implications. Transmits unencrypted dataset streams to remote endpoints.')?></div>
+    </dd>
+</dl>
 
-_(*<span style="color:red;">Do NOT enable these unless you fully understand the implications</span>*)_
-: &nbsp;
-
-_(Allow unencrypted backups to remote destinations)_:
-: <select name="AllowUnencryptedRemoteBackups" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "no", "_(No)_");?>
-    <?=mk_option($cfg['AllowUnencryptedRemoteBackups'], "yes", "_(Yes)_");?>
-  </select>
-
-&nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+<div class="buddybackup-card-actions" style="margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(128, 128, 128, 0.25);">
+    <div class="buddybackup-card-actions-left">
+        <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+    </div>
+</div>
 
 </form>
