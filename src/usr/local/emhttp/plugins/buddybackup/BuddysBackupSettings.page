@@ -119,6 +119,18 @@ _(Configure receiving incoming backups from your buddy. When enabled, your buddy
   </dd>
 </dl>
 
+<div style="margin-top: 20px; padding: 12px 14px; background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px;">
+    <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;">
+        <span><i class="fa fa-server"></i> _(Pushing from TrueNAS SCALE, Proxmox VE, or Linux to this server?)_</span>
+        <a href="https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/" target="_blank" rel="noopener noreferrer" style="font-weight: normal; font-size: 11px;">
+            _(View forum guide)_ <i class="fa fa-external-link"></i>
+        </a>
+    </div>
+    <div class="buddybackup-field-note" style="margin: 0; font-size: 11px;">
+        _(Configure remote snapshots with the)_ <code>autosnap_</code> _(prefix so Sanoid manages retention on Unraid. In TrueNAS replication tasks, set destination snapshot retention to 'None' — destructive operations like)_ <code>zfs destroy</code> _(are blocked by BuddyBackup to keep backups immutable.)_
+    </div>
+</div>
+
 <div class="buddybackup-card-actions" style="margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(128, 128, 128, 0.25);">
   <div class="buddybackup-card-actions-left">
     <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>

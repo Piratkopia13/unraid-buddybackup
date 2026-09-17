@@ -1377,7 +1377,7 @@ write_sshd_dropin() {
 
 show_port_note() {
     if [ "$PORT" != "22" ]; then
-        log "Note: make sure the SSH service listens on port ${PORT} (see the plugin's Generic ZFS hosts page)."
+        log "Note: make sure the SSH service listens on port ${PORT} (see the plugin's setup guide)."
     fi
 }
 

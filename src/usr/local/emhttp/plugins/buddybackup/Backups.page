@@ -14,9 +14,36 @@ Title="Backup and restore"
         $public_ssh_key = "Reinstall plugin. SSH key not found.";
     }
 
+    $setup_script_url = "https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/deps/generic_host_setup.sh";
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
+    var bb_setup_script_url = <?=json_encode($setup_script_url)?>;
+    var bb_public_ssh_key = <?=json_encode($public_ssh_key)?>;
+
+    function shell_single_quote(value) {
+        return "'" + String(value).replace(/'/g, "'\\''") + "'";
+    }
+    function update_generic_setup_helper(form) {
+        var user = form.find('input[name="destination_user"]').val() || 'buddybackup';
+        var port = form.find('input[name="destination_port"]').val() || '22';
+        var fullDataset = (form.find('input[name="destination_dataset"]').val() || '').trim();
+        var parentDataset = 'tank/backups/unraid';
+        if (fullDataset) {
+            var lastSlash = fullDataset.lastIndexOf('/');
+            if (lastSlash > 0) {
+                parentDataset = fullDataset.substring(0, lastSlash);
+            } else {
+                parentDataset = fullDataset;
+            }
+        }
+        var cmd = 'curl -fsSL ' + bb_setup_script_url + ' | bash -s --';
+        cmd += ' --dataset ' + shell_single_quote(parentDataset);
+        cmd += ' --user ' + shell_single_quote(user);
+        cmd += ' --port ' + shell_single_quote(port);
+        cmd += ' --pubkey ' + shell_single_quote(bb_public_ssh_key);
+        form.find('.buddybackup-generic-cmd-input').val(cmd);
+    }
     function shell_escape_arg(value) {
         return String(value).replace(/(["\\$`])/g, '\\$1');
     }
@@ -156,6 +183,7 @@ Title="Backup and restore"
                 form.find('.buddybackup-type-generic').show();
                 form.find('.buddybackup-note-remote').hide();
                 form.find('.buddybackup-note-generic').show();
+                update_generic_setup_helper(form);
             } else {
                 form.find('.buddybackup-type-generic').hide();
                 form.find('.buddybackup-note-remote').show();
@@ -607,9 +635,29 @@ Title="Backup and restore"
                             <dd>
                                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
                                 <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.)_</div>
-                                <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: use the parent dataset configured on the generic host (set up on the 'Generic ZFS hosts' page), followed by a child dataset name.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
                             </dd>
                         </dl>
+                        <div class="buddybackup-type-generic" style="display:none; margin-top: 10px;">
+                            <div style="background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px; padding: 10px 12px;">
+                                <div style="font-weight: 600; font-size: 11px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;">
+                                    <span><i class="fa fa-terminal"></i> _(Remote host one-time setup)_:</span>
+                                    <a href="https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/" target="_blank" rel="noopener noreferrer" style="font-weight: normal; font-size: 11px;">
+                                        _(Setup guide)_ <i class="fa fa-external-link"></i>
+                                    </a>
+                                </div>
+                                <div class="buddybackup-field-note" style="margin-top: 0; margin-bottom: 6px;">
+                                    _(Run as root on the remote host (TrueNAS SCALE, Proxmox VE, Debian/Ubuntu) to configure the user, ZFS permissions, and SSH keys.)_
+                                </div>
+                                <div class="buddybackup-field-with-btn">
+                                    <input readonly type="text" class="buddybackup-generic-cmd-input" style="font-family: monospace; font-size: 11px;" onclick="this.select()" title="<?=_('Click to select all')?>">
+                                    <button type="button" class="ur-btn buddybackup-copy-btn" onclick="buddybackup_copy_key(this)">
+                                        <i class="fa fa-clipboard"></i> <span><?=_('Copy')?></span>
+                                    </button>
+                                    <span class="buddybackup-copy-feedback" style="display: none;"></span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
