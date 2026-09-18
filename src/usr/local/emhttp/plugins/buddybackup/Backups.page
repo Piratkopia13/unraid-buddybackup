@@ -450,8 +450,9 @@ Title="Backup and restore"
         $telemetry = bb_task_telemetry($uid);
         $is_saved = !empty($data);
         $is_enabled = ($data['enable'] ?? '') === 'yes';
-        $has_cron = !empty(trim($data['backup_cron'] ?? ''));
-        $cron = htmlspecialchars($data['backup_cron'] ?? '');
+        $cron_value = $data['backup_cron'] ?? ($is_saved ? '' : '0 0 * * *');
+        $has_cron = !empty(trim($cron_value));
+        $cron = htmlspecialchars($cron_value);
 
         $triggering_snapshots = [];
         if (!empty($snapshot_cfg) && is_array($snapshot_cfg)) {
@@ -595,8 +596,8 @@ Title="Backup and restore"
                         <dl class="buddybackup-form-dl">
                             <dt>_(Cron schedule)_:</dt>
                             <dd>
-                                <input type="text" list="cron" name="backup_cron" class="align" value="<?=$data['backup_cron'];?>" <?=$disabled?>>
-                                <div class="buddybackup-field-note">_(Cron expression for automated runs (default: midnight).)_</div>
+                                <input type="text" list="cron" name="backup_cron" class="align" value="<?=$cron;?>" placeholder="0 0 * * *" <?=$disabled?>>
+                                <div class="buddybackup-field-note">_(Cron expression for automated runs.)_</div>
                             </dd>
                         </dl>
                     </div>
