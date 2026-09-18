@@ -12,12 +12,11 @@ Prerequisites for the checklist host:
 
 ## Setup
 
-1. On the Unraid server: open Settings → **ZFS Buddy Backup → Generic ZFS hosts**.
-2. Choose role, username, parent dataset, port, platform `TrueNAS SCALE`. Use a
-   **separate user per role** when one host serves both directions (the forced
-   command, allowlist and dataset scope are installed per user), e.g.
-   `buddybackup` for the receiver role and `buddybackupsend` for the sender role.
-3. Copy the generated setup command and the SSH public key.
+1. On the Unraid server: open Settings → **ZFS Buddy Backup → Backup and restore**.
+2. Add a backup entry, choose type **Remote (generic ZFS host)**, and configure username,
+   SSH port, and destination dataset.
+3. In the **Remote host one-time setup** helper, copy the generated setup command.
+   (The sender SSH public key is also at the top of the *Backup and restore* page).
 4. On TrueNAS (shell as root, e.g. web shell + `sudo -i`):
    - Run the setup command (or download the script, review it, then run it).
    - Confirm it prints the SCALE-specific blocks (sudo values + SSH Auxiliary Parameters).

@@ -17,6 +17,7 @@
     $plugin_cfg_file = "/boot/config/plugins/$plugin/$plugin.cfg";
     $snapshot_cfg_file = "/boot/config/plugins/$plugin/snapshots.cfg";
     $backup_cfg_file = "/boot/config/plugins/$plugin/backups.cfg";
+    $incoming_cfg_file = "/boot/config/plugins/$plugin/incoming.cfg";
 
     function overwrite_ini($config, $file) {
         $content = "";
@@ -36,7 +37,7 @@
 
     // backup cfg used to be a single one and live in $cfg. Move it over to $snapshot_cfg if it still exists
     // LEGACY - to be removed
-    if ($cfg["BackupToBuddy"]) {
+    if (!empty($cfg["BackupToBuddy"])) {
         $backup = array();
         $backup["enable"] = ($cfg["BackupToBuddy"] == "enable") ? "yes" : "no"; unset($cfg["BackupToBuddy"]);
         $backup["destination_host"] = $cfg["DestinationHost"]; unset($cfg["DestinationHost"]);
@@ -51,8 +52,73 @@
         overwrite_ini($cfg, $plugin_cfg_file);
     }
 
+    // incoming buddy cfg used to be a single set of keys in $cfg. Move it over to $incoming_cfg if it still exists
+    if (isset($cfg["ReceiveBackups"]) || isset($cfg["ReceiveDestinationDataset"]) || isset($cfg["DestinationPubSSHKey"])) {
+        $raw_keys = $cfg["DestinationPubSSHKey"] ?? "";
+        $key_lines = array();
+        foreach (preg_split("/\r\n|\r|\n/", (string)$raw_keys) as $line) {
+            $line = trim($line);
+            if ($line !== '') {
+                $key_lines[] = $line;
+            }
+        }
+        if (empty($key_lines)) {
+            $key_lines = array("");
+        }
+
+        $total_keys = count($key_lines);
+        foreach ($key_lines as $i => $key) {
+            $uid = ($i === 0) ? "1ml3g4cy" : substr(md5("legacy_buddy_" . $i . "_" . $key), 0, 8);
+            if ($total_keys === 1) {
+                $buddy_name = "Buddy";
+            } else {
+                $parts = preg_split('/\s+/', $key, 3);
+                $comment = isset($parts[2]) ? trim($parts[2]) : '';
+                $buddy_name = "Buddy " . ($i + 1) . ($comment !== '' ? " ($comment)" : "");
+            }
+
+            $incoming = array();
+            $incoming["name"] = $buddy_name;
+            $incoming["enable"] = (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no";
+            $incoming["destination_dataset"] = $cfg["ReceiveDestinationDataset"] ?? "";
+            $incoming["ssh_key"] = $key;
+            $incoming["hourly"] = $cfg["ReceiveDestinationRententionHourly"] ?? 0;
+            $incoming["daily"] = $cfg["ReceiveDestinationRententionDaily"] ?? 7;
+            $incoming["weekly"] = $cfg["ReceiveDestinationRententionWeekly"] ?? 4;
+            $incoming["monthly"] = $cfg["ReceiveDestinationRententionMonthly"] ?? 3;
+            $incoming["yearly"] = $cfg["ReceiveDestinationRententionYearly"] ?? 0;
+
+            add_to_ini($incoming, $uid, $incoming_cfg_file);
+        }
+
+        unset($cfg["ReceiveBackups"]);
+        unset($cfg["ReceiveDestinationDataset"]);
+        unset($cfg["DestinationPubSSHKey"]);
+        unset($cfg["ReceiveDestinationRententionHourly"]);
+        unset($cfg["ReceiveDestinationRententionDaily"]);
+        unset($cfg["ReceiveDestinationRententionWeekly"]);
+        unset($cfg["ReceiveDestinationRententionMonthly"]);
+        unset($cfg["ReceiveDestinationRententionYearly"]);
+
+        overwrite_ini($cfg, $plugin_cfg_file);
+    }
+
     $snapshot_cfg = my_parse_ini_file($snapshot_cfg_file, true);
     $backup_cfg = my_parse_ini_file($backup_cfg_file, true);
+    $incoming_cfg = my_parse_ini_file($incoming_cfg_file, true);
+
+    function bb_is_dataset_overlapping($dataset, $existing_datasets) {
+        $ds = trim((string)$dataset, '/');
+        if ($ds === '') return false;
+        foreach ($existing_datasets as $existing) {
+            $ex = trim((string)$existing, '/');
+            if ($ex === '') continue;
+            if ($ds === $ex || str_starts_with($ds, $ex . '/') || str_starts_with($ex, $ds . '/')) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     function datasets($selected, $only_encrypted = true) {
         $datasets = mk_option($selected, "", "Select from list", "disabled");
@@ -117,9 +183,19 @@
                 $active_cfg = file_exists($cfg_file) ? @parse_ini_file($cfg_file) : array();
             }
         }
-        $file = ($buddy) ? "/tmp/buddybackup-buddy" : "/tmp/buddybackup-$uid";
+
+        if ($buddy) {
+            $file = (!empty($uid)) ? "/tmp/buddybackup-buddy-$uid" : "/tmp/buddybackup-buddy";
+            if ($uid === "1ml3g4cy" && !file_exists($file) && file_exists("/tmp/buddybackup-buddy")) {
+                $file = "/tmp/buddybackup-buddy";
+            }
+        } else {
+            $file = "/tmp/buddybackup-$uid";
+        }
+
         $ret = array(
             "last_ran" => "-",
+            "last_ran_class" => "grey-text",
             "compact_last_ran" => "-",
             "status_label" => "Never ran",
             "status_class" => "grey-text",

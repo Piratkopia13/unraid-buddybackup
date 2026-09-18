@@ -227,8 +227,47 @@ foreach ($bb_enabled_backups as $uid => $bcfg) {
   EOT;
 }
 
+$bb_incoming_cfg_file = "/boot/config/plugins/$pluginname/incoming.cfg";
+$bb_incoming_cfg = my_parse_ini_file($bb_incoming_cfg_file, true);
 $bb_buddys_backup_table_content = "";
-if ($bb_receive_enabled) {
+$bb_num_incoming = 0;
+
+if (is_array($bb_incoming_cfg)) {
+  foreach ($bb_incoming_cfg as $uid => $buddy) {
+    if (($buddy["enable"] ?? "") !== "yes") continue;
+    $bb_num_incoming++;
+    $buddy_name_raw = !empty($buddy["name"]) ? $buddy["name"] : _("Buddy");
+    $buddy_title = htmlspecialchars($buddy_name_raw);
+    $dest_ds_raw = $buddy["destination_dataset"] ?? _("Not set");
+    $dest_ds = htmlspecialchars($dest_ds_raw);
+    $buddy_telemetry = bb_task_telemetry($uid, true, $bb_cfg);
+    $buddy_status_text = strtolower(_($buddy_telemetry["status_label"]));
+    $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . _("Last received: ") . $buddy_telemetry["last_ran"] . ")";
+
+    $bb_buddys_backup_table_content .= <<<EOT
+      <tr class="buddybackup-dash-row">
+        <td>
+          <span class="buddybackup-col-source" title="$buddy_title">
+            <i class="fa fa-user-circle grey-text"></i> $buddy_title
+          </span>
+          <span class="buddybackup-col-dest" title="$dest_ds">
+            $dest_ds
+          </span>
+          <span class="buddybackup-col-status {$buddy_telemetry['status_class']}" title="$buddy_status_tooltip">
+            <i class="fa fa-circle"></i> $buddy_status_text
+          </span>
+          <span class="buddybackup-col-lastran {$buddy_telemetry['last_ran_class']}" title="{$buddy_telemetry['last_ran']}">
+            {$buddy_telemetry['compact_last_ran']}
+          </span>
+          <span class="buddybackup-col-size grey-text" title="{$buddy_telemetry['dest_size']}">
+            {$buddy_telemetry['dest_size']}
+          </span>
+        </td>
+      </tr>
+    EOT;
+  }
+} else if ($bb_receive_enabled) {
+  $bb_num_incoming = 1;
   $dest_ds_raw = $bb_cfg["ReceiveDestinationDataset"] ?? _("Not set");
   $dest_ds = htmlspecialchars($dest_ds_raw);
   $buddy_telemetry = bb_task_telemetry("", true, $bb_cfg);
@@ -291,7 +330,9 @@ $summary_parts = array();
 $summary_parts[] = "$bb_num_enabled_backups " . _("backup(s)");
 if ($bb_num_autosnap > 0) $summary_parts[] = "$bb_num_autosnap " . _("autosnap");
 if ($bb_num_autoprune > 0) $summary_parts[] = "$bb_num_autoprune " . _("autoprune");
-if ($bb_receive_enabled) $summary_parts[] = _("Incoming active");
+if ($bb_num_incoming > 0) {
+  $summary_parts[] = ($bb_num_incoming == 1) ? _("Incoming active") : "$bb_num_incoming " . _("incoming");
+}
 $summary_line = implode(", ", $summary_parts);
 
 $mytiles[$pluginname]['column3'] =

@@ -66,13 +66,13 @@ sub write_scope {
 }
 
 sub run_restrict {
-    my ($script, $command) = @_;
+    my ($script, $command, @cli_args) = @_;
 
     local %ENV = %ENV;
     $ENV{SSH_ORIGINAL_COMMAND} = $command;
 
     my $stderr = gensym;
-    my $pid = open3(undef, my $stdout, $stderr, $^X, $script, '--dry-run', '--log=stderr');
+    my $pid = open3(undef, my $stdout, $stderr, $^X, $script, '--dry-run', '--log=stderr', @cli_args);
     my $stdout_text = do { local $/; <$stdout> // '' };
     my $stderr_text = do { local $/; <$stderr> // '' };
     waitpid($pid, 0);
@@ -85,9 +85,9 @@ sub run_restrict {
 }
 
 sub assert_allowed {
-    my ($label, $script, $command) = @_;
+    my ($label, $script, $command, @cli_args) = @_;
 
-    my $result = run_restrict($script, $command);
+    my $result = run_restrict($script, $command, @cli_args);
     is($result->{exit_code}, 0, "$label exits cleanly");
     is($result->{stdout}, '', "$label does not write to stdout");
     like(
@@ -98,9 +98,9 @@ sub assert_allowed {
 }
 
 sub assert_blocked {
-    my ($label, $script, $command) = @_;
+    my ($label, $script, $command, @cli_args) = @_;
 
-    my $result = run_restrict($script, $command);
+    my $result = run_restrict($script, $command, @cli_args);
     is($result->{exit_code}, 0, "$label exits cleanly");
     is($result->{stdout}, '', "$label does not write to stdout");
     like(
@@ -204,6 +204,97 @@ subtest 'invalid scope lines are skipped; valid ones still apply' => sub {
 
     write_scope($dir, 'restrict_zfs', "    indented\n'quoted'\nds; rm -rf /\n../evil\n");
     assert_blocked('junk-only scope file denies dataset commands', $script, "zfs get -H name 'stuff/various'");
+};
+
+subtest 'CLI --dataset argument narrows scope and enforces cross-buddy isolation' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    my $script = install_allowlist($dir, 'restrict_zfs');
+    my @alice_cli = ('--dataset', 'tank/backups/alice', '--uid', 'alice_123');
+
+    my $alice_in = q{'tank/backups/alice'};
+    my $alice_child = q{'tank/backups/alice/appdata'};
+    my $alice_snap = q{'tank/backups/alice@autosnap_2026-04-27:01:30:48-GMT01:00_daily'};
+    my $truenas = q{'tank/backups/truenas'};
+    my $truenas_child = q{'tank/backups/truenas/system'};
+    my $truenas_snap = q{'tank/backups/truenas@autosnap_2026-04-27:01:30:48-GMT01:00_daily'};
+    my $alice_sibling = q{'tank/backups/alice_two'};
+
+    # In-scope for Alice
+    assert_allowed('in-scope dataset query', $script, "zfs get -H name $alice_in", @alice_cli);
+    assert_allowed('in-scope child query', $script, "zfs get -H name $alice_child", @alice_cli);
+    assert_allowed('in-scope receive', $script, "zfs receive -F -s $alice_in", @alice_cli);
+    assert_allowed('in-scope restore send', $script, "zfs send -w $alice_snap | zstdmt -3 | mbuffer  -q -s 128k -m 16M", @alice_cli);
+
+    # Cross-buddy attacks (Alice trying to access TrueNAS) - MUST BE BLOCKED
+    assert_blocked('cross-buddy dataset query blocked', $script, "zfs get -H name $truenas", @alice_cli);
+    assert_blocked('cross-buddy child query blocked', $script, "zfs get -H name $truenas_child", @alice_cli);
+    assert_blocked('cross-buddy receive blocked', $script, "zfs receive -F -s $truenas", @alice_cli);
+    assert_blocked('cross-buddy create blocked', $script, "zfs create -u $truenas_child", @alice_cli);
+    assert_blocked('cross-buddy restore send blocked', $script, "zfs send -w $truenas_snap | zstdmt -3 | mbuffer  -q -s 128k -m 16M", @alice_cli);
+    assert_blocked('cross-buddy snapshot list blocked', $script, "zfs list -t snapshot -H -o name $truenas", @alice_cli);
+    assert_blocked('sibling dataset prefix blocked', $script, "zfs get -H name $alice_sibling", @alice_cli);
+};
+
+subtest 'unified post-receive hook triggers on successful receive' => sub {
+    my $dir = tempdir(CLEANUP => 1);
+    my $script = install_allowlist($dir, 'restrict_zfs');
+    my $mock_php = File::Spec->catfile($dir, 'mock_rc.sh');
+    my $hook_log = File::Spec->catfile($dir, 'hook.log');
+
+    # Create mock script that records calls to $hook_log
+    open my $fh, '>', $mock_php or die $!;
+    print $fh "#!/bin/sh\necho \"call:\$* ds:\$BUDDY_DATASET uid:\$BUDDY_UID\" >> \"$hook_log\"\n";
+    close $fh;
+    chmod 0755, $mock_php;
+
+    # Create a mock bin directory with no-op bash commands (zfs, mbuffer, zstdmt) that exit 0
+    my $mock_bin = File::Spec->catdir($dir, 'bin');
+    make_path($mock_bin);
+    for my $tool ('zfs', 'mbuffer', 'zstdmt') {
+        my $tool_path = File::Spec->catfile($mock_bin, $tool);
+        open my $tfh, '>', $tool_path or die $!;
+        print $tfh "#!/bin/sh\nexit 0\n";
+        close $tfh;
+        chmod 0755, $tool_path;
+    }
+
+    local %ENV = %ENV;
+    $ENV{PATH} = "$mock_bin:$ENV{PATH}";
+    $ENV{BUDDYBACKUP_RC_PHP} = $mock_php;
+
+    my $exec_restrict = sub {
+        my ($cmd, @args) = @_;
+        local $ENV{SSH_ORIGINAL_COMMAND} = $cmd;
+        my $pid = open3(undef, my $out, my $err, $^X, $script, '--log=none', @args);
+        waitpid($pid, 0);
+        return $? >> 8;
+    };
+
+    # 1. Non-receive command: echo ok (allowed, exits 0, but NOT a zfs receive)
+    {
+        my $res = $exec_restrict->("echo ok", '--dataset', 'tank/backups/alice', '--uid', 'alice_123');
+        is($res, 0, 'echo ok ran cleanly');
+        ok(!-f $hook_log, 'echo ok did NOT trigger post-receive hook');
+    }
+
+    # 2. Receive command: zfs receive (allowed, exits 0 -> hook MUST trigger)
+    {
+        my $res = $exec_restrict->("zfs receive -F 'tank/backups/alice'", '--dataset', 'tank/backups/alice', '--uid', 'alice_123');
+        is($res, 0, 'zfs receive ran cleanly');
+        ok(-f $hook_log, 'zfs receive triggered post-receive hook');
+        open my $lfh, '<', $hook_log or die $!;
+        my $content = do { local $/; <$lfh> };
+        close $lfh;
+        like($content, qr/call:mark_received_backup ds:tank\/backups\/alice uid:alice_123/, 'hook received expected args and environment');
+        unlink $hook_log;
+    }
+
+    # 3. Receive abort command: zfs receive -A (allowed, but aborting -> hook must NOT trigger)
+    {
+        my $res = $exec_restrict->("zfs receive -A 'tank/backups/alice'", '--dataset', 'tank/backups/alice', '--uid', 'alice_123');
+        is($res, 0, 'zfs receive -A ran cleanly');
+        ok(!-f $hook_log, 'zfs receive -A did NOT trigger post-receive hook');
+    }
 };
 
 done_testing();

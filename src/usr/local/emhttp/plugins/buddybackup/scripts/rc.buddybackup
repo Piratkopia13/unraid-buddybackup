@@ -247,14 +247,7 @@ run_and_write_output() {
     return "${error_code}"
 }
 
-enable_backups_from_buddy() {
-    if [[ -z "${ReceiveDestinationDataset}" ]]; then
-        local err="Can not enable backups from buddy, no recieve destination dataset set."
-        logger "${err}" -t"${plugin}"
-        echo "${err}"
-        return
-    fi
-
+setup_buddy_user() {
     # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
     local grepped=$(grep "AllowUsers.*${username}" "${sshd_config}")
@@ -282,19 +275,37 @@ EOF
         /etc/rc.d/rc.sshd restart >/dev/null 2>&1
     fi
 
-    # Ensure user is setup correctly by re-creating it
-    userdel "${username}" >/dev/null 2>&1
-    # make buddybackup user, with a homedir and random password
-    # a password is required, even though it's never used, for ssh access to function with PAM disabled
-    local pwd=$(openssl rand -base64 32)
-    useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
-    
-    # copy public key to homedir/.ssh/authorized_keys. prepend with: 'restrict,command="path/to/restrict_zfs" '
-    mkdir "/home/${username}/.ssh" >/dev/null 2>&1
+    # Ensure user is setup correctly
+    if ! id "${username}" >/dev/null 2>&1; then
+        local pwd=$(openssl rand -base64 32)
+        useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
+    fi
+
+    mkdir -p "/home/${username}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${username}/.ssh"
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${username}/.ssh/authorized_keys"
     chown -R ${username}:${username} "/home/${username}/"
+}
+
+allow_buddy_dataset() {
+    local dataset="$1"
+    if [[ -z "${dataset}" ]]; then
+        return
+    fi
+    # note: this spins up disk
+    zfs allow -u "${username}" create,mount,receive,send "${dataset}" >/dev/null 2>&1
+}
+
+enable_backups_from_buddy() {
+    if [[ -z "${ReceiveDestinationDataset}" ]]; then
+        local err="Can not enable backups from buddy, no recieve destination dataset set."
+        logger "${err}" -t"${plugin}"
+        echo "${err}"
+        return
+    fi
+
+    setup_buddy_user
 
     # Copy each buddy key to authorized_keys file. If multiple keys are provided, each key will be on a new line.
     > "/home/${username}/.ssh/authorized_keys" # Clear the file before writing new keys
@@ -302,12 +313,11 @@ EOF
         # Trim whitespace and check if the line is non-empty
         trimmed_key=$(echo "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         if [[ -n "$trimmed_key" ]]; then
-            echo "restrict,command=\"${empath}/deps/restrict_zfs\" ${trimmed_key}" >> "/home/${username}/.ssh/authorized_keys"
+            echo "restrict,command=\"${empath}/deps/restrict_zfs --dataset '${ReceiveDestinationDataset}'\" ${trimmed_key}" >> "/home/${username}/.ssh/authorized_keys"
         fi
     done <<< "${DestinationPubSSHKey}"
 
-    # note: this spins up disk
-    zfs allow -u "${username}" create,mount,receive,send "${ReceiveDestinationDataset}"
+    allow_buddy_dataset "${ReceiveDestinationDataset}"
 }
 
 disable_backups_from_buddy() {
@@ -1487,6 +1497,12 @@ case "$1" in
     ('restore_snapshot')
         restore_snapshot "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
     ;;
+    ('setup_buddy_user')
+        setup_buddy_user
+    ;;
+    ('allow_buddy_dataset')
+        allow_buddy_dataset "${2}"
+    ;;
     ('enable_backups_from_buddy')
         enable_backups_from_buddy
     ;;
@@ -1500,5 +1516,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|setup_buddy_user|allow_buddy_dataset|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac

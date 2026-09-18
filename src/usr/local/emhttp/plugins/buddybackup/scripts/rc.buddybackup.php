@@ -10,6 +10,7 @@ $sanoid_config_path = "$plugin_path/sanoid.conf";
 $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
 $tmp_recv_dataset_path = "/tmp/buddybackup-recv-dest";
+$incoming_config_path = "$plugin_path/incoming.cfg";
 
 $buddybackup_path = '/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin';
 $current_path = getenv('PATH') ?: '';
@@ -124,7 +125,38 @@ function resolve_remote_identity_from_cfg($cfg, $prefix, &$error_message = null)
 }
 
 function read_receive_destination_dataset(&$error_message = null) {
-    global $tmp_recv_dataset_path;
+    global $tmp_recv_dataset_path, $incoming_config_path;
+
+    // Check environment variable BUDDY_DATASET (set by restrict_zfs for current SSH connection)
+    $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
+    if ($env_dataset !== '') {
+        $first = trim(explode(',', $env_dataset)[0]);
+        if (is_valid_zfs_dataset_name($first)) {
+            return $first;
+        }
+    }
+
+    // Check incoming.cfg
+    if (file_exists($incoming_config_path)) {
+        $incoming_cfg = parse_ini_file($incoming_config_path, true);
+        if (is_array($incoming_cfg)) {
+            $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
+            if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
+                $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
+                if (is_valid_zfs_dataset_name($ds)) {
+                    return $ds;
+                }
+            }
+            foreach ($incoming_cfg as $uid => $buddy) {
+                if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+                    $ds = trim($buddy['destination_dataset']);
+                    if (is_valid_zfs_dataset_name($ds)) {
+                        return $ds;
+                    }
+                }
+            }
+        }
+    }
 
     if (!file_exists($tmp_recv_dataset_path)) {
         $error_message = 'Buddy receive destination dataset is not configured.';
@@ -289,12 +321,151 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
     return build_shell_command($parts);
 }
 
+function ensure_incoming_config_migrated() {
+    global $plugin_config_path, $incoming_config_path;
+    if (!file_exists($incoming_config_path) && file_exists($plugin_config_path)) {
+        $cfg = parse_ini_file($plugin_config_path, false);
+        if (isset($cfg["ReceiveBackups"]) || isset($cfg["ReceiveDestinationDataset"]) || isset($cfg["DestinationPubSSHKey"])) {
+            $raw_keys = $cfg["DestinationPubSSHKey"] ?? "";
+            $key_lines = array();
+            foreach (preg_split("/\r\n|\r|\n/", (string)$raw_keys) as $line) {
+                $line = trim($line);
+                if ($line !== '') {
+                    $key_lines[] = $line;
+                }
+            }
+            if (empty($key_lines)) {
+                $key_lines = array("");
+            }
+
+            $total_keys = count($key_lines);
+            $incoming = array();
+            foreach ($key_lines as $i => $key) {
+                $uid = ($i === 0) ? "1ml3g4cy" : substr(md5("legacy_buddy_" . $i . "_" . $key), 0, 8);
+                if ($total_keys === 1) {
+                    $buddy_name = "Buddy";
+                } else {
+                    $parts = preg_split('/\s+/', $key, 3);
+                    $comment = isset($parts[2]) ? trim($parts[2]) : '';
+                    $buddy_name = "Buddy " . ($i + 1) . ($comment !== '' ? " ($comment)" : "");
+                }
+
+                $incoming[$uid] = array(
+                    "name" => $buddy_name,
+                    "enable" => (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no",
+                    "destination_dataset" => $cfg["ReceiveDestinationDataset"] ?? "",
+                    "ssh_key" => $key,
+                    "hourly" => $cfg["ReceiveDestinationRententionHourly"] ?? 0,
+                    "daily" => $cfg["ReceiveDestinationRententionDaily"] ?? 7,
+                    "weekly" => $cfg["ReceiveDestinationRententionWeekly"] ?? 4,
+                    "monthly" => $cfg["ReceiveDestinationRententionMonthly"] ?? 3,
+                    "yearly" => $cfg["ReceiveDestinationRententionYearly"] ?? 0,
+                );
+            }
+
+            $content = "";
+            foreach ($incoming as $sec => $vals) {
+                $content .= "[$sec]\n";
+                foreach ($vals as $k => $v) {
+                    $content .= "$k=\"$v\"\n";
+                }
+            }
+            file_put_contents($incoming_config_path, $content);
+
+            unset($cfg["ReceiveBackups"]);
+            unset($cfg["ReceiveDestinationDataset"]);
+            unset($cfg["DestinationPubSSHKey"]);
+            unset($cfg["ReceiveDestinationRententionHourly"]);
+            unset($cfg["ReceiveDestinationRententionDaily"]);
+            unset($cfg["ReceiveDestinationRententionWeekly"]);
+            unset($cfg["ReceiveDestinationRententionMonthly"]);
+            unset($cfg["ReceiveDestinationRententionYearly"]);
+            write_ini($plugin_config_path, $cfg);
+        }
+    }
+}
+
+function sync_incoming_buddies() {
+    global $rc, $incoming_config_path, $empath, $tmp_recv_dataset_path;
+
+    ensure_incoming_config_migrated();
+
+    if (!file_exists($incoming_config_path)) {
+        return;
+    }
+
+    $incoming_cfg = parse_ini_file($incoming_config_path, true);
+    if (!is_array($incoming_cfg)) {
+        return;
+    }
+
+    $enabled_buddies = array();
+    foreach ($incoming_cfg as $uid => $buddy) {
+        if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+            $enabled_buddies[$uid] = $buddy;
+        }
+    }
+
+    if (empty($enabled_buddies)) {
+        passthru($rc . ' disable_backups_from_buddy');
+        if (file_exists($tmp_recv_dataset_path)) {
+            @unlink($tmp_recv_dataset_path);
+        }
+        return;
+    }
+
+    passthru($rc . ' setup_buddy_user');
+
+    $authorized_keys = "";
+    $first_dataset = null;
+
+    foreach ($enabled_buddies as $uid => $buddy) {
+        $dataset = trim($buddy['destination_dataset']);
+        if (!is_valid_zfs_dataset_name($dataset)) {
+            BB_ERR("Invalid destination dataset '$dataset' for buddy UID '$uid'");
+            continue;
+        }
+
+        if ($first_dataset === null) {
+            $first_dataset = $dataset;
+        }
+
+        passthru(build_shell_command(array($rc, 'allow_buddy_dataset', $dataset)));
+
+        $raw_key = trim($buddy['ssh_key'] ?? '');
+        if ($raw_key === '') continue;
+
+        $first_line = strtok($raw_key, "\r\n");
+        $trimmed_key = trim($first_line ?: '');
+        if ($trimmed_key === '') continue;
+
+        $cmd_line = "$empath/deps/restrict_zfs --dataset " . escapeshellarg($dataset) . " --uid " . escapeshellarg($uid);
+        $authorized_keys .= 'restrict,command="' . str_replace('"', '\"', $cmd_line) . '" ' . $trimmed_key . "\n";
+    }
+
+    $auth_keys_path = "/home/buddybackup/.ssh/authorized_keys";
+    if (is_dir("/home/buddybackup/.ssh")) {
+        file_put_contents($auth_keys_path, $authorized_keys);
+        @chmod($auth_keys_path, 0644);
+        @chown($auth_keys_path, 'buddybackup');
+        @chgrp($auth_keys_path, 'buddybackup');
+    }
+
+    if ($first_dataset !== null) {
+        file_put_contents($tmp_recv_dataset_path, $first_dataset);
+    }
+}
+
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
 function update() {
     global $rc;
     global $plugin_config_path;
     global $extra_sanoid_config_path;
+    global $incoming_config_path;
     global $tmp_recv_dataset_path;
+
+    ensure_incoming_config_migrated();
+
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
     // Set config defaults
     {
@@ -321,23 +492,30 @@ function update() {
     passthru($rc.' update');    
     update_backups_from_config();
 
-    // Write buddy's receive destination dataset to tmp file 
-    // so it can be accessed by user buddybackup executing mark_received_backup
-    file_put_contents($tmp_recv_dataset_path, $plugin_cfg["ReceiveDestinationDataset"]);
-
     update_sanoid_conf();
-    $receive_backups_enabled = $plugin_cfg["ReceiveBackups"] == "enable";
-    if ($receive_backups_enabled || file_exists_and_not_empty($extra_sanoid_config_path)) {
+
+    $any_buddy_enabled = false;
+    if (file_exists($incoming_config_path)) {
+        $incoming_cfg = parse_ini_file($incoming_config_path, true);
+        if (is_array($incoming_cfg)) {
+            foreach ($incoming_cfg as $buddy) {
+                if (($buddy['enable'] ?? '') === 'yes') {
+                    $any_buddy_enabled = true;
+                    break;
+                }
+            }
+        }
+    } else if (($plugin_cfg["ReceiveBackups"] ?? '') == "enable") {
+        $any_buddy_enabled = true;
+    }
+
+    if ($any_buddy_enabled || file_exists_and_not_empty($extra_sanoid_config_path)) {
         enable_sanoid_cron();
     } else {
         disable_sanoid_cron();
     }
 
-    if ($receive_backups_enabled) {
-        passthru($rc.' enable_backups_from_buddy');
-    } else {
-        passthru($rc.' disable_backups_from_buddy');
-    }
+    sync_incoming_buddies();
 }
 
 function disable_sanoid_cron() {
@@ -352,15 +530,42 @@ function update_sanoid_conf() {
     global $plugin_config_path;
     global $sanoid_config_path;
     global $extra_sanoid_config_path;
+    global $incoming_config_path;
     global $empath;
     global $log_script;
-    $plugin_cfg = parse_ini_file($plugin_config_path, false);
-    $receive_backups_enabled = $plugin_cfg["ReceiveBackups"] == "enable";
 
+    ensure_incoming_config_migrated();
+
+    $plugin_cfg = parse_ini_file($plugin_config_path, false);
     $sanoid_conf_content = "";
-    if ($receive_backups_enabled) {
-        // save retention for buddy's backups to sanoid conf
-        $sanoid_conf_content .= "[".$plugin_cfg["ReceiveDestinationDataset"]."]\n";
+    $buddy_datasets = array();
+
+    if (file_exists($incoming_config_path)) {
+        $incoming_cfg = parse_ini_file($incoming_config_path, true);
+        if (is_array($incoming_cfg)) {
+            foreach ($incoming_cfg as $uid => $buddy) {
+                if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+                    $dataset = trim($buddy['destination_dataset']);
+                    if (in_array($dataset, $buddy_datasets)) {
+                        continue;
+                    }
+                    $buddy_datasets[] = $dataset;
+                    $sanoid_conf_content .= "[$dataset]\n";
+                    $sanoid_conf_content .= "    hourly = ".($buddy['hourly'] ?? 0)."\n";
+                    $sanoid_conf_content .= "    daily = ".($buddy['daily'] ?? 7)."\n";
+                    $sanoid_conf_content .= "    weekly = ".($buddy['weekly'] ?? 4)."\n";
+                    $sanoid_conf_content .= "    monthly = ".($buddy['monthly'] ?? 3)."\n";
+                    $sanoid_conf_content .= "    yearly = ".($buddy['yearly'] ?? 0)."\n";
+                    $sanoid_conf_content .= "    autosnap = no\n";
+                    $sanoid_conf_content .= "    autoprune = yes\n";
+                    $sanoid_conf_content .= "    recursive = yes\n";
+                }
+            }
+        }
+    } else if (($plugin_cfg["ReceiveBackups"] ?? '') == "enable" && !empty($plugin_cfg["ReceiveDestinationDataset"])) {
+        $dataset = $plugin_cfg["ReceiveDestinationDataset"];
+        $buddy_datasets[] = $dataset;
+        $sanoid_conf_content .= "[$dataset]\n";
         $sanoid_conf_content .= "    hourly = ".$plugin_cfg["ReceiveDestinationRententionHourly"]."\n";
         $sanoid_conf_content .= "    daily = ".$plugin_cfg["ReceiveDestinationRententionDaily"]."\n";
         $sanoid_conf_content .= "    weekly = ".$plugin_cfg["ReceiveDestinationRententionWeekly"]."\n";
@@ -377,7 +582,14 @@ function update_sanoid_conf() {
 
         foreach ($extra_sanoid_cfg as $uid => $section) {
             $dataset = $section["dataset"];
-            if ($receive_backups_enabled && !empty($plugin_cfg["ReceiveDestinationDataset"]) && str_starts_with($dataset, $plugin_cfg["ReceiveDestinationDataset"])) {
+            $conflict = false;
+            foreach ($buddy_datasets as $b_ds) {
+                if (str_starts_with($dataset, $b_ds)) {
+                    $conflict = true;
+                    break;
+                }
+            }
+            if ($conflict) {
                 BB_ERR("Buddy's destination dataset '$dataset' also specified in 'Snapshot creation and pruning' section. Remove it from there!");
                 continue;
             }
@@ -654,28 +866,77 @@ function get_available_snapshots($uid) {
 }
 
 // Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
-function mark_received_backup() {
-    $error_message = null;
-    $dataset = read_receive_destination_dataset($error_message);
-    if ($dataset === null) {
-        BB_ERR($error_message);
+function mark_received_backup($target_dataset = null) {
+    global $incoming_config_path, $tmp_recv_dataset_path;
+
+    $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
+    $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
+
+    $matched_uid = !empty($env_uid) ? $env_uid : null;
+    $dataset = !empty($target_dataset) ? trim($target_dataset) : null;
+
+    if ($dataset === null && !empty($env_dataset)) {
+        $dataset = trim(explode(',', $env_dataset)[0]);
+    }
+
+    if (file_exists($incoming_config_path)) {
+        $incoming_cfg = parse_ini_file($incoming_config_path, true);
+        if (is_array($incoming_cfg)) {
+            if ($matched_uid !== null && empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
+                $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
+            }
+            if ($matched_uid === null && !empty($dataset)) {
+                foreach ($incoming_cfg as $uid => $buddy) {
+                    $b_ds = trim($buddy['destination_dataset'] ?? '');
+                    if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
+                        $matched_uid = $uid;
+                        $dataset = $b_ds;
+                        break;
+                    }
+                }
+            }
+            if (empty($dataset)) {
+                foreach ($incoming_cfg as $uid => $buddy) {
+                    if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+                        $matched_uid = $uid;
+                        $dataset = trim($buddy['destination_dataset']);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (empty($dataset)) {
+        $error_message = null;
+        $dataset = read_receive_destination_dataset($error_message);
+    }
+
+    if ($dataset === null || !is_valid_zfs_dataset_name($dataset)) {
+        BB_ERR("Failed to determine destination dataset for mark_received_backup");
         return;
     }
 
+    $error_message = null;
     $dest_size = read_zfs_property_value($dataset, 'used', $error_message);
     if ($dest_size === null) {
         BB_ERR("Failed to get used size for buddy receive destination dataset '$dataset': $error_message");
         return;
     }
 
-    $file = "/tmp/buddybackup-buddy";
     $info = "last_ran=".time()."\ndest_size=$dest_size";
-    file_put_contents($file, $info);
+    if ($matched_uid !== null && $matched_uid !== '') {
+        file_put_contents("/tmp/buddybackup-buddy-$matched_uid", $info);
+    }
+    file_put_contents("/tmp/buddybackup-buddy", $info);
 }
 
-function probe_zfs() {
+function probe_zfs($target_dataset = null) {
     $error_message = null;
-    $dataset = read_receive_destination_dataset($error_message);
+    $dataset = $target_dataset;
+    if (empty($dataset)) {
+        $dataset = read_receive_destination_dataset($error_message);
+    }
     if ($dataset === null) {
         write_probe_zfs_response('error', null, $error_message);
         exit(1);
@@ -777,10 +1038,10 @@ switch ($argv[1]) {
         get_available_snapshots($argv[2]);
         break;
     case 'probe_zfs':
-        probe_zfs();
+        probe_zfs($argv[2] ?? null);
         break;
     case 'mark_received_backup':
-        mark_received_backup();
+        mark_received_backup($argv[2] ?? null);
         break;
     case 'restore_snapshot':
         restore_snapshot($argv);

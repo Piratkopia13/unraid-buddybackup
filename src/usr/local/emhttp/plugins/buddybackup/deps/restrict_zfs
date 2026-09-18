@@ -13,19 +13,38 @@ $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr
 # sudo -n; the allowlist below remains the fine-grained gate either way.
 my $use_sudo = (-f "$0.sudo") ? 1 : 0;
 
+my $dry_run = 0;
+my $verbose = 0;
+my @log = ();
+my @cli_datasets = ();
+my $cli_uid = '';
+GetOptions(
+    'dry-run'     => \$dry_run,
+    'verbose'     => \$verbose,
+    'log=s@'      => \@log,
+    'dataset=s@'  => \@cli_datasets,
+    'uid=s'       => \$cli_uid,
+);
+@log = ('syslog') unless @log;
+
 # Dataset scope: generic_host_setup.sh installs this allowlist on generic ZFS
 # hosts together with a sibling "<script>.datasets" file listing the datasets
-# the host was configured for. When that file exists, the dataset-scoped
-# patterns below are narrowed to those datasets (and their child datasets), so
-# a sudo-mode host - where validated commands already run as root and zfs
-# delegation checks are bypassed - can never touch anything outside the
-# configured tree. When the file exists but lists no datasets, every
-# dataset-scoped command is denied (a secure empty scope). Without the file
-# (this script is also the Unraid-to-Unraid receiver allowlist, which is
-# installed without a scope file) the historical unscoped patterns are kept.
+# the host was configured for. The allowlist also supports --dataset CLI flags
+# directly (used in Unraid authorized_keys per incoming buddy).
+# When dataset scope is provided, the dataset-scoped patterns below are
+# narrowed to those datasets (and their child datasets), so a buddy can never
+# touch anything outside their configured tree. When a scope is provided but
+# lists no valid datasets, every dataset-scoped command is denied. Without any
+# scope, historical unscoped patterns are kept.
 my $scope_loaded = 0;
 my @DATASET_SCOPE;
-if ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
+if (@cli_datasets) {
+    $scope_loaded = 1;
+    foreach my $cli_ds (@cli_datasets) {
+        push @DATASET_SCOPE, $cli_ds
+            if $cli_ds =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+} elsif ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
     $scope_loaded = 1;
     while ( my $scope_line = <$scope_fh> ) {
         $scope_line =~ s/\r?\n\z//;
@@ -35,6 +54,13 @@ if ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
             if $scope_line =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
     }
     close $scope_fh;
+}
+
+if (@DATASET_SCOPE) {
+    $ENV{'BUDDY_DATASET'} = join(',', @DATASET_SCOPE);
+}
+if ($cli_uid =~ /^[A-Za-z0-9_-]+$/) {
+    $ENV{'BUDDY_UID'} = $cli_uid;
 }
 
 my $POOL;
@@ -103,8 +129,8 @@ my @ALLOWED_COMMANDS = (
     qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT/,
     qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
     qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs(?:\s+$DATASET)?/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup(?:\s+$DATASET)?/,
 );
 
 sub check_allowed {
@@ -140,16 +166,6 @@ sub unwrap_command {
     return $cmd;
 }
 
-my $dry_run = 0;
-my $verbose = 0;
-my @log = ();
-GetOptions(
-    'dry-run' => \$dry_run,
-    'verbose' => \$verbose,
-    'log=s@'  => \@log,
-);
-@log = ('syslog') unless @log;
-
 my $original_command = $ENV{'SSH_ORIGINAL_COMMAND'};
 die "No SSH_ORIGINAL_COMMAND environment variable" unless defined $original_command;
 
@@ -171,10 +187,23 @@ foreach my $command (split /;/, $unwrapped) {
         if ($verbose) {
             $log_text = "running command: $command";
         }
+        my $cmd_ok = 0;
         if ($use_sudo) {
-            system('/usr/bin/sudo', '-n', '--', '/usr/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+            $cmd_ok = (system('/usr/bin/sudo', '-n', '--', '/usr/bin/bash', '-c', $command) == 0);
         } else {
-            system('/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+            $cmd_ok = (system('/bin/bash', '-c', $command) == 0);
+        }
+        if (!$cmd_ok) {
+            warn "Failed to execute command: $!";
+        } else {
+            # Unified post-receive hook:
+            # If the successful command was a zfs receive (and not -A abort), update telemetry
+            if ($command =~ /zfs\s+(?:recv|receive)\b(?!.*-A)/) {
+                my $php_script = $ENV{'BUDDYBACKUP_RC_PHP'} // '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php';
+                if (-f $php_script) {
+                    system($php_script, 'mark_received_backup');
+                }
+            }
         }
     }
 
