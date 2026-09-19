@@ -444,9 +444,9 @@ if ($scope_loaded) {
         }
         my $scope_alt        = join( '|', map { quotemeta } @DATASET_SCOPE );
         my $scope_pools_alt  = join( '|', map { quotemeta } sort keys %scope_pools );
-        $DATASET          = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?'/;
-        $DATASET_SNAPSHOT = qr/'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[:\w:-]+'/;
-        $POOL             = qr/'(?:${scope_pools_alt})'/;
+        $DATASET          = qr/(?:'(?:${scope_alt})(?:\/[\w\/ -]*)?'|(?:${scope_alt})(?:\/[\w\/.-]+)?(?=[\s]|\z))/;
+        $DATASET_SNAPSHOT = qr/(?:'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[\w:.-]+'|(?:${scope_alt})(?:\/[\w\/.-]+)?@[\w:.-]+(?=[\s]|\z))/;
+        $POOL             = qr/(?:'(?:${scope_pools_alt})'|(?:${scope_pools_alt})(?=[\s]|\z))/;
     }
     else {
         $DATASET          = qr/(?!)/;
@@ -455,9 +455,9 @@ if ($scope_loaded) {
     }
 }
 else {
-    $DATASET          = qr/'[\w\/ -]+'/;
-    $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
-    $POOL             = qr/'[\w-]+'/;
+    $DATASET          = qr/(?:'[\w\/ -]+'|[\w\/.-]+(?=[\s]|\z))/;
+    $DATASET_SNAPSHOT = qr/(?:'[\w\/ -]+('?)@('?)[\w:.-]+'|[\w\/.-]+@[\w:.-]+(?=[\s]|\z))/;
+    $POOL             = qr/(?:'[\w-]+'|[\w-]+(?=[\s]|\z))/;
 }
 
 my $SYNCOID_SNAPSHOT = qr/'[\w\/ -]+'@('?)syncoid_[\w:-]+\1/;
@@ -469,37 +469,43 @@ my $COMPRESS_CMD = qr/(?:(?:gzip -3|zcat|pigz -(?:\d+|dc)|(?:zstd|zstdmt) -(?:\d
 my $SHORTOPTSVALS = qr/(?:-[A-Za-z0-9]+(?:\s+[a-z0-9:._=\/-]+)?\s+)*/;
 
 my @ALLOWED_COMMANDS = (
-    qr/exit/,
-    qr/echo -n/,
-    qr/echo ok/,
-    qr/command -v (?:zstd|zstdmt|mbuffer)/,
-    qr/zpool get -o value -H feature\@extensible_dataset $POOL/,
-    qr/ps -Ao args=/,
+    qr/exit(?:\s+\d+)?$REDIRS/,
+    qr/echo -n$REDIRS/,
+    qr/echo ok$REDIRS/,
+    qr/command -v (?:zstd|zstdmt|mbuffer)$REDIRS/,
+    qr/zpool get -o value -H feature\@extensible_dataset $POOL$REDIRS/,
+    qr/ps -Ao args=$REDIRS/,
     qr/zfs get -H (?:name|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
     qr/zfs get -j (?:used) $DATASET$REDIRS/,
     qr/zfs get -j -p -d 1 -t snapshot guid,creation $DATASET$REDIRS/,
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
-    qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
-    qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
-    qr/zfs allow $DATASET/,
+    qr/zfs get -H -p (?:-r )?-t filesystem,volume(?: -r)? (?:all|[\w:.-]+(?:,[\w:.-]+)*) $DATASET$REDIRS/,
+    qr/zfs get -H -p -t filesystem,volume encryption $POOL$REDIRS/,
+    qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET$REDIRS/,
+    qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET$REDIRS/,
+    qr/zfs list -t filesystem,volume -H -o (?:[\w:.-]+(?:,[\w:.-]+)*) -s name (?:-(?:r|d 0) )?$DATASET$REDIRS/,
+    qr/zfs allow $DATASET$REDIRS/,
     qr/zfs list -H -o name,origin,receive_resume_token -t filesystem,volume(?: -r)? $DATASET$REDIRS/,
     qr/zfs list -t snapshot -H -o name -s (?:name|creation)(?: -(?:r|d 1))? $DATASET$REDIRS/,
     qr/zfs list -H -o name -t snapshot(?: -(?:r|d 1))? $DATASET$REDIRS/,
     qr/zfs get -H -p -o property,value (?:all|[\w:.-]+(?:,[\w:.-]+)*) $DATASET$REDIRS/,
     qr/zfs get -H -o value receive_resume_token $DATASET$REDIRS/,
+    qr/zfs (?:set readonly=(?:on|off)|inherit readonly) $DATASET$REDIRS/,
+    qr/zfs (?:umount|unmount) $DATASET$REDIRS/,
     qr/zfs create (?:-u )?(?:-p )?(?:-o [\w:.-]+=(?:[\w:.-]+|"[^"]*"|'[^']*') )*$DATASET$REDIRS/,
+    qr/zfs (?:recv|receive) -x$REDIRS/,
     qr/zfs (?:recv|receive)\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/zfs (?:recv|receive) -A $DATASET$REDIRS/,
     qr/zfs send (?:-[A-Za-z0-9]+ )*$DATASET_SNAPSHOT$REDIRS/,
     qr/zfs send (?:-[A-Za-z0-9]+ )*-[iI] $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
-    qr/zfs receive -A $DATASET/,
-    qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
-    qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT/,
-    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
-    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs(?:\s+$DATASET)?/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup(?:\s+$DATASET)?/,
+    qr/zfs receive -A $DATASET$REDIRS/,
+    qr/zfs send -w -nvP $DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
+    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs(?:\s+$DATASET)?$REDIRS/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup(?:\s+$DATASET)?$REDIRS/,
 );
 
 sub check_allowed {
@@ -520,14 +526,12 @@ sub unwrap_command {
         $inner =~ s/'\\'''/'/g; # unescape '\''
         # TrueNAS / Paramiko wrapper format: PATH=$PATH:... <actual_cmd> 2>&1
         $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
-        $inner =~ s/\s+2>&1$//;
         $inner =~ s/^\s+|\s+$//g;
         return $inner;
     } elsif ($cmd =~ /^sh\s+-c\s+"(.*)"$/s) {
         my $inner = $1;
         $inner =~ s/\\"/"/g; # unescape \"
         $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
-        $inner =~ s/\s+2>&1$//;
         $inner =~ s/^\s+|\s+$//g;
         return $inner;
     }
@@ -541,6 +545,7 @@ die "No SSH_ORIGINAL_COMMAND environment variable" unless defined $original_comm
 openlog('buddybackup-restrict-ssh', 'pid', LOG_USER);
 
 my $unwrapped = unwrap_command($original_command);
+my $last_exit_code = 0;
 
 foreach my $command (split /;/, $unwrapped) {
     $command =~ s/^\s+|\s+$//g;
@@ -550,6 +555,7 @@ foreach my $command (split /;/, $unwrapped) {
     my $log_text;
     if (!$is_allowed) {
         $log_text = "blocked command: $command";
+        $last_exit_code = 1;
     } elsif ($dry_run) {
         $log_text = "would run command: $command";
     } else {
@@ -562,9 +568,11 @@ foreach my $command (split /;/, $unwrapped) {
         } else {
             $cmd_ok = (system('/bin/bash', '-c', $command) == 0);
         }
+        my $child_status = $?;
         if (!$cmd_ok) {
-            warn "Failed to execute command: $!";
+            $last_exit_code = ($child_status >> 8) || ($child_status & 127) || 1;
         } else {
+            $last_exit_code = 0;
             # Unified post-receive hook:
             # If the successful command was a zfs receive (and not -A abort), update telemetry
             if ($command =~ /zfs\s+(?:recv|receive)\b(?!.*-A)/) {
@@ -591,6 +599,8 @@ foreach my $command (split /;/, $unwrapped) {
 }
 
 closelog();
+
+exit $last_exit_code unless $dry_run;
 BUDDYBACKUP_RESTRICT_ZFS_EOF
     # Exit status of the if/else above is the exit status of the heredoc cat.
     if [ $? -ne 0 ]; then

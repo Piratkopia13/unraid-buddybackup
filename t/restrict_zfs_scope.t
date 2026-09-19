@@ -144,6 +144,14 @@ subtest 'receiver allowlist is narrowed to the configured dataset tree' => sub {
     assert_blocked('out-of-scope dataset list', $script, "zfs list -o name,origin -t filesystem,volume -Hr $out");
     assert_allowed('pool-level query for the scope pool', $script, "zpool get -o value -H feature\@extensible_dataset 'stuff'");
     assert_blocked('pool-level query for another pool', $script, "zpool get -o value -H feature\@extensible_dataset 'otherpool'");
+    assert_allowed('pool encryption query for the scope pool', $script, "zfs get -H -p -t filesystem,volume encryption 'stuff' 2>&1");
+    assert_allowed('unquoted pool encryption query for the scope pool', $script, "zfs get -H -p -t filesystem,volume encryption stuff 2>&1");
+    assert_blocked('pool encryption query for another pool', $script, "zfs get -H -p -t filesystem,volume encryption 'otherpool' 2>&1");
+    assert_allowed('in-scope dataset umount', $script, "zfs umount $in 2>&1");
+    assert_allowed('in-scope child umount', $script, "zfs umount $in_child 2>&1");
+    assert_blocked('out-of-scope dataset umount', $script, "zfs umount $out 2>&1");
+    assert_allowed('capability probe recv -x is allowed', $script, "zfs recv -x 2>&1");
+    assert_blocked('zfs mount is blocked even for in-scope dataset', $script, "zfs mount $in");
     assert_allowed('in-scope delegation probe', $script, "zfs allow $in");
     assert_blocked('out-of-scope delegation probe', $script, "zfs allow $out");
     assert_allowed('scope-independent callback stays usable', $script, '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs');
@@ -219,11 +227,21 @@ subtest 'CLI --dataset argument narrows scope and enforces cross-buddy isolation
     my $truenas_snap = q{'tank/backups/truenas@autosnap_2026-04-27:01:30:48-GMT01:00_daily'};
     my $alice_sibling = q{'tank/backups/alice_two'};
 
-    # In-scope for Alice
+    # In-scope for Alice (quoted)
     assert_allowed('in-scope dataset query', $script, "zfs get -H name $alice_in", @alice_cli);
     assert_allowed('in-scope child query', $script, "zfs get -H name $alice_child", @alice_cli);
     assert_allowed('in-scope receive', $script, "zfs receive -F -s $alice_in", @alice_cli);
     assert_allowed('in-scope restore send', $script, "zfs send -w $alice_snap | zstdmt -3 | mbuffer  -q -s 128k -m 16M", @alice_cli);
+
+    # In-scope for Alice (unquoted, e.g. TrueNAS / zettarepl)
+    assert_allowed('in-scope unquoted dataset query', $script, "zfs get -H name tank/backups/alice", @alice_cli);
+    assert_allowed('in-scope unquoted child query', $script, "zfs get -H name tank/backups/alice/appdata", @alice_cli);
+    assert_allowed('in-scope unquoted zettarepl property query', $script, "zfs get -H -p -t filesystem,volume type tank/backups/alice/appdata", @alice_cli);
+    assert_allowed('in-scope unquoted snapshot list', $script, "zfs list -t snapshot -H -o name -s name -r tank/backups/alice", @alice_cli);
+    assert_allowed('in-scope unquoted dataset list', $script, "zfs list -t filesystem,volume -H -o name -s name -r tank/backups/alice", @alice_cli);
+    assert_allowed('in-scope pool encryption query', $script, "zfs get -H -p -t filesystem,volume encryption tank 2>&1", @alice_cli);
+    assert_allowed('in-scope unmount', $script, "zfs umount tank/backups/alice/appdata 2>&1", @alice_cli);
+    assert_allowed('recv capability probe', $script, "zfs recv -x 2>&1", @alice_cli);
 
     # Cross-buddy attacks (Alice trying to access TrueNAS) - MUST BE BLOCKED
     assert_blocked('cross-buddy dataset query blocked', $script, "zfs get -H name $truenas", @alice_cli);
@@ -233,6 +251,12 @@ subtest 'CLI --dataset argument narrows scope and enforces cross-buddy isolation
     assert_blocked('cross-buddy restore send blocked', $script, "zfs send -w $truenas_snap | zstdmt -3 | mbuffer  -q -s 128k -m 16M", @alice_cli);
     assert_blocked('cross-buddy snapshot list blocked', $script, "zfs list -t snapshot -H -o name $truenas", @alice_cli);
     assert_blocked('sibling dataset prefix blocked', $script, "zfs get -H name $alice_sibling", @alice_cli);
+    assert_blocked('cross-buddy unquoted dataset query blocked', $script, "zfs get -H name tank/backups/truenas", @alice_cli);
+    assert_blocked('cross-buddy unquoted property query blocked', $script, "zfs get -H -p -t filesystem,volume type tank/backups/truenas", @alice_cli);
+    assert_blocked('cross-buddy unmount blocked', $script, "zfs umount tank/backups/truenas 2>&1", @alice_cli);
+    assert_blocked('unquoted sibling dataset prefix blocked', $script, "zfs get -H name tank/backups/alice_two", @alice_cli);
+    assert_blocked('cross-buddy mount blocked', $script, "zfs mount tank/backups/alice", @alice_cli);
+    assert_blocked('disallowed pool encryption query blocked', $script, "zfs get -H -p -t filesystem,volume encryption otherpool 2>&1", @alice_cli);
 };
 
 subtest 'unified post-receive hook triggers on successful receive' => sub {

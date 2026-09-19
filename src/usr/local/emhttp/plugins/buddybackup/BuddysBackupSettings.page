@@ -350,6 +350,6 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
         </a>
     </div>
     <div class="buddybackup-field-note" style="margin: 0; font-size: 11px;">
-        _(Configure remote snapshots with the)_ <code>autosnap_</code> _(prefix so Sanoid manages retention on Unraid. In TrueNAS replication tasks, set destination snapshot retention to 'None' — destructive operations like)_ <code>zfs destroy</code> _(are blocked by BuddyBackup to keep backups immutable.)_
+        _(Configure remote snapshots with the)_ <code>autosnap_</code> _(prefix so Sanoid manages retention on Unraid. Sudo mode is not supported (BuddyBackup relies on native ZFS delegation and strictly blocks sudo) — in TrueNAS replication tasks, leave 'Use Sudo For ZFS Commands' disabled, or pass)_ <code>--no-privilege-elevation</code> _(with Syncoid. Set destination snapshot retention to 'None' — destructive operations like)_ <code>zfs destroy</code> _(are blocked by BuddyBackup to keep backups immutable.)_
     </div>
 </div>
