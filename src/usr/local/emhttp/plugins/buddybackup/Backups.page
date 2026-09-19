@@ -246,6 +246,12 @@ Title="Backup and restore"
             source_dataset.html($('datalist#local-datasets').html());
             source_dataset.val(source_dataset_val);
         }
+        var is_recursive = form.find("select[name='recursive']").val() == "yes";
+        if (is_recursive) {
+            form.find('.buddybackup-skip-parent-row').show();
+        } else {
+            form.find('.buddybackup-skip-parent-row').hide();
+        }
     }
     $(function() { 
         $('form.buddybackup-backup-entry')
@@ -638,6 +644,16 @@ Title="Backup and restore"
                                     <?=mk_option($data['recursive'], "no", "_(No)_");?>
                                     <?=mk_option($data['recursive'], "yes", "_(Yes)_");?>
                                 </select>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl buddybackup-skip-parent-row" <?=($data['recursive'] ?? '') !== 'yes' ? 'style="display:none;"' : ''?>>
+                            <dt>_(Skip parent dataset)_:</dt>
+                            <dd>
+                                <select name="skip_parent" class="align" <?=$disabled?>>
+                                    <?=mk_option($data['skip_parent'] ?? 'no', "no", "_(No)_");?>
+                                    <?=mk_option($data['skip_parent'] ?? 'no', "yes", "_(Yes)_");?>
+                                </select>
+                                <div class="buddybackup-field-note">_(Replicate child datasets only, skipping the root parent dataset.)_</div>
                             </dd>
                         </dl>
                         <dl class="buddybackup-form-dl">

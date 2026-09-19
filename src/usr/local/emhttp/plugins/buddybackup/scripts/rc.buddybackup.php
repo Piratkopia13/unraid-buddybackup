@@ -259,6 +259,8 @@ function run_task_command($cmd, $echo_pid) {
 function build_send_backup_command($cfg, $uid, &$error_message = null) {
     global $rc;
 
+    $skip_parent = (($cfg['skip_parent'] ?? 'no') === 'yes' && ($cfg['recursive'] ?? '') === 'yes') ? 'yes' : 'no';
+
     if ($cfg['type'] == 'local') {
         return build_shell_command(array(
             $rc,
@@ -267,6 +269,7 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $cfg['recursive'],
             $cfg['destination_dataset'],
             $uid,
+            $skip_parent,
         ));
     }
 
@@ -280,6 +283,9 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $cfg['destination_host'],
             $cfg['destination_dataset'],
             $uid,
+            '',
+            '',
+            $skip_parent,
         ));
     }
 
@@ -299,6 +305,7 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $uid,
             $identity['user'],
             $identity['port'],
+            $skip_parent,
         ));
     }
 
@@ -309,6 +316,18 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
 function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = null) {
     global $rc;
 
+    $skip_parent = (($cfg['skip_parent'] ?? 'no') === 'yes' && ($cfg['recursive'] ?? '') === 'yes') ? 'yes' : 'no';
+    $remote_user = '';
+    $remote_port = '';
+    if ($cfg['type'] == 'remote_generic') {
+        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        $remote_user = $identity['user'];
+        $remote_port = $identity['port'];
+    }
+
     $parts = array(
         $rc,
         'create_snapshot_and_send',
@@ -318,16 +337,10 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
         $cfg['destination_host'] ?? '',
         $cfg['destination_dataset'],
         $uid,
+        $remote_user,
+        $remote_port,
+        $skip_parent,
     );
-
-    if ($cfg['type'] == 'remote_generic') {
-        $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
-        if ($identity === null) {
-            return null;
-        }
-        $parts[] = $identity['user'];
-        $parts[] = $identity['port'];
-    }
 
     return build_shell_command($parts);
 }

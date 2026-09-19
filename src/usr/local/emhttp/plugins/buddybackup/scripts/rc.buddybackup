@@ -682,6 +682,7 @@ send_backup() {
     local uid="${6}"
     local remote_user="${7:-}"
     local remote_port="${8:-}"
+    local skip_parent="${9:-no}"
 
     logger "Sending backup to ${type} destination" -t"${plugin}"
 
@@ -721,6 +722,9 @@ send_backup() {
     fi
     if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
+        if [[ "${skip_parent}" == "yes" ]]; then
+            my_syncoid_flags+=" --skip-parent"
+        fi
     fi
     local port_flag=""
     if [[ "${type}" == "remote_generic" ]] && [[ "${remote_port}" != "22" ]]; then
@@ -755,6 +759,7 @@ send_local_backup() {
     local recursive="${2}"
     local destination_dataset="${3}"
     local uid="${4}"
+    local skip_parent="${5:-no}"
 
     local nchan="send"
     local error=""
@@ -775,6 +780,9 @@ send_local_backup() {
     local my_syncoid_flags="${syncoid_flags_local}"
     if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
+        if [[ "${skip_parent}" == "yes" ]]; then
+            my_syncoid_flags+=" --skip-parent"
+        fi
     fi
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
@@ -806,6 +814,7 @@ create_snapshot_and_send() {
     local uid="${6}"
     local remote_user="${7:-}"
     local remote_port="${8:-}"
+    local skip_parent="${9:-no}"
     local nchan="send"
     local snapshot_name=""
     local snapshot_output=""
@@ -842,9 +851,9 @@ create_snapshot_and_send() {
     write "${nchan}" "Created snapshot '${snapshot_name}'."
 
     if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]]; then
-        send_backup "${type}" "${source_dataset}" "${recursive}" "${destination_host}" "${destination_dataset}" "${uid}" "${remote_user}" "${remote_port}"
+        send_backup "${type}" "${source_dataset}" "${recursive}" "${destination_host}" "${destination_dataset}" "${uid}" "${remote_user}" "${remote_port}" "${skip_parent}"
     else
-        send_local_backup "${source_dataset}" "${recursive}" "${destination_dataset}" "${uid}"
+        send_local_backup "${source_dataset}" "${recursive}" "${destination_dataset}" "${uid}" "${skip_parent}"
     fi
 }
 
@@ -1533,14 +1542,14 @@ case "$1" in
         emit_send_preflight_status "${2}" "${3}" "${4}"
     ;;
     ('send_backup')
-		send_backup "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}"
+		send_backup "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
 	;;
     ('send_local_backup')
-		send_local_backup "${2}" "${3}" "${4}" "${5}"
+		send_local_backup "${2}" "${3}" "${4}" "${5}" "${6}"
 	;;
     ('create_snapshot_and_send')
-        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}"
-    ;;
+        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
+	;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}"
 	;;

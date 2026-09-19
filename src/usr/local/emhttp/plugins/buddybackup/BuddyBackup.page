@@ -481,6 +481,21 @@ Tag="buddybackup"
             var ta = $('.active-textarea');
             ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
         }
+
+        if (data.indexOf('[[rc.buddybackup finished]]') !== -1) {
+            restore_in_progress = false;
+            var swalModal = $('.sweet-alert');
+            if (swalModal.length) {
+                swalModal.find('button.confirm').text("<?=_('Done')?>");
+                swalModal.find('button.cancel').hide();
+                var logText = output_log.val() || output_log.text() || '';
+                if (logText.indexOf('failed') !== -1 || logText.indexOf('Failed') !== -1 || logText.indexOf('Error code') !== -1) {
+                    swalModal.find('h2').text("<?=_('Restore finished with errors')?>");
+                } else {
+                    swalModal.find('h2').text("<?=_('Restore finished')?>");
+                }
+            }
+        }
     });
     nchan_buddybackup_backup.on('message', function(data) {
         if (!allow_nchan) return;
@@ -495,6 +510,21 @@ Tag="buddybackup"
         if (auto_scroll) {
             var ta = $('.active-textarea');
             ta.animate({scrollTop:ta.prop("scrollHeight") - ta.height()}, 200);
+        }
+
+        if (data.indexOf('[[rc.buddybackup finished]]') !== -1) {
+            backup_in_progress = false;
+            var swalModal = $('.sweet-alert');
+            if (swalModal.length) {
+                swalModal.find('button.confirm').text("<?=_('Done')?>");
+                swalModal.find('button.cancel').hide();
+                var logText = output_log.val() || output_log.text() || '';
+                if (logText.indexOf('failed') !== -1 || logText.indexOf('Failed') !== -1 || logText.indexOf('Error code') !== -1) {
+                    swalModal.find('h2').text("<?=_('Backup finished with errors')?>");
+                } else {
+                    swalModal.find('h2').text("<?=_('Backup finished')?>");
+                }
+            }
         }
     });
     nchan_buddybackup_restore.start();

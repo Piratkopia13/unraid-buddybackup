@@ -348,4 +348,38 @@ subtest "Section entries collapse and initial expand all toggle state" => sub {
     like($bb_content, qr/btn\.find\('\.fa-expand'\)\.length\s*>\s*0/, "BuddyBackup.page checks for fa-expand state on button");
 };
 
+subtest "Progress modal Done transition and skip_parent configuration" => sub {
+    my $bb_page = File::Spec->catfile($plugin_dir, "BuddyBackup.page");
+    open my $fh, "<", $bb_page or die "Cannot open $bb_page: $!";
+    my $bb_content = do { local $/; <$fh> };
+    close $fh;
+
+    like($bb_content, qr/\[\[rc\.buddybackup finished\]\].*?button\.confirm.*?Done/s,
+        "BuddyBackup.page switches confirm button to Done when finished signal is received");
+    like($bb_content, qr/\[\[rc\.buddybackup finished\]\].*?button\.cancel.*?hide\(\)/s,
+        "BuddyBackup.page hides cancel button when finished signal is received");
+
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $b_content = do { local $/; <$bfh> };
+    close $bfh;
+
+    like($b_content, qr/name="skip_parent"/, "Backups.page defines skip_parent dropdown");
+    like($b_content, qr/class="[^"]*buddybackup-skip-parent-row[^"]*"/, "Backups.page defines buddybackup-skip-parent-row container");
+
+    my $rc_php = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup.php");
+    open my $rfh, "<", $rc_php or die "Cannot open $rc_php: $!";
+    my $rc_content = do { local $/; <$rfh> };
+    close $rfh;
+
+    like($rc_content, qr/\$skip_parent\s*=.*?\$cfg\['skip_parent'\]/, "rc.buddybackup.php evaluates skip_parent from config");
+
+    my $rc_sh = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup");
+    open my $sfh, "<", $rc_sh or die "Cannot open $rc_sh: $!";
+    my $sh_content = do { local $/; <$sfh> };
+    close $sfh;
+
+    like($sh_content, qr/--skip-parent/, "rc.buddybackup includes --skip-parent syncoid flag support");
+};
+
 done_testing();
