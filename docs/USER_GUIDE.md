@@ -156,7 +156,7 @@ Description: The "Buddy's Backups" tab showing incoming buddy cards, telemetry b
 
 > [!NOTE]
 > **Receiving from TrueNAS SCALE or Proxmox VE?**  
-> See the [Generic ZFS Hosts Deep-Dive](#generic-zfs-hosts-deep-dive) below for instructions on TrueNAS replication tasks and snapshot naming conventions.
+> Sudo mode is not supported when pushing to Unraid (BuddyBackup strictly blocks `sudo` and uses native OpenZFS delegations). In TrueNAS, keep **Use Sudo For ZFS Commands** unchecked; for Syncoid, pass `--no-privilege-elevation`. See the [Generic ZFS Hosts Deep-Dive](#generic-zfs-hosts-deep-dive) below for instructions on TrueNAS replication tasks and snapshot naming conventions.
 
 ---
 
@@ -228,6 +228,9 @@ BuddyBackup works seamlessly with non-Unraid OpenZFS systems like **TrueNAS SCAL
 
 When a generic host pushes backups to Unraid, your Unraid server acts as the secure receiver.
 
+> [!IMPORTANT]
+> **Sudo mode is not supported on Unraid**: Unraid grants dataset permissions via native OpenZFS delegation (`zfs allow`). The `buddybackup` user does not have (or need) sudo privileges, and BuddyBackup's restricted shell strictly blocks any `sudo`-prefixed commands. Ensure remote senders do not attempt privilege elevation.
+
 #### 1. Prepare Unraid (Receiver)
 1. In Unraid, go to **Buddy's Backups**.
 2. Set **Enable** to **Yes**.
@@ -252,11 +255,14 @@ When a generic host pushes backups to Unraid, your Unraid server acts as the sec
    - Go to **Data Protection → Replication Tasks → Add**.
    - Select your source dataset and snapshot task.
    - Set destination to the Unraid SSH connection and specify the target dataset (e.g. `tank/backups/buddy/truenas-appdata`).
+   - ⚠️ **Critical - Use Sudo For ZFS Commands**: Must be **UNCHECKED / DISABLED**!
+     *Unraid grants fine-grained dataset permissions via native OpenZFS delegation (`zfs allow`), and the `buddybackup` user does not have (or need) sudo privileges. BuddyBackup's restricted shell strictly blocks `sudo`.*
    - ⚠️ **Critical - Snapshot Retention Policy**: Set to **"None"**!
      *Do NOT let TrueNAS manage retention on Unraid. TrueNAS will attempt to execute `zfs destroy` on Unraid, which BuddyBackup strictly rejects to keep your backups immutable. Unraid's local Sanoid service manages retention automatically.*
+   - **Read-Only**: Leave set to **"Set"** (default) or **"Ignore"**.
 
 <!-- [SCREENSHOT NEEDED: screenshot_10_truenas_replication_task.png]
-Description: TrueNAS SCALE Replication Task configuration screen showing the destination dataset, SSH connection, and the Snapshot Retention Policy highlighted and set to "None".
+Description: TrueNAS SCALE Replication Task configuration screen showing the destination dataset, SSH connection, Use Sudo For ZFS Commands disabled, and Snapshot Retention Policy set to "None".
 -->
 
 #### 3. Configure Proxmox VE / Debian (CLI Sender)
@@ -269,6 +275,7 @@ Description: TrueNAS SCALE Replication Task configuration screen showing the des
    ```bash
    syncoid --no-privilege-elevation --sshkey=/root/.ssh/id_buddybackup pool/dataset buddybackup@<unraid-ip>:tank/backups/buddy/dataset
    ```
+   - ⚠️ **Critical - No Sudo / Privilege Elevation**: Always include `--no-privilege-elevation`. Sudo mode is not supported on Unraid, and BuddyBackup's restricted shell will reject any command prefixed with `sudo`.
 4. Schedule the command via cron or systemd timer. Older snapshots named with `autosnap_*` will be automatically pruned on Unraid.
 
 ---

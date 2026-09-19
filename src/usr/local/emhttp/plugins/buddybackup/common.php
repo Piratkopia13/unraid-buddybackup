@@ -106,6 +106,9 @@
     $snapshot_cfg = my_parse_ini_file($snapshot_cfg_file, true);
     $backup_cfg = my_parse_ini_file($backup_cfg_file, true);
     $incoming_cfg = my_parse_ini_file($incoming_cfg_file, true);
+    if (!empty($incoming_cfg) && file_exists("/tmp/buddybackup-buddy")) {
+        @unlink("/tmp/buddybackup-buddy");
+    }
 
     function bb_is_dataset_overlapping($dataset, $existing_datasets) {
         $ds = trim((string)$dataset, '/');
@@ -186,9 +189,6 @@
 
         if ($buddy) {
             $file = (!empty($uid)) ? "/tmp/buddybackup-buddy-$uid" : "/tmp/buddybackup-buddy";
-            if ($uid === "1ml3g4cy" && !file_exists($file) && file_exists("/tmp/buddybackup-buddy")) {
-                $file = "/tmp/buddybackup-buddy";
-            }
         } else {
             $file = "/tmp/buddybackup-$uid";
         }

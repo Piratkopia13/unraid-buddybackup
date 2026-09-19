@@ -66,6 +66,7 @@ Prerequisites for the checklist host:
    - SSH Connection: Create/select the SSH connection to Unraid's buddy user (port 22 or Unraid SSH port, buddy user, private key matching public key added to Unraid's BuddyBackup buddy list).
    - Target Dataset: Set to a child of Unraid's configured Receive parent dataset (e.g. `disk1/backups/truenas`).
    - **Snapshot Retention Policy**: Must be set to **None** (Unraid's `restrict_zfs` allowlist strictly rejects `zfs destroy` to keep received backups immutable).
+   - **Use Sudo For ZFS Commands**: Must be **unchecked / disabled** (sudo mode is not supported; Unraid uses native OpenZFS delegation and BuddyBackup's restricted shell strictly blocks `sudo`).
 3. Run the replication task manually and verify it succeeds.
 4. On Unraid:
    - Verify received dataset exists under the receive parent dataset.

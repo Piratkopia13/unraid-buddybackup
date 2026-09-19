@@ -454,6 +454,10 @@ function sync_incoming_buddies() {
     if ($first_dataset !== null) {
         file_put_contents($tmp_recv_dataset_path, $first_dataset);
     }
+
+    if (file_exists("/tmp/buddybackup-buddy")) {
+        @unlink("/tmp/buddybackup-buddy");
+    }
 }
 
 // update() runs on system boot, on plugin install/update, and when backup settings are changed.
@@ -895,13 +899,13 @@ function mark_received_backup($target_dataset = null) {
                     }
                 }
             }
-            if (empty($dataset)) {
-                foreach ($incoming_cfg as $uid => $buddy) {
-                    if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
-                        $matched_uid = $uid;
-                        $dataset = trim($buddy['destination_dataset']);
-                        break;
-                    }
+            if (empty($dataset) && $matched_uid === null) {
+                $enabled_buddies = array_filter($incoming_cfg, function($b) {
+                    return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
+                });
+                if (count($enabled_buddies) === 1) {
+                    $matched_uid = array_key_first($enabled_buddies);
+                    $dataset = trim($enabled_buddies[$matched_uid]['destination_dataset']);
                 }
             }
         }
@@ -928,7 +932,11 @@ function mark_received_backup($target_dataset = null) {
     if ($matched_uid !== null && $matched_uid !== '') {
         file_put_contents("/tmp/buddybackup-buddy-$matched_uid", $info);
     }
-    file_put_contents("/tmp/buddybackup-buddy", $info);
+    if (!file_exists($incoming_config_path)) {
+        file_put_contents("/tmp/buddybackup-buddy", $info);
+    } else if (file_exists("/tmp/buddybackup-buddy")) {
+        @unlink("/tmp/buddybackup-buddy");
+    }
 }
 
 function probe_zfs($target_dataset = null) {

@@ -515,6 +515,16 @@ destination_dataset="tank/backups/alice"
 name="Bob"
 enable="yes"
 destination_dataset="tank/backups/bob"
+
+[1ml3g4cy]
+name="Carol"
+enable="yes"
+destination_dataset="tank/backups/carol"
+
+[dave_uid]
+name="Dave"
+enable="yes"
+destination_dataset="tank/backups/dave"
 INCOMING
     close $fh;
 
@@ -532,6 +542,8 @@ function is_valid_zfs_dataset_name($dataset) {
 function read_zfs_property_value($dataset, $property, &$error_message = null) {
     if ($dataset === 'tank/backups/alice') return '50.2G';
     if ($dataset === 'tank/backups/bob') return '128.4G';
+    if ($dataset === 'tank/backups/carol') return '250G';
+    if ($dataset === 'tank/backups/dave') return '806G';
     return null;
 }
 
@@ -567,6 +579,25 @@ function mark_received_backup($target_dataset = null) {
         if ($matched_uid !== null && empty($dataset) && isset($cfg[$matched_uid]['destination_dataset'])) {
             $dataset = trim($cfg[$matched_uid]['destination_dataset']);
         }
+        if ($matched_uid === null && !empty($dataset)) {
+            foreach ($cfg as $uid => $buddy) {
+                $b_ds = trim($buddy['destination_dataset'] ?? '');
+                if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
+                    $matched_uid = $uid;
+                    $dataset = $b_ds;
+                    break;
+                }
+            }
+        }
+        if (empty($dataset) && $matched_uid === null) {
+            $enabled_buddies = array_filter($cfg, function($b) {
+                return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
+            });
+            if (count($enabled_buddies) === 1) {
+                $matched_uid = array_key_first($enabled_buddies);
+                $dataset = trim($enabled_buddies[$matched_uid]['destination_dataset']);
+            }
+        }
     }
 
     $dest_size = read_zfs_property_value($dataset, 'used', $error_message);
@@ -574,7 +605,11 @@ function mark_received_backup($target_dataset = null) {
     if ($matched_uid !== null && $matched_uid !== '') {
         file_put_contents("$tmp_dir/buddybackup-buddy-$matched_uid", $info);
     }
-    file_put_contents("$tmp_dir/buddybackup-buddy", $info);
+    if (!file_exists($incoming_config_path)) {
+        file_put_contents("$tmp_dir/buddybackup-buddy", $info);
+    } else if (file_exists("$tmp_dir/buddybackup-buddy")) {
+        @unlink("$tmp_dir/buddybackup-buddy");
+    }
 }
 
 function probe_zfs($target_dataset = null) {
@@ -628,7 +663,7 @@ PHP
         is($data->{dataset}, 'tank/backups/bob', 'probe returned Bob dataset');
     }
 
-    # 3. Test mark_received_backup writes both specific and fallback telemetry
+    # 3. Test mark_received_backup writes only specific telemetry in multi-buddy mode
     {
         local %ENV = %ENV;
         $ENV{BUDDY_DATASET} = 'tank/backups/alice';
@@ -643,21 +678,20 @@ PHP
         my $fallback_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy');
 
         ok(-f $alice_file, 'per-buddy telemetry file created for Alice');
-        ok(-f $fallback_file, 'legacy fallback telemetry file created');
+        ok(!-f $fallback_file, 'legacy fallback telemetry file is NOT created when incoming.cfg exists');
 
         my $alice_content = do { local $/; open my $h, '<', $alice_file; <$h> };
         like($alice_content, qr/dest_size=50\.2G/, 'Alice used size recorded correctly');
     }
 
-    # 4. Test bb_task_telemetry isolation for new buddies
+    # 4. Test bb_task_telemetry isolation between buddies
     {
-        my $telemetry_test = sprintf(<<'PHP', $tmp_dir, $tmp_dir);
-function test_telemetry($uid, $buddy, $tmp_dir) {
+        my $telemetry_test = sprintf(<<'PHP', $tmp_dir);
+$tmp_dir = '%s';
+function test_telemetry($uid, $buddy) {
+    global $tmp_dir;
     if ($buddy) {
         $file = (!empty($uid)) ? "$tmp_dir/buddybackup-buddy-$uid" : "$tmp_dir/buddybackup-buddy";
-        if ($uid === "1ml3g4cy" && !file_exists($file) && file_exists("$tmp_dir/buddybackup-buddy")) {
-            $file = "$tmp_dir/buddybackup-buddy";
-        }
     } else {
         $file = "$tmp_dir/buddybackup-$uid";
     }
@@ -680,9 +714,10 @@ function test_telemetry($uid, $buddy, $tmp_dir) {
     return $ret;
 }
 
-$mamma = test_telemetry('mamma_uid', true, '%s');
-$legacy = test_telemetry('1ml3g4cy', true, '%s');
-echo json_encode(['mamma' => $mamma, 'legacy' => $legacy]);
+$alice = test_telemetry('alice_uid', true);
+$dave = test_telemetry('dave_uid', true);
+$legacy = test_telemetry('1ml3g4cy', true);
+echo json_encode(['alice' => $alice, 'dave' => $dave, 'legacy' => $legacy]);
 PHP
 
         my $stdout = gensym;
@@ -692,11 +727,83 @@ PHP
         waitpid($pid, 0);
 
         my $res = decode_json($out);
-        is($res->{mamma}{has_run}, 0, 'new buddy Mamma has has_run=false even when legacy /tmp/buddybackup-buddy exists');
-        is($res->{mamma}{status_label}, 'Never ran', 'new buddy Mamma has status_label "Never ran"');
-        is($res->{mamma}{dest_size}, '-', 'new buddy Mamma has dest_size "-"');
-        is($res->{legacy}{has_run}, 1, 'legacy buddy 1ml3g4cy still falls back to /tmp/buddybackup-buddy if specific file is missing');
-        is($res->{legacy}{dest_size}, '50.2G', 'legacy buddy inherits fallback size');
+        is($res->{alice}{has_run}, 1, 'Alice has has_run=true after Alice backup');
+        is($res->{alice}{dest_size}, '50.2G', 'Alice has correct dest_size 50.2G');
+        is($res->{dave}{has_run}, 0, 'Dave has has_run=false before running');
+        is($res->{dave}{status_label}, 'Never ran', 'Dave has status_label "Never ran"');
+        is($res->{dave}{dest_size}, '-', 'Dave has dest_size "-"');
+        is($res->{legacy}{has_run}, 0, 'legacy buddy 1ml3g4cy has has_run=false and does not inherit Alice telemetry');
+        is($res->{legacy}{status_label}, 'Never ran', 'legacy buddy has status_label "Never ran"');
+        is($res->{legacy}{dest_size}, '-', 'legacy buddy has dest_size "-"');
+    }
+
+    # 5. Test Dave backup completion does NOT update legacy buddy or Alice
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_DATASET} = 'tank/backups/dave';
+        $ENV{BUDDY_UID} = 'dave_uid';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'mark');
+        waitpid($pid, 0);
+
+        my $dave_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy-dave_uid');
+        my $legacy_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy-1ml3g4cy');
+        my $fallback_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy');
+
+        ok(-f $dave_file, 'per-buddy telemetry file created for Dave');
+        ok(!-f $legacy_file, 'legacy buddy file not created when Dave runs');
+        ok(!-f $fallback_file, 'legacy fallback file still not created');
+
+        my $telemetry_test = sprintf(<<'PHP', $tmp_dir);
+$tmp_dir = '%s';
+function test_telemetry($uid, $buddy) {
+    global $tmp_dir;
+    if ($buddy) {
+        $file = (!empty($uid)) ? "$tmp_dir/buddybackup-buddy-$uid" : "$tmp_dir/buddybackup-buddy";
+    } else {
+        $file = "$tmp_dir/buddybackup-$uid";
+    }
+
+    $ret = array(
+        "last_ran" => "-",
+        "status_label" => "Never ran",
+        "dest_size" => "-",
+        "has_run" => false
+    );
+
+    if (file_exists($file)) {
+        $info = @parse_ini_file($file);
+        if (!empty($info["last_ran"])) {
+            $ret["has_run"] = true;
+            $ret["dest_size"] = $info["dest_size"] ?? "-";
+            $ret["status_label"] = "Healthy";
+        }
+    }
+    return $ret;
+}
+
+$alice = test_telemetry('alice_uid', true);
+$dave = test_telemetry('dave_uid', true);
+$legacy = test_telemetry('1ml3g4cy', true);
+echo json_encode(['alice' => $alice, 'dave' => $dave, 'legacy' => $legacy]);
+PHP
+
+        my $t_stdout = gensym;
+        my $t_stderr = gensym;
+        my $t_pid = open3(undef, $t_stdout, $t_stderr, 'php', '-r', $telemetry_test);
+        my $t_out = do { local $/; <$t_stdout> // '' };
+        waitpid($t_pid, 0);
+
+        my $res = decode_json($t_out);
+        is($res->{dave}{has_run}, 1, 'Dave has has_run=true after Dave backup');
+        is($res->{dave}{dest_size}, '806G', 'Dave has dest_size 806G');
+        is($res->{legacy}{has_run}, 0, 'legacy buddy 1ml3g4cy STILL has has_run=false after Dave backup (no stats leak)');
+        is($res->{legacy}{status_label}, 'Never ran', 'legacy buddy still has status_label "Never ran"');
+        is($res->{legacy}{dest_size}, '-', 'legacy buddy still has dest_size "-"');
+        is($res->{alice}{has_run}, 1, 'Alice remains has_run=true');
+        is($res->{alice}{dest_size}, '50.2G', 'Alice dest_size remains 50.2G');
     }
 };
 

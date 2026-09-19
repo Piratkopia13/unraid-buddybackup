@@ -294,7 +294,7 @@ allow_buddy_dataset() {
         return
     fi
     # note: this spins up disk
-    zfs allow -u "${username}" create,mount,receive,send "${dataset}" >/dev/null 2>&1
+    zfs allow -u "${username}" create,mount,receive,send,readonly "${dataset}" >/dev/null 2>&1
 }
 
 enable_backups_from_buddy() {
@@ -591,10 +591,16 @@ manual_snapshot_name() {
 
 send_mark_received_backup() {
     local destination_host="${1}"
+    local destination_dataset="${2:-}"
+    local remote_user="${3:-}"
+    local remote_port="${4:-}"
     
     local cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup"
+    if [[ -n "${destination_dataset}" ]]; then
+        cmd+=" $(shell_single_quote "${destination_dataset}")"
+    fi
     local ssh_result
-    ssh_result=$(run_remote_ssh "${destination_host}" "${cmd}" 2>&1)
+    ssh_result=$(run_remote_ssh "${destination_host}" "${cmd}" "${remote_user}" "${remote_port}" 2>&1)
     local error_code=$?
     if [[ $error_code -ne 0 ]]; then
         write "" "Failed to send mark_received_backup to buddy"
@@ -681,7 +687,7 @@ send_backup() {
         printf -v result "\n%s" "Successfully synced backup to buddy!"
         mark_sent_backup "${type}" "${destination_host}" "${destination_dataset}" "${uid}" "${remote_user}" "${remote_port}"
         if [[ "${type}" == "remote" ]]; then
-            send_mark_received_backup "${destination_host}"
+            send_mark_received_backup "${destination_host}" "${destination_dataset}" "${remote_user}" "${remote_port}"
         fi
     else
         error_code=$?

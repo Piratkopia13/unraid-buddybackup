@@ -23,8 +23,8 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 - **Pushing from Unraid to a generic host**: When configuring a *Remote (generic ZFS host)* backup, the plugin provides a one-time setup command (`generic_host_setup.sh`) to run as root on the remote host (TrueNAS SCALE, Proxmox VE, Debian/Ubuntu). This script creates a dedicated restricted SSH user, installs a fine-grained forced-command allowlist scoped strictly to the configured parent dataset, grants minimal `zfs allow` delegations (`create,mount,receive` and raw `send`), and ensures received datasets are never mounted on the remote host (`mountpoint=none`).
 - **Replicating from TrueNAS SCALE or Proxmox VE to Unraid**: Generic hosts replicate directly into Unraid's buddy SSH user:
-  - **TrueNAS SCALE**: In TrueNAS, create a Replication Task pointing to Unraid with **Snapshot Retention Policy = None** (since Unraid's allowlist protects backups by strictly denying `zfs destroy`). Set snapshot naming schema to Sanoid format (`autosnap_%Y-%m-%d_%H:%M:%S_daily`) so Unraid manages retention automatically with Sanoid.
-  - **Proxmox VE / Generic Linux**: Run Sanoid/Syncoid on the remote host pushing to Unraid. See the [forum guide](https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/) for full details.
+  - **TrueNAS SCALE**: In TrueNAS, create a Replication Task pointing to Unraid with **Snapshot Retention Policy = None** (since Unraid's allowlist protects backups by strictly denying `zfs destroy`). Keep **Use Sudo For ZFS Commands** disabled (sudo mode is not supported; Unraid relies on native OpenZFS delegation and BuddyBackup's restricted shell strictly blocks `sudo`). Set snapshot naming schema to Sanoid format (`autosnap_%Y-%m-%d_%H:%M:%S_daily`) so Unraid manages retention automatically with Sanoid.
+  - **Proxmox VE / Generic Linux**: Run Sanoid/Syncoid on the remote host pushing to Unraid (use `--no-privilege-elevation`, as sudo mode is not supported). See the [forum guide](https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/) for full details.
 
 ### Testing lab bootstrap
 
