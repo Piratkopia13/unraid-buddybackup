@@ -295,6 +295,19 @@ allow_buddy_dataset() {
     fi
     # note: this spins up disk
     zfs allow -u "${username}" create,mount,receive,send,readonly "${dataset}" >/dev/null 2>&1
+
+    # Only apply mountpoint=none and readonly=on if dataset is a sub-dataset (contains a slash).
+    # Never apply mountpoint=none or readonly=on to a bare pool/disk root (e.g. "disk1" or "tank"),
+    # as that would unmount the root filesystem or mark the entire pool read-only.
+    if [[ "${dataset}" == *"/"* ]]; then
+        local current_mp
+        current_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
+        if [[ "${current_mp}" != "none" && "${current_mp}" != "legacy" ]]; then
+            zfs unmount "${dataset}" >/dev/null 2>&1 || true
+            zfs set mountpoint=none "${dataset}" >/dev/null 2>&1 || true
+        fi
+        zfs set readonly=on "${dataset}" >/dev/null 2>&1 || true
+    fi
 }
 
 enable_backups_from_buddy() {
@@ -731,6 +744,9 @@ send_local_backup() {
     fi
     local error_code=0
     if result=$(run_and_write_output "${nchan}" "${syncoid_bin} ${my_syncoid_flags} \"${source_dataset}\" \"${destination_dataset}\" 2>&1"); then
+        if [[ "${destination_dataset}" == *"/"* ]]; then
+            zfs set readonly=on "${destination_dataset}" >/dev/null 2>&1 || true
+        fi
         printf -v result "\n%s" "Successfully synced local backup!"
         mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
     else 

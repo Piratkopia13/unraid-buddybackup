@@ -97,6 +97,10 @@ function verify_and_submit_buddy(btn) {
       swal({title:"_(Missing Destination)_", text:"_(Please select a destination parent dataset for this buddy.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
       return;
     }
+    if (destination_dataset.indexOf('/') === -1) {
+      swal({title:"_(Invalid Destination)_", text:"_(Destination parent dataset must be a dedicated sub-dataset (e.g. )_<strong>" + destination_dataset + "/buddy_backups</strong>_( ), not a bare root disk or pool.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
+      return;
+    }
     if (ssh_key === '') {
       swal({title:"_(Missing SSH Key)_", text:"_(Please enter your buddy's SSH public key.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
       return;
@@ -280,7 +284,8 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                       <?=datasets($data["destination_dataset"] ?? '', false)?>
                     </select>
                     <div class="buddybackup-field-note">
-                      <?=_('Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
+                      <?=_('Select a dedicated parent dataset (e.g. disk1/buddy_backups). Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
+                      <?=_('This parent dataset is configured as read-only with no mountpoint (mountpoint=none) to keep incoming backups immutable and isolated.')?><br>
                       <span class="buddybackup-destination-example"></span>
                     </div>
                   </dd>

@@ -818,15 +818,15 @@ ensure_receiver_dataset() {
     local ds="$1"
     if [ "$DRY_RUN" -eq 1 ]; then
         if zfs_prop "$ds" "name" >/dev/null 2>&1; then
-            log "[dry-run] dataset ${ds} exists; would ensure mountpoint=none (or legacy)"
+            log "[dry-run] dataset ${ds} exists; would ensure mountpoint=none (or legacy) and readonly=on"
         else
-            log "[dry-run] would create parent dataset ${ds} with mountpoint=none"
+            log "[dry-run] would create parent dataset ${ds} with mountpoint=none and readonly=on"
         fi
         return 0
     fi
     if ! zfs_prop "$ds" "name" >/dev/null 2>&1; then
-        log "Creating parent dataset ${ds} with mountpoint=none"
-        if ! zfs create -p -o mountpoint=none "$ds"; then
+        log "Creating parent dataset ${ds} with mountpoint=none and readonly=on"
+        if ! zfs create -p -o mountpoint=none -o readonly=on "$ds"; then
             fail "Could not create dataset ${ds}"
             return 1
         fi
@@ -859,6 +859,15 @@ ensure_receiver_dataset() {
             fi
             ;;
     esac
+    local ro
+    ro=$(zfs_prop "$ds" "readonly" || echo "")
+    if [ "$ro" != "on" ]; then
+        log "Setting readonly=on on receiver dataset ${ds}"
+        if ! zfs set readonly=on "$ds"; then
+            fail "Could not set readonly=on on ${ds}"
+            return 1
+        fi
+    fi
 }
 
 # --- grant tracking, revocation and uninstall ---------------------------------
@@ -1517,6 +1526,13 @@ verify() {
                     none|legacy) check_pass "mountpoint is '${mp}' (received data will not mount)" ;;
                     *) check_fail "mountpoint is '${mp}'; expected none or legacy" ;;
                 esac
+                local ro
+                ro=$(zfs_prop "$ds" "readonly" || echo "")
+                if [ "$ro" = "on" ]; then
+                    check_pass "readonly is 'on' (backup data is write-protected)"
+                else
+                    check_warn "readonly is '${ro}'; recommended: 'on' (re-run this script to set it)"
+                fi
             else
                 check_fail "dataset ${ds} does not exist (re-run this script to create it)"
             fi

@@ -430,6 +430,10 @@ function sync_incoming_buddies() {
             $first_dataset = $dataset;
         }
 
+        if (strpos($dataset, '/') === false) {
+            BB_LOG("Destination parent dataset '$dataset' is a pool root; mountpoint=none and readonly=on skipped to avoid unmounting pool root.");
+        }
+
         passthru(build_shell_command(array($rc, 'allow_buddy_dataset', $dataset)));
 
         $raw_key = trim($buddy['ssh_key'] ?? '');

@@ -83,6 +83,7 @@ subtest 'setup script structure' => sub {
 
     like($setup_source, qr/restrict,command="%s" %s\\n/, 'forced-command authorized_keys line format present');
     like($setup_source, qr/mountpoint=none/, 'receiver mountpoint=none handling present');
+    like($setup_source, qr/readonly=on/, 'receiver readonly=on handling present');
     like($setup_source, qr/send:raw/, 'send:raw delegation attempt present');
     like($setup_source, qr/visudo -cf/, 'sudoers validated with visudo before install');
     like($setup_source, qr/sshd_bin" -t/, 'sshd config validated before reload');

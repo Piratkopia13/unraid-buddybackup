@@ -96,6 +96,7 @@ Description: Close-up of the Destination column with "Remote (generic ZFS host)"
 
 3. **Local** (Pool-to-Pool on the same Unraid server):
    - **Destination dataset**: The local dataset to receive the backup (must differ from source; autocomplete datalist provided). Can replicate unencrypted datasets locally.
+   - **Write Protection**: Local destination datasets are automatically set to `readonly=on` upon successful sync. This protects your local backups from accidental modification, ransomware, and replication desynchronization, while keeping the files browsable in read-only mode across network shares.
 
 #### Card Action Buttons
 - **Apply**: Saves the backup configuration.
@@ -150,13 +151,19 @@ Description: The "Buddy's Backups" tab showing incoming buddy cards, telemetry b
 - **Enable**: Set to `Yes` to allow incoming backup connections.
 - **Buddy's SSH public key**: Paste your buddy's public SSH key here (one key per buddy entry). If you receive backups from multiple buddies or secondary systems, use **Add Buddy** to create dedicated entries for each.
 - **Destination parent dataset**: Select the parent dataset on your server where your buddy's data will live (e.g. `tank/backups/buddy`).
-  - *Important*: Raw encrypted sends preserve the source properties, so local compression or encryption settings on your parent dataset will not alter incoming raw datasets.
+  - *Dedicated sub-dataset required*: Always choose a dedicated sub-dataset (e.g. `disk1/buddy_backups`), never a bare root pool or disk (`disk1`).
+  - *Immutability & Isolation*: BuddyBackup automatically configures the destination parent dataset with `readonly=on` and `mountpoint=none`. This prevents accidental modification or ransomware from corrupting incoming backups, ensures remote tools (like TrueNAS) do not attempt unauthorized mounting, and keeps incoming raw-encrypted backups cleanly isolated from the Unraid VFS directory tree.
+  - *Restoring & Failover*: Because `readonly` and `mountpoint` are inherited from the parent dataset, restoring a snapshot to a primary location via the Restore Wizard automatically creates an active, writable, mounted dataset. If you ever need to perform an emergency in-place failover directly on the backup dataset, run:
+    ```bash
+    zfs set readonly=off <pool/dataset>
+    zfs inherit mountpoint <pool/dataset>
+    ```
 - **Snapshot retention**: Your local Sanoid retention policy for your buddy's snapshots. Set this in agreement with your buddy to balance disk usage with recovery depth.
 - **Telemetry Banner**: Displays the health status, date of the last received backup, and the current total storage occupied by your buddy's backups.
 
 > [!NOTE]
 > **Receiving from TrueNAS SCALE or Proxmox VE?**  
-> Sudo mode is not supported when pushing to Unraid (BuddyBackup strictly blocks `sudo` and uses native OpenZFS delegations). In TrueNAS, keep **Use Sudo For ZFS Commands** unchecked; for Syncoid, pass `--no-privilege-elevation`. See the [Generic ZFS Hosts Deep-Dive](#generic-zfs-hosts-deep-dive) below for instructions on TrueNAS replication tasks and snapshot naming conventions.
+> Sudo mode is not supported when pushing to Unraid (BuddyBackup strictly blocks `sudo` and uses native OpenZFS delegations). In TrueNAS, keep **Use Sudo For ZFS Commands** unchecked; for Syncoid, pass `--no-privilege-elevation`. Because BuddyBackup enforces `mountpoint=none` on the parent dataset, TrueNAS will automatically skip `zfs mount` calls, keeping your Unraid syslog clean. See the [Generic ZFS Hosts Deep-Dive](#generic-zfs-hosts-deep-dive) below for instructions on TrueNAS replication tasks and snapshot naming conventions.
 
 ---
 

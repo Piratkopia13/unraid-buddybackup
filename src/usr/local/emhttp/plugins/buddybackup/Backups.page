@@ -179,6 +179,7 @@ Title="Backup and restore"
         var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
         if (dest_type == "remote" || dest_type == "remote_generic") {
             form.find('.buddybackup-type-remote').show();
+            form.find('.buddybackup-note-local').hide();
             if (dest_type == "remote_generic") {
                 form.find('.buddybackup-type-generic').show();
                 form.find('.buddybackup-note-remote').hide();
@@ -204,6 +205,7 @@ Title="Backup and restore"
             form.find('.buddybackup-type-generic').hide();
             form.find('.buddybackup-note-remote').hide();
             form.find('.buddybackup-note-generic').hide();
+            form.find('.buddybackup-note-local').show();
             form.find('input[name="destination_dataset"]').attr('list', 'local-datasets');
 
             var source_dataset = form.find('select[name="source_dataset"]');
@@ -637,6 +639,7 @@ Title="Backup and restore"
                                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
                                 <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-local buddybackup-note-local" <?=($data['type']!='local')?'style="display:none;"':''?>>_(Note: local destination datasets are automatically set to read-only once synced to protect against accidental edits and ransomware.)_</div>
                             </dd>
                         </dl>
                         <div class="buddybackup-type-generic" style="display:none; margin-top: 10px;">
