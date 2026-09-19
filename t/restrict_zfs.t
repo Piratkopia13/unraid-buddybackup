@@ -336,6 +336,21 @@ subtest 'allowed commands' => sub {
             command => q{zfs recv -x 2>&1},
             expected_lines => ['would run command: zfs recv -x 2>&1'],
         },
+        {
+            label => 'create with safe options',
+            command => qq{zfs create -u -p -o canmount=off $dataset},
+            expected_lines => [qq{would run command: zfs create -u -p -o canmount=off $dataset}],
+        },
+        {
+            label => 'direct receive with safe readonly=on option',
+            command => qq{zfs receive -F -s -o readonly=on $dataset},
+            expected_lines => [qq{would run command: zfs receive -F -s -o readonly=on $dataset}],
+        },
+        {
+            label => 'paramiko wrapped single quote query',
+            command => qq{sh -c 'PATH=\$PATH:/usr/local/sbin:/usr/sbin:/sbin zfs get -H name '\\'''disk11/backups/tim/cache_domains/Windows 11'\\''' 2>&1'},
+            expected_lines => [qq{would run command: zfs get -H name 'disk11/backups/tim/cache_domains/Windows 11' 2>&1}],
+        },
     );
 
     for my $case (@cases) {
@@ -485,6 +500,56 @@ subtest 'blocked commands' => sub {
             label => 'mount attempt is blocked',
             command => q{zfs mount disk1/mamma_offsite_backup/foton},
             expected_lines => ['blocked command: zfs mount disk1/mamma_offsite_backup/foton'],
+        },
+        {
+            label => 'command substitution in zfs create option',
+            command => qq{zfs create -o mountpoint="\$(id)" $dataset},
+            expected_lines => [qq{blocked command: zfs create -o mountpoint="\$(id)" $dataset}],
+        },
+        {
+            label => 'backtick substitution in zfs create option',
+            command => qq{zfs create -o mountpoint="`id`" $dataset},
+            expected_lines => [qq{blocked command: zfs create -o mountpoint="`id`" $dataset}],
+        },
+        {
+            label => 'mountpoint modification attempt in zfs create',
+            command => qq{zfs create -o mountpoint=/mnt/evil $dataset},
+            expected_lines => [qq{blocked command: zfs create -o mountpoint=/mnt/evil $dataset}],
+        },
+        {
+            label => 'setuid enable attempt in zfs create',
+            command => qq{zfs create -o setuid=on $dataset},
+            expected_lines => [qq{blocked command: zfs create -o setuid=on $dataset}],
+        },
+        {
+            label => 'exec enable attempt in zfs create',
+            command => qq{zfs create -o exec=on $dataset},
+            expected_lines => [qq{blocked command: zfs create -o exec=on $dataset}],
+        },
+        {
+            label => 'disabling readonly via zfs set is blocked',
+            command => qq{zfs set readonly=off $dataset},
+            expected_lines => [qq{blocked command: zfs set readonly=off $dataset}],
+        },
+        {
+            label => 'mountpoint modification attempt in zfs receive',
+            command => qq{zfs receive -o mountpoint=/mnt/evil $dataset},
+            expected_lines => [qq{blocked command: zfs receive -o mountpoint=/mnt/evil $dataset}],
+        },
+        {
+            label => 'setuid enable attempt in zfs receive',
+            command => qq{zfs receive -o setuid=on $dataset},
+            expected_lines => [qq{blocked command: zfs receive -o setuid=on $dataset}],
+        },
+        {
+            label => 'disabling readonly via zfs receive is blocked',
+            command => qq{zfs receive -o readonly=off $dataset},
+            expected_lines => [qq{blocked command: zfs receive -o readonly=off $dataset}],
+        },
+        {
+            label => 'unbounded mbuffer memory allocation is blocked',
+            command => qq{mbuffer  -q -s 128k -m 999999999M | zstdmt -dc | zfs receive -F $dataset 2>&1},
+            expected_lines => [qq{blocked command: mbuffer  -q -s 128k -m 999999999M | zstdmt -dc | zfs receive -F $dataset 2>&1}],
         },
     );
 

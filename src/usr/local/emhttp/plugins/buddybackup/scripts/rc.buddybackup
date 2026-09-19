@@ -307,6 +307,8 @@ allow_buddy_dataset() {
             zfs set mountpoint=none "${dataset}" >/dev/null 2>&1 || true
         fi
         zfs set readonly=on "${dataset}" >/dev/null 2>&1 || true
+        zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
+        zfs set exec=off "${dataset}" >/dev/null 2>&1 || true
     fi
 }
 

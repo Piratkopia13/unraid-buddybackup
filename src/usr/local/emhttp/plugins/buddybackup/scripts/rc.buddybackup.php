@@ -77,7 +77,7 @@ function ensure_managed_known_hosts_file() {
 }
 
 function is_valid_zfs_dataset_name($dataset) {
-    if ($dataset === '') {
+    if ($dataset === '' || !is_string($dataset)) {
         return false;
     }
 
@@ -89,7 +89,18 @@ function is_valid_zfs_dataset_name($dataset) {
         return false;
     }
 
-    return preg_match('/^(?!\/)(?!.*\/\/)(?!.*\/$)[^\/]+(?:\/[^\/]+)*$/', $dataset) === 1;
+    $parts = explode('/', $dataset);
+    if (empty($parts)) {
+        return false;
+    }
+
+    foreach ($parts as $part) {
+        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.: -]*$/', $part)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 function is_valid_remote_host($host) {
