@@ -47,7 +47,7 @@ The plugin settings are organized into five clean sections under **Settings → 
 This is your main command center for creating, scheduling, monitoring, and restoring backups.
 
 <!-- [SCREENSHOT NEEDED: screenshot_01_backups_overview.png]
-Description: Overview of the "Backup and restore" tab showing the "Your SSH public key" banner at the top (with the Copy button), the "Add Backup" and "Collapse All" buttons, and 2-3 configured backup cards in various states (e.g. one active Remote BuddyBackup, one Remote Generic host, one Local).
+Description: Overview of the "Backup and restore" tab showing the "Your SSH public key" banner at the top (with the Copy button), the "Add Backup" and "Expand All" buttons, and 2-3 configured backup cards in various states (e.g. one active Remote BuddyBackup, one Remote Generic host, one Local).
 -->
 
 #### Your SSH Public Key Banner

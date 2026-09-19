@@ -318,4 +318,34 @@ subtest "Direct scroll to log anchor navigation and Log.page anchors" => sub {
     like($log_content, qr/id=['"]buddybackup-log-section['"]|id=['"]log['"]/, "Log.page contains log anchor target");
 };
 
+subtest "Section entries collapse and initial expand all toggle state" => sub {
+    my %pages = (
+        'Backups.page' => 'buddybackup-backup-list',
+        'BuddysBackupSettings.page' => 'buddybackup-buddy-list',
+        'SnapshotSettings.page' => 'buddybackup-snapshot-creation-list',
+    );
+
+    for my $pname (sort keys %pages) {
+        my $pfile = File::Spec->catfile($plugin_dir, $pname);
+        open my $fh, "<", $pfile or die "Cannot open $pfile: $!";
+        my $content = do { local $/; <$fh> };
+        close $fh;
+
+        my $list_id = $pages{$pname};
+        like($content, qr/onclick="buddybackup_toggle_all\('$list_id',\s*this\)"[^>]*>\s*<i\s+class="[^"]*fa-expand[^"]*"><\/i>\s*<span><\?=_?\('Expand All'\)\?>/s,
+            "$pname starts with Expand All button with fa-expand");
+        unlike($content, qr/onclick="buddybackup_toggle_all\('$list_id',\s*this\)"[^>]*>\s*<i\s+class="[^"]*fa-compress/s,
+            "$pname does not start with Collapse All button");
+        like($content, qr/id="$list_id"\s+data-collapsed="true"/,
+            "$pname list container $list_id has data-collapsed='true'");
+    }
+
+    my $bb_page = File::Spec->catfile($plugin_dir, "BuddyBackup.page");
+    open my $fh, "<", $bb_page or die "Cannot open $bb_page: $!";
+    my $bb_content = do { local $/; <$fh> };
+    close $fh;
+
+    like($bb_content, qr/btn\.find\('\.fa-expand'\)\.length\s*>\s*0/, "BuddyBackup.page checks for fa-expand state on button");
+};
+
 done_testing();

@@ -468,12 +468,12 @@ Title="Backup and restore"
     </div>
     <div>
         <button type="button" class="ur-btn" onclick="buddybackup_toggle_all('buddybackup-backup-list', this)">
-            <i class="fa fa-compress"></i> <span><?=_('Collapse All')?></span>
+            <i class="fa fa-expand"></i> <span><?=_('Expand All')?></span>
         </button>
     </div>
 </div>
 
-<div id="buddybackup-backup-list">
+<div id="buddybackup-backup-list" data-collapsed="true">
 <?php
     function backup_entry($uid, $data) {
         global $cfg;

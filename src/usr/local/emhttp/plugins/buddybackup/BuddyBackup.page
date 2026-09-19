@@ -555,6 +555,24 @@ Tag="buddybackup"
             icon.removeClass('fa-chevron-down fa-chevron-right')
                 .addClass(is_expanded ? 'fa-chevron-down' : 'fa-chevron-right');
         }
+        var container = card.parent();
+        if (container.length) {
+            var cards = container.find('.buddybackup-entry-card');
+            var any_expanded = cards.filter('.is-expanded').length > 0;
+            var all_expanded = cards.length > 0 && cards.filter('.is-expanded').length === cards.length;
+            var btn = container.prev('.buddybackup-section-toolbar').find('button');
+            if (btn.length) {
+                if (all_expanded) {
+                    btn.find('span').text("<?=_('Collapse All')?>");
+                    btn.find('i').removeClass('fa-expand').addClass('fa-compress');
+                    container.data('collapsed', false);
+                } else if (!any_expanded) {
+                    btn.find('span').text("<?=_('Expand All')?>");
+                    btn.find('i').removeClass('fa-compress').addClass('fa-expand');
+                    container.data('collapsed', true);
+                }
+            }
+        }
     }
 
     function buddybackup_toggle_all(selector, action) {
@@ -574,23 +592,31 @@ Tag="buddybackup"
             return;
         }
 
-        var btn = action;
-        var is_collapsed = container.data('collapsed') === true;
+        var btn = action ? $(action) : null;
+        var is_collapsed;
+        if (btn && btn.length && (btn.find('.fa-expand').length || btn.find('.fa-compress').length)) {
+            is_collapsed = btn.find('.fa-expand').length > 0;
+        } else if (container.data('collapsed') !== undefined) {
+            is_collapsed = container.data('collapsed') === true;
+        } else {
+            is_collapsed = cards.filter('.is-expanded').length === 0;
+        }
+
         if (is_collapsed) {
             cards.addClass('is-expanded').find('.buddybackup-header-chevron')
                 .removeClass('fa-chevron-right').addClass('fa-chevron-down');
             container.data('collapsed', false);
-            if (btn) {
-                $(btn).find('span').text("<?=_('Collapse All')?>");
-                $(btn).find('i').removeClass('fa-expand').addClass('fa-compress');
+            if (btn && btn.length) {
+                btn.find('span').text("<?=_('Collapse All')?>");
+                btn.find('i').removeClass('fa-expand').addClass('fa-compress');
             }
         } else {
             cards.removeClass('is-expanded').find('.buddybackup-header-chevron')
                 .removeClass('fa-chevron-down').addClass('fa-chevron-right');
             container.data('collapsed', true);
-            if (btn) {
-                $(btn).find('span').text("<?=_('Expand All')?>");
-                $(btn).find('i').removeClass('fa-compress').addClass('fa-expand');
+            if (btn && btn.length) {
+                btn.find('span').text("<?=_('Expand All')?>");
+                btn.find('i').removeClass('fa-compress').addClass('fa-expand');
             }
         }
     }

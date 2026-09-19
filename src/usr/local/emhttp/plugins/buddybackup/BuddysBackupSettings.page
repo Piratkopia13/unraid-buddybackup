@@ -159,12 +159,12 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
     </div>
     <div>
         <button type="button" class="ur-btn" onclick="buddybackup_toggle_all('buddybackup-buddy-list', this)">
-            <i class="fa fa-compress"></i> <span><?=_('Collapse All')?></span>
+            <i class="fa fa-expand"></i> <span><?=_('Expand All')?></span>
         </button>
     </div>
 </div>
 
-<div id="buddybackup-buddy-list">
+<div id="buddybackup-buddy-list" data-collapsed="true">
 <?php
     function buddy_entry($uid, $data) {
         global $plugin;

@@ -62,12 +62,12 @@ _(Set up automatic snapshot creation and pruning on your datasets. Snapshots are
     </div>
     <div>
         <button type="button" class="alt" onclick="buddybackup_toggle_all('buddybackup-snapshot-creation-list', this)">
-            <i class="fa fa-compress"></i> <span><?=_('Collapse All')?></span>
+            <i class="fa fa-expand"></i> <span><?=_('Expand All')?></span>
         </button>
     </div>
 </div>
 
-<div id="buddybackup-snapshot-creation-list">
+<div id="buddybackup-snapshot-creation-list" data-collapsed="true">
 <?php
     function snapshot_creation_dataset_entry($uid, $data) {
         global $plugin;
