@@ -75,8 +75,35 @@ Title="Backup and restore"
                 output.append("Failed! Error: "+error);
             });
     }
+    function get_backup_form(target) {
+        var $el = $(target);
+        if ($el.is("form.buddybackup-backup-entry")) {
+            return $el;
+        }
+        var form = $el.closest("form.buddybackup-backup-entry");
+        if (form.length) {
+            return form;
+        }
+        form = $el.closest(".buddybackup-entry-card").find("form.buddybackup-backup-entry");
+        if (form.length) {
+            return form;
+        }
+        var cardUid = $el.data('uid') || $el.closest("[id^='entry-']").attr("id");
+        if (cardUid) {
+            var entryId = String(cardUid).startsWith("entry-") ? cardUid : "entry-" + cardUid;
+            form = $("#" + entryId).find("form.buddybackup-backup-entry");
+            if (form.length) {
+                return form;
+            }
+        }
+        return $el.closest(".buddybackup-card").find("form.buddybackup-backup-entry");
+    }
     function start_saved_backup(form, command_name, initial_message) {
         var the_uid = form.find("input[name='#section']").val();
+        if (!the_uid) {
+            show_send_backup_error('Could not determine backup entry ID.');
+            return;
+        }
         var cmd = '<?=$rc_name?> '+command_name+' '+the_uid+' echopid';
         start_backup_command(cmd, initial_message);
     }
@@ -109,6 +136,10 @@ Title="Backup and restore"
     }
     function request_send_backup_preflight(form) {
         var the_uid = form.find("input[name='#section']").val();
+        if (!the_uid) {
+            show_send_backup_error('Could not determine backup entry ID.');
+            return;
+        }
         var cmd = '<?=$rc_name?> preflight_send_backup '+the_uid;
         var dest_type = form.find("select[name='type']").val();
 
@@ -145,7 +176,7 @@ Title="Backup and restore"
             });
     }
     function test_connection(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         var dest_type = form.find("select[name='type']").val();
         if (dest_type == "remote_generic") {
             var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
@@ -160,20 +191,22 @@ Title="Backup and restore"
         }
     }
     function send_backup(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         request_send_backup_preflight(form);
     }
     function create_snapshot_and_send(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         start_saved_backup(form, 'create_snapshot_and_send', "\nCreating fresh snapshot and running backup..\n");
     }
 
     function backup_input_changed(ctx, on_change = false) {
         var form = $(ctx).parentsUntil('form').parent();
+        var card = form.closest('.buddybackup-entry-card');
+        var scope = card.length ? card : form;
         if (on_change) {
             form.find("input[name='#apply']").not('.lock').prop('disabled', false);
-            form.find('input.disable-on-unsaved').not('.lock').prop('disabled', true).addClass("lock").attr('title', '_(Apply changes to enable this)_');
-            form.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled', true).addClass("lock");
+            scope.find('input.disable-on-unsaved').not('.lock').prop('disabled', true).addClass("lock").attr('title', '_(Apply changes to enable this)_');
+            scope.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled', true).addClass("lock");
         }
         var dest_type = form.find("select[name='type']").val();
         var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
@@ -237,7 +270,7 @@ Title="Backup and restore"
         list.append(new_entry);
     }
     function verify_and_submit_backup(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         var dest_type = form.find("select[name='type']").val();
         var saved = form.find("input[name='#saved']").val();
         var abort = false;
@@ -273,7 +306,7 @@ Title="Backup and restore"
         }});
     }
     function restore_from_destination(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         var the_uid = form.find("input[name='#section']").val();
         var saved = form.find("input[name='#saved']").val();
         if (saved != "true") {
@@ -526,7 +559,7 @@ Title="Backup and restore"
                 </div>
                 <div class="buddybackup-header-right" onclick="event.stopPropagation()">
                     <? if ($is_saved): ?>
-                    <input class="disable-on-unsaved" type="button" value="<?=_('Send backup now')?>" onclick="send_backup(this)" <?=$disabled?>>
+                    <input class="disable-on-unsaved" data-uid="<?=$uid?>" type="button" value="<?=_('Send backup now')?>" onclick="send_backup(this)" <?=$disabled?>>
                     <? endif; ?>
                 </div>
             </div>

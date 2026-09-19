@@ -260,4 +260,17 @@ PHP
     }
 };
 
+subtest "Backups.page title bar and header send_backup resolution" => sub {
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $fh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $content = do { local $/; <$fh> };
+    close $fh;
+
+    like($content, qr/function\s+get_backup_form\s*\(/, "Backups.page defines get_backup_form");
+    like($content, qr/function\s+send_backup\s*\([^)]*\)\s*\{\s*var\s+form\s*=\s*get_backup_form\(/, "send_backup resolves form via get_backup_form");
+    like($content, qr/function\s+create_snapshot_and_send\s*\([^)]*\)\s*\{\s*var\s+form\s*=\s*get_backup_form\(/, "create_snapshot_and_send resolves form via get_backup_form");
+    like($content, qr/class="buddybackup-header-right"[^>]*>.*?onclick="send_backup\(this\)"/s, "Title bar header contains Send backup now button wired to send_backup(this)");
+    like($content, qr/<input[^>]*class="disable-on-unsaved"[^>]*data-uid=/, "Header Send backup now button includes data-uid attribute");
+};
+
 done_testing();
