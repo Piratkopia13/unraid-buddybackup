@@ -124,7 +124,10 @@ subtest 'receiver allowlist is narrowed to the configured dataset tree' => sub {
 
     assert_allowed('in-scope dataset query', $script, "zfs get -H name $in");
     assert_allowed('in-scope child dataset query', $script, "zfs get -H name $in_child");
+    assert_allowed('in-scope dataset encryption query', $script, "zfs get -H encryption $in");
+    assert_allowed('in-scope child dataset encryption query', $script, "zfs get -H encryption $in_child");
     assert_blocked('out-of-scope dataset query', $script, "zfs get -H name $out");
+    assert_blocked('out-of-scope dataset encryption query', $script, "zfs get -H encryption $out");
     assert_blocked('sibling dataset name sharing the scope prefix', $script, "zfs get -H name $sibling");
     assert_allowed('in-scope snapshot metadata query', $script, "zfs get -Hpd 1 -t snapshot guid,creation $in");
     assert_blocked('out-of-scope snapshot metadata query', $script, "zfs get -Hpd 1 -t snapshot guid,creation $out");
@@ -156,6 +159,7 @@ subtest 'receiver allowlist is narrowed to the configured dataset tree' => sub {
     assert_blocked('out-of-scope delegation probe', $script, "zfs allow $out");
     assert_allowed('scope-independent callback stays usable', $script, '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs');
     assert_allowed('scope-independent process probe stays usable', $script, 'ps -Ao args=');
+    assert_allowed('scope-independent zfs version probe stays usable', $script, 'zfs version');
 };
 
 subtest 'missing scope file keeps the historical unscoped patterns' => sub {

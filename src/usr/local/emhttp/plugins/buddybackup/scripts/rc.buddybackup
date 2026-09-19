@@ -1209,13 +1209,13 @@ test_generic_connection_cmd() {
                         echo "<span style='color:#996600'>Source dataset is not encrypted; unencrypted pulls are allowed by settings. Data is sent in the clear!</span><br>"
                     fi
                 else
-                    echo "<span style='color:red'>Destination dataset is not encrypted. Raw encrypted sends require feature@encryption on the destination pool - verify with 'zpool get feature@encryption <pool>' on the remote host.</span><br>"
+                    echo "<span style='color:red'>Destination dataset is not encrypted. Raw encrypted sends require feature@encryption on the destination pool - verify with 'zpool get feature@encryption &lt;pool&gt;' on the remote host.</span><br>"
                 fi
             else
                 echo "Encryption: $(html_escape "${encryption_value}")<br>"
             fi
         elif [[ -n "${remote_dataset}" ]]; then
-            echo "<span style='color:#996600'>Could not verify encryption status. Raw sends require feature@encryption on the destination pool - verify with 'zpool get feature@encryption <pool>' on the remote host.</span><br>"
+            echo "<span style='color:#996600'>Could not verify encryption status. Raw sends require feature@encryption on the destination pool - verify with 'zpool get feature@encryption &lt;pool&gt;' on the remote host.</span><br>"
         fi
 
         local pool="${remote_dataset%%/*}"

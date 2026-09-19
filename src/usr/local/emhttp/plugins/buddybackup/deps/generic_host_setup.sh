@@ -472,10 +472,11 @@ my @ALLOWED_COMMANDS = (
     qr/exit(?:\s+\d+)?$REDIRS/,
     qr/echo -n$REDIRS/,
     qr/echo ok$REDIRS/,
+    qr/zfs version$REDIRS/,
     qr/command -v (?:zstd|zstdmt|mbuffer)$REDIRS/,
     qr/zpool get -o value -H feature\@extensible_dataset $POOL$REDIRS/,
     qr/ps -Ao args=$REDIRS/,
-    qr/zfs get -H (?:name|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
+    qr/zfs get -H (?:name|encryption|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
     qr/zfs get -j (?:used) $DATASET$REDIRS/,
     qr/zfs get -j -p -d 1 -t snapshot guid,creation $DATASET$REDIRS/,
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
@@ -1514,10 +1515,18 @@ verify() {
         for ds in "${DATASET_LIST[@]}"; do
             if zfs_prop "$ds" "name" >/dev/null 2>&1; then
                 check_pass "dataset ${ds} exists"
-                local perms
-                perms=$(zfs allow "$ds" 2>/dev/null | grep "${USER_NAME}" || echo "")
-                if [ -n "$perms" ]; then
-                    check_pass "zfs allow delegation present: ${perms}"
+                local user_perms
+                user_perms=$(zfs allow "$ds" 2>/dev/null | awk -v u="$USER_NAME" '$1 == "user" && $2 == u { print $3 }' 2>/dev/null)
+                local missing_perms="" perm
+                for perm in create mount receive; do
+                    if ! printf '%s\n' "${user_perms}" | tr ',' '\n' | grep -qx "${perm}"; then
+                        missing_perms="${missing_perms:+${missing_perms} }${perm}"
+                    fi
+                done
+                if [ -z "$missing_perms" ] && [ -n "$user_perms" ]; then
+                    check_pass "zfs allow delegation present: user ${USER_NAME} ${user_perms}"
+                elif [ -n "$user_perms" ]; then
+                    check_fail "zfs allow delegation incomplete for ${USER_NAME} on ${ds} (has: ${user_perms}, missing: ${missing_perms}; re-run this script)"
                 else
                     check_fail "no zfs allow delegation for ${USER_NAME} on ${ds} (re-run this script)"
                 fi

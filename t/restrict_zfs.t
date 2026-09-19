@@ -144,6 +144,21 @@ subtest 'allowed commands' => sub {
             expected_lines => [qq{would run command: zfs get -H name $dataset}],
         },
         {
+            label => 'target encryption query',
+            command => qq{zfs get -H encryption $dataset},
+            expected_lines => [qq{would run command: zfs get -H encryption $dataset}],
+        },
+        {
+            label => 'zfs version probe',
+            command => q{zfs version},
+            expected_lines => ['would run command: zfs version'],
+        },
+        {
+            label => 'zfs version with redirection',
+            command => q{zfs version 2>&1},
+            expected_lines => ['would run command: zfs version 2>&1'],
+        },
+        {
             label => 'receive token query',
             command => qq{zfs get -H receive_resume_token $dataset},
             expected_lines => [qq{would run command: zfs get -H receive_resume_token $dataset}],
@@ -366,6 +381,21 @@ subtest 'blocked commands' => sub {
             label => 'security validation bypass attempt',
             command => q{echo ok && ls},
             expected_lines => ['blocked command: echo ok && ls'],
+        },
+        {
+            label => 'zfs version with arguments',
+            command => q{zfs version extra},
+            expected_lines => ['blocked command: zfs version extra'],
+        },
+        {
+            label => 'zfs version chained',
+            command => q{zfs version && id},
+            expected_lines => ['blocked command: zfs version && id'],
+        },
+        {
+            label => 'unauthorized zfs get property query',
+            command => qq{zfs get -H keylocation $dataset},
+            expected_lines => [qq{blocked command: zfs get -H keylocation $dataset}],
         },
         {
             label => 'shell chaining after allowed query',
