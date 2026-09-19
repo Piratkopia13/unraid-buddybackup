@@ -466,11 +466,13 @@ fi
             runtime_hash="$(awk -F: '$1=="root" { print $2 }' /etc/shadow 2>/dev/null || true)"
             persistent_hash="$(awk -F: '$1=="root" { print $2 }' /boot/config/shadow 2>/dev/null || true)"
 
-            if [ -n "$persistent_hash" ] && [ "$runtime_hash" = "$persistent_hash" ]; then
-                break
+            if [ -n "$persistent_hash" ] && [ "$runtime_hash" != "$persistent_hash" ]; then
+                merge_root_shadow_entry /boot/config/shadow /etc/shadow
             fi
+        fi
 
-            merge_root_shadow_entry /boot/config/shadow /etc/shadow
+        if ! pgrep -x sshd >/dev/null 2>&1; then
+            /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
         fi
 
         sleep 2

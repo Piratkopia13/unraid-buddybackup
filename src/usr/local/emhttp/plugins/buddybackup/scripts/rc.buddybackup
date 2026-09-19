@@ -272,7 +272,11 @@ EOF
     fi
 
     if [ "$restart_sshd" = true ]; then
-        /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+        if [ -f /var/run/sshd.pid ]; then
+            /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        else
+            /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        fi
     fi
 
     # Ensure user is setup correctly
@@ -357,7 +361,11 @@ disable_backups_from_buddy() {
     fi
 
     if [ "$restart_sshd" = true ]; then
-        /etc/rc.d/rc.sshd restart >/dev/null 2>&1
+        if [ -f /var/run/sshd.pid ]; then
+            /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        else
+            /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        fi
     fi
 
     rm -r "/home/${username}" >/dev/null 2>&1
