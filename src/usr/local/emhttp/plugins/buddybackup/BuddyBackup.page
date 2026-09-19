@@ -206,6 +206,56 @@ Tag="buddybackup"
         align-items: center;
         gap: 5px;
     }
+    .buddybackup-alert-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 9px 14px;
+        border-radius: 3px;
+        font-size: 11px;
+        margin-bottom: 14px;
+        line-height: 1.4;
+    }
+    .buddybackup-alert-banner.buddybackup-alert-error {
+        background-color: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+    .buddybackup-alert-banner.buddybackup-alert-warning {
+        background-color: rgba(245, 158, 11, 0.08);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+    .buddybackup-alert-icon {
+        font-size: 14px;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+    .buddybackup-alert-error .buddybackup-alert-icon {
+        color: #f87171;
+    }
+    .buddybackup-alert-warning .buddybackup-alert-icon {
+        color: #fbbf24;
+    }
+    .buddybackup-alert-content {
+        flex-grow: 1;
+        min-width: 0;
+    }
+    .buddybackup-alert-title {
+        font-weight: 600;
+        margin-bottom: 2px;
+        font-size: 12px;
+    }
+    .buddybackup-alert-message {
+        opacity: 0.9;
+        word-break: break-word;
+    }
+    .buddybackup-alert-actions {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: 8px;
+        align-self: center;
+    }
     .buddybackup-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
@@ -355,6 +405,26 @@ Tag="buddybackup"
             $('pre#swalbody').append(data.replace(/\n/g, "<br>"));
             if (callback) {
                 callback(data);
+            }
+        });
+    }
+    function buddybackup_open_log_modal() {
+        swal({
+            title: "_(BuddyBackup Log)_",
+            text: "<pre id='swalbody' style='max-height:350px; overflow-y:auto; text-align:left; font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-all;'><?=_('Loading log...')?></pre><div style='text-align:right; margin-top:10px;'><a href='/Settings/BuddyBackup/Log' style='text-decoration:none; font-size:12px;'><i class='fa fa-external-link'></i> <?=_('Open Full Log Page')?></a></div>",
+            html: true,
+            animation: 'none',
+            showConfirmButton: true,
+            confirmButtonText: "<?=_('Close')?>"
+        }, function(){
+            $('.sweet-alert').removeClass('nchan');
+        });
+        $('.sweet-alert').addClass('nchan');
+        $.post(api_url, { cmd: "get_log" }, function(data) {
+            var pre = $('pre#swalbody');
+            if (pre.length) {
+                pre.text(data || "<?=_('Log is empty.')?>");
+                pre.scrollTop(pre.prop('scrollHeight'));
             }
         });
     }

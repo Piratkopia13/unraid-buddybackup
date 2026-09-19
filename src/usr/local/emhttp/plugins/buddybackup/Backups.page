@@ -513,6 +513,9 @@ Title="Backup and restore"
         } else if (!$is_enabled && !$is_triggered) {
             $status_dot_class = "grey-text";
             $status_text = _("Disabled");
+        } else if ($telemetry["last_status"] === "failed") {
+            $status_dot_class = "red-text";
+            $status_text = _("Failed");
         } else if (!$is_enabled && $is_triggered) {
             $status_dot_class = $telemetry["status_class"];
             $status_text = ($telemetry["status_label"] == "Healthy") ? _("Triggered by snapshot") : _($telemetry["status_label"]) . " " . _("(Triggered)");
@@ -572,29 +575,38 @@ Title="Backup and restore"
                 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
                 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 
-                <? if ($is_saved): ?>
-                <div class="buddybackup-telemetry-banner">
-                    <span class="metric <?=$telemetry['status_class']?>">
-                        <i class="fa fa-check-circle"></i> <strong><?=_('Status:')?></strong> <?=$status_text?>
-                    </span>
-                    <span class="metric <?=$telemetry['last_ran_class']?>">
-                        <i class="fa fa-clock-o"></i> <strong><?=_('Last run:')?></strong> <?=$telemetry['last_ran']?>
-                    </span>
-                    <? if ($telemetry['dest_size'] != '-'): ?>
-                    <span class="metric">
-                        <i class="fa fa-hdd-o"></i> <strong><?=_('Destination size:')?></strong> <?=$telemetry['dest_size']?>
-                    </span>
-                    <? endif; ?>
-                    <? if ($has_cron): ?>
-                    <span class="metric">
-                        <i class="fa fa-repeat"></i> <strong><?=_('Cron:')?></strong> (<?=$cron?>)
-                    </span>
-                    <? endif; ?>
-                    <? if ($is_triggered): ?>
-                    <span class="metric">
-                        <i class="fa fa-bolt"></i> <strong><?=_('Triggered after snapshot:')?></strong> <?=htmlspecialchars(implode(', ', $triggering_snapshots))?>
-                    </span>
-                    <? endif; ?>
+                <? if ($is_saved && $telemetry['last_status'] === 'failed'): ?>
+                <div class="buddybackup-alert-banner buddybackup-alert-error">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-circle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=_('Last backup failed')?></strong>
+                            <? if (!empty($telemetry['last_error_time'])): ?>
+                            <span class="grey-text" style="font-weight:normal; margin-left:6px;">(<?=date('Y-m-d H:i', $telemetry['last_error_time'])?>)</span>
+                            <? endif; ?>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=htmlspecialchars($telemetry['last_error_message'] ?: _('Backup exited with an error.'))?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_open_log_modal()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
+                </div>
+                <? elseif ($is_saved && ($telemetry['status_label'] === 'Warning' || $telemetry['status_label'] === 'Alert')): ?>
+                <div class="buddybackup-alert-banner <?=$telemetry['status_label'] === 'Alert' ? 'buddybackup-alert-error' : 'buddybackup-alert-warning'?>">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=$telemetry['status_label'] === 'Alert' ? _('Backup Critical (Overdue)') : _('Backup Warning (Overdue)')?></strong>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=_('This backup has not successfully completed in over ') . $telemetry['days_overdue'] . _(' days.') . ($telemetry['has_run'] ? (' ' . _('Last successful run: ') . $telemetry['last_ran']) : '')?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_open_log_modal()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
                 </div>
                 <? endif; ?>
 

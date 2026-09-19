@@ -178,12 +178,6 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
         $dest = !empty($data['destination_dataset']) ? htmlspecialchars($data['destination_dataset']) : _('(No dataset selected)');
 
         $telemetry = bb_task_telemetry($uid, true);
-        $show_telemetry = false;
-        if ($is_saved) {
-            if (!empty($telemetry['has_run'])) {
-                $show_telemetry = true;
-            }
-        }
 
         if (!$is_saved) {
             $status_dot_class = "orange-text";
@@ -234,19 +228,17 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
                 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 
-                <?php if ($show_telemetry): ?>
-                <div class="buddybackup-telemetry-banner" style="margin-bottom: 18px;">
-                    <span class="metric <?=$telemetry['status_class']?>">
-                        <i class="fa fa-check-circle"></i> <strong><?=_('Status:')?></strong> <?=_($telemetry['status_label'])?>
-                    </span>
-                    <span class="metric <?=$telemetry['last_ran_class']?>">
-                        <i class="fa fa-clock-o"></i> <strong><?=_('Last received backup:')?></strong> <?=$telemetry['last_ran']?>
-                    </span>
-                    <?php if ($telemetry['dest_size'] != '-'): ?>
-                    <span class="metric">
-                        <i class="fa fa-hdd-o"></i> <strong><?=_('Storage used by buddy:')?></strong> <?=$telemetry['dest_size']?>
-                    </span>
-                    <?php endif; ?>
+                <?php if ($is_saved and $is_enabled and !empty($telemetry['has_run']) and ($telemetry['status_label'] === 'Warning' or $telemetry['status_label'] === 'Alert')): ?>
+                <div class="buddybackup-alert-banner <?=$telemetry['status_label'] === 'Alert' ? 'buddybackup-alert-error' : 'buddybackup-alert-warning'?>" style="margin-bottom: 18px;">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=$telemetry['status_label'] === 'Alert' ? _('Buddy Inactive (Critical)') : _('Buddy Inactive (Warning)')?></strong>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=_('No incoming backup received from this buddy in over ') . $telemetry['days_overdue'] . _(' days. Last received: ') . $telemetry['last_ran']?>
+                        </div>
+                    </div>
                 </div>
                 <?php endif; ?>
 

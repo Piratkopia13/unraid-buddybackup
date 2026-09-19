@@ -642,7 +642,35 @@ mark_sent_backup() {
         fi
     fi
 
-    printf "last_ran=$(date +%s)\ndest_size=${dest_size}" > "/tmp/buddybackup-${uid}";
+    printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "/tmp/buddybackup-${uid}";
+}
+
+mark_failed_backup() {
+    local uid="${1}"
+    local error_code="${2:-1}"
+    local error_msg="${3:-Backup failed}"
+    if [[ -z "${uid}" ]]; then
+        return
+    fi
+    local tmp_file="/tmp/buddybackup-${uid}"
+    local last_ran=""
+    local dest_size=""
+    if [[ -f "${tmp_file}" ]]; then
+        last_ran=$(grep '^last_ran=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+        dest_size=$(grep '^dest_size=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+    fi
+
+    local clean_msg
+    clean_msg=$(printf '%s' "${error_msg}" | tr '\r\n' ' ' | sed 's/"//g' | head -c 250)
+
+    {
+        [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
+        [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
+        echo "last_status=failed"
+        echo "last_error_time=$(date +%s)"
+        echo "last_error_code=${error_code}"
+        echo "last_error_message=\"${clean_msg}\""
+    } > "${tmp_file}"
 }
 
 send_backup() {
@@ -663,6 +691,7 @@ send_backup() {
 
     if ! normalize_remote_target remote_user remote_port "${destination_host}"; then
         error="Invalid destination host, user or port. Aborting backup."
+        mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
@@ -675,6 +704,7 @@ send_backup() {
 
     if [ -n "${error}" ]; then
         error="Aborting backup. ${error}"
+        mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
@@ -706,6 +736,7 @@ send_backup() {
         fi
     else
         error_code=$?
+        mark_failed_backup "${uid}" "${error_code}" "${result}"
         printf -v result "%s" "Sending backup failed. Error code ${error_code}. Full output: ${result}"
         unraid_notify "${result}" "alert"
     fi
@@ -735,13 +766,14 @@ send_local_backup() {
 
     if [ -n "${error}" ]; then
         error="Aborting backup. ${error}"
+        mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
     fi
 
     local my_syncoid_flags="${syncoid_flags_local}"
-    if [[ "${recursive}" == "yes" ]] then
+    if [[ "${recursive}" == "yes" ]]; then
         my_syncoid_flags+=" --recursive"
     fi
     local error_code=0
@@ -753,6 +785,7 @@ send_local_backup() {
         mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
     else 
         error_code=$?
+        mark_failed_backup "${uid}" "${error_code}" "${result}"
         printf -v result "%s" "Local backup failed. Error code ${error_code}. Full output: ${result}"
         unraid_notify "${result}" "alert"
     fi
@@ -784,6 +817,7 @@ create_snapshot_and_send() {
     preflight_send_state "${type}" "${source_dataset}" "no"
     if [[ "${PREFLIGHT_STATUS}" != "ok" ]]; then
         error="Aborting backup. ${PREFLIGHT_MESSAGE}"
+        mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
@@ -799,6 +833,7 @@ create_snapshot_and_send() {
 
     if ! snapshot_output=$("${snapshot_cmd[@]}" 2>&1); then
         error="Failed to create snapshot '${snapshot_name}'. ${snapshot_output}"
+        mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return

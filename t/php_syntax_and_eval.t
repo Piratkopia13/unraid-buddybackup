@@ -159,7 +159,12 @@ $expected_keys = [
     "status_class",
     "dest_size",
     "has_run",
-    "raw_timestamp"
+    "raw_timestamp",
+    "last_status",
+    "last_error_time",
+    "last_error_code",
+    "last_error_message",
+    "days_overdue"
 ];
 
 $missing_keys = [];
@@ -172,6 +177,16 @@ foreach ($expected_keys as $k) {
 if (!empty($missing_keys)) {
     echo "MISSING_TELEMETRY_KEYS:" . implode(",", $missing_keys) . "\n";
     exit(2);
+}
+
+// Test failure state parsing
+$test_fail_file = "/tmp/buddybackup-testfailuid";
+file_put_contents($test_fail_file, "last_ran=1700000000\ndest_size=50G\nlast_status=failed\nlast_error_time=1700001000\nlast_error_code=255\nlast_error_message=\"SSH connection refused\"\n");
+$fail_tel = bb_task_telemetry("testfailuid");
+@unlink($test_fail_file);
+if ($fail_tel["last_status"] !== "failed" || $fail_tel["status_label"] !== "Failed" || $fail_tel["status_class"] !== "red-text" || $fail_tel["last_error_code"] !== 255) {
+    echo "FAILED_TELEMETRY_PARSING_CHECK\n";
+    exit(3);
 }
 
 echo "OK\n";

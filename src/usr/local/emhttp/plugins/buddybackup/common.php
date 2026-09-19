@@ -201,11 +201,31 @@
             "status_class" => "grey-text",
             "dest_size" => "-",
             "has_run" => false,
-            "raw_timestamp" => 0
+            "raw_timestamp" => 0,
+            "last_status" => "never_ran",
+            "last_error_time" => 0,
+            "last_error_code" => 0,
+            "last_error_message" => "",
+            "days_overdue" => 0
         );
 
         if (file_exists($file)) {
             $info = @parse_ini_file($file);
+            if (isset($info["last_status"])) {
+                $ret["last_status"] = $info["last_status"];
+            } else if (!empty($info["last_ran"])) {
+                $ret["last_status"] = "success";
+            }
+            if (!empty($info["last_error_time"])) {
+                $ret["last_error_time"] = (int)$info["last_error_time"];
+            }
+            if (isset($info["last_error_code"])) {
+                $ret["last_error_code"] = (int)$info["last_error_code"];
+            }
+            if (!empty($info["last_error_message"])) {
+                $ret["last_error_message"] = $info["last_error_message"];
+            }
+
             if (!empty($info["last_ran"])) {
                 $last_ran = (int)$info["last_ran"];
                 $ret["raw_timestamp"] = $last_ran;
@@ -220,11 +240,14 @@
                 $warn_sec = (int)$warn_days * 24 * 60 * 60;
                 $crit_sec = (int)$crit_days * 24 * 60 * 60;
 
-                if (!empty($crit_sec) && ($current_time - $last_ran) > $crit_sec) {
+                $diff_sec = $current_time - $last_ran;
+                $ret["days_overdue"] = max(0, (int)floor($diff_sec / 86400));
+
+                if (!empty($crit_sec) && $diff_sec > $crit_sec) {
                     $ret["last_ran_class"] = "red-text";
                     $ret["status_label"] = "Alert";
                     $ret["status_class"] = "red-text";
-                } else if (!empty($warn_sec) && ($current_time - $last_ran) > $warn_sec) {
+                } else if (!empty($warn_sec) && $diff_sec > $warn_sec) {
                     $ret["last_ran_class"] = "orange-text";
                     $ret["status_label"] = "Warning";
                     $ret["status_class"] = "orange-text";
@@ -234,6 +257,12 @@
                     $ret["status_class"] = "green-text";
                 }
             }
+
+            if ($ret["last_status"] === "failed") {
+                $ret["status_label"] = "Failed";
+                $ret["status_class"] = "red-text";
+            }
+
             if (!empty($info["dest_size"])) {
                 $ret["dest_size"] = $info["dest_size"];
             }
