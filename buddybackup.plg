@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "22e78c559f1316818d6cb79b5128dce5">
+  <!ENTITY pkgMD5        "fbf84025bf88a8a276eccf915155a72e">
 ]>
 
 <PLUGIN  name="&name;"
