@@ -129,7 +129,7 @@ function Get-NodeConnection {
         [string]$NodeName
     )
 
-    $node = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -NodeName $NodeName
+    $node = Get-ObjectValue -Object (Get-ObjectValue -Object $Lab -Name 'nodes') -Name $NodeName
     if (-not $node -or -not (Get-ObjectValue -Object $node -Name "host")) {
         throw "Missing lab.nodes.$NodeName.host"
     }
@@ -337,6 +337,36 @@ function Invoke-BuddyBackupShellCommand {
 
     $command = ($parts | ForEach-Object { Convert-ToShellSingleQuoted -Value ([string]$_) }) -join " "
     return Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -Label $Label -DoExecute:$DoExecute
+}
+
+function Invoke-BuddyBackupShellCommandWithRetry {
+    param(
+        $NodeConnection,
+        [string]$Action,
+        [string[]]$Arguments,
+        [string]$Label,
+        [int]$MaxAttempts = 2,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-BuddyBackupShellCommand -NodeConnection $NodeConnection -Action $Action -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.success -or -not $DoExecute -or $attempt -ge $MaxAttempts) {
+            break
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
 }
 
 function Invoke-BuddyBackupPhpCommand {
@@ -646,7 +676,7 @@ $genericCfg = Get-GenericTestConfig -Lab $lab
 $unraidConnection = Get-NodeConnection -Lab $lab -NodeName "nodeA"
 $genericConnection = Get-NodeConnection -Lab $lab -NodeName "nodeC"
 
-$genericNodeCfg = Get-ObjectValue -Object (Get-ObjectValue -Object $lab -Name 'nodes') -NodeName 'nodeC'
+$genericNodeCfg = Get-ObjectValue -Object (Get-ObjectValue -Object $lab -Name 'nodes') -Name 'nodeC'
 $genericPool = [string](Get-ObjectValue -Object $genericNodeCfg -Name "zfsPool")
 if ([string]::IsNullOrWhiteSpace($genericPool)) {
     $genericPool = $zfsValues.PoolName

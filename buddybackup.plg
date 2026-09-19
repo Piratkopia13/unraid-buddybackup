@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.09.09">
+  <!ENTITY version      "2026.09.19">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "e2418ea19d449789ec578c0d5a785d90">
+  <!ENTITY pkgMD5        "22e78c559f1316818d6cb79b5128dce5">
 ]>
 
 <PLUGIN  name="&name;"
@@ -27,13 +27,18 @@
 <CHANGES>
 ##&name;
 
-###2026.09.09
-- Back up to and pull from any OpenZFS system: TrueNAS SCALE, Proxmox VE and generic Linux hosts, in addition to the classic Unraid-to-Unraid buddy setup
-- New 'Generic ZFS hosts' page generates a one-time restricted setup command for the remote host (forced-command SSH allowlist, minimal zfs allow delegations, mountpoint=none receive parents)
-- New 'Pull from generic ZFS host' backup type: cron-driven pulls with raw encrypted sends and preflight checks for dataset, snapshots and encryption
-- 'Remote (generic ZFS host)' backup type with username and SSH port support and a type-aware connection test
-- Connection test now verifies zfs availability in the remote user's PATH, dataset existence, encryption status, resume support and command restriction
-- Sudo execution mode for TrueNAS SCALE hosts where the zfs binary is not executable by unprivileged users (allowlist stays the fine-grained gate)
+###2026.09.19
+- Support replicating to and from any OpenZFS system (TrueNAS SCALE, Proxmox VE, Debian/Ubuntu) with raw encrypted sends and zero-knowledge destinations
+- Embedded remote setup generator dynamically crafts the one-time root setup command for generic hosts (forced-command SSH allowlist, minimal delegations, unmounted receive parents)
+- Support for TrueNAS SCALE native replication tasks (Retention = None, Sudo = Disabled) and sudo execution mode for restricted environments
+- Modernized Buddy's Backups tab with support for multiple independent incoming buddies, dedicated SSH keys, and isolated telemetry
+- Destination safety and immutability: automatic enforcement of readonly=on and mountpoint=none on backup destination datasets to prevent ransomware and accidental modification
+- New 'Skip parent dataset' option for recursive backups to replicate child datasets without duplicating the parent root
+- Modernized UI cards across all settings tabs and dashboard panel with unified failure and overdue alert banners
+- Seamless direct in-page navigation to live Log viewer from backup cards and buddy entries
+- Improved progress modal state: automatically transitions to 'Done' upon completion and hides abort controls
+- Fixed Expand All / Collapse All initial state and button toggling behavior
+- Hardened restrict_zfs allowlist against command injection, mountpoint tampering, and scope traversal
 
 ###2026.05.29
 - Add button to create a fresh snapshot and immediately send a backup

@@ -458,6 +458,11 @@ for legacy_path in \
     fi
 done
 
+if [ -d "$stage_root/deps" ]; then
+    mkdir -p "$plugin_root/deps"
+    cp -a "$stage_root/deps/"* "$plugin_root/deps/"
+fi
+
 sed -i \
     -e "s#<!ENTITY pkgMD5        \".*\">#<!ENTITY pkgMD5        \"$manifest_package_md5\">#" \
     -e "s#<URL>&gitRelURL;/&pkgName;</URL>#<LOCAL>$package_path</LOCAL>#" \
@@ -827,7 +832,8 @@ echo "plugin source metadata written to $marker_path"
     $failedPluginInstallResults = @($pluginInstallResults | Where-Object { -not $_.success })
     if ($failedPluginInstallResults.Count -gt 0) {
         $failedLabels = @($failedPluginInstallResults | ForEach-Object { $_.label }) -join ","
-        throw "BuddyBackup plugin install failed on node '$NodeName'. Failed labels: $failedLabels"
+        $failedDetails = @($failedPluginInstallResults | ForEach-Object { ($_.output -join "`n") }) -join "`n---`n"
+        throw "BuddyBackup plugin install failed on node '$NodeName'. Failed labels: $failedLabels`nDetails:`n$failedDetails"
     }
     if ($failOnInstallWarnings -and @($pluginInstallResults | Where-Object { $_.warningsOrErrorsDetected }).Count -gt 0) {
         throw "BuddyBackup plugin install output on node '$NodeName' contained warning/error text."

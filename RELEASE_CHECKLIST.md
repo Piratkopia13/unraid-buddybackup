@@ -161,8 +161,26 @@ Complete these static audits before running tests or provisioning VMs.
 ## Phase 3: Documentation & Changelog
 
 ### 3.1 User Guide & Screenshots
-- [ ] **Update [`docs/USER_GUIDE.md`](file:///y:/docs/USER_GUIDE.md)**: Document any new features, configuration options, changed UI labels, or revised operational recommendations.
-- [ ] **Refresh screenshots**: If UI layouts or tabs were modified, capture new screenshots from the live testlab nodes and update images in `docs/` or embedded media.
+- [x] **Update [`docs/USER_GUIDE.md`](file:///y:/docs/USER_GUIDE.md)**: Document any new features, configuration options, changed UI labels, or revised operational recommendations.
+- [x] **Refresh screenshots**: If UI layouts or tabs were modified, capture new screenshots from the live testlab nodes and update images in `docs/images/`.
+
+#### Screenshot Inventory & Verification Status
+
+All user guide screenshots should be captured in Unraid Dark Mode (`theme="black"`), using clean sample datasets (e.g. `bbpool/buddybackup/secure`), and without private IP addresses or sensitive credentials.
+
+| Screenshot ID | Location / Page | State / Description Captured | Status |
+|:---|:---|:---|:---|
+| `screenshot_01_backups_overview.png` | **Backup and restore** | Top SSH key banner with Copy button, action toolbar, and 3 collapsed cards with status dots and telemetry badges. | Captured (Dark Mode) |
+| `screenshot_02_backup_card_expanded.png` | **Backup and restore** | Expanded backup card showing 2-column layout, skip parent option, telemetry banner, and bottom actions. | Captured (Dark Mode) |
+| `screenshot_03_generic_host_helper.png` | **Backup and restore** | Close-up of Destination column with `Remote (generic ZFS host)` selected, showing inline setup helper with curl command & Copy button. | Captured (Dark Mode) |
+| `screenshot_04_restore_wizard.png` | **Backup and restore** | Modal popup of the Restore Snapshot Wizard showing the dataset/snapshot list and destination selection. | Captured (Dark Mode) |
+| `screenshot_05_snapshots_page.png` | **Snapshot creation and pruning** | Sanoid configuration card showing hourly/daily/weekly retention inputs and the trigger backup dropdown. | Captured (Dark Mode) |
+| `screenshot_06_buddys_backups.png` | **Buddy's Backups** | Incoming buddy card expanded showing telemetry banner, SSH key, destination parent dataset example, and retention fields. | Captured (Dark Mode) |
+| `screenshot_07_advanced_settings.png` | **Advanced Settings** | Settings section showing timezone, alert thresholds, and security overrides. | Captured (Dark Mode) |
+| `screenshot_08_log_viewer.png` | **Log** | Live log viewer streaming recent replication and connection test entries. | Captured (Dark Mode) |
+| `screenshot_09_dashboard_tile.png` | **Unraid Dashboard** | BuddyBackup tile on the main Unraid dashboard showing task statuses and storage metrics. | Captured (Dark Mode) |
+| `screenshot_10_truenas_replication_task.png` | **TrueNAS SCALE WebGUI** | Data Protection → Replication Task showing `Snapshot Retention Policy: None` and destination dataset path. | External (Optional) |
+
 - [ ] **Update [`README.md`](file:///y:/README.md)**: Keep feature summaries, requirements, and compatibility tables up to date.
 
 ### 3.2 Changelog Authoring

@@ -46,9 +46,7 @@ The plugin settings are organized into five clean sections under **Settings → 
 
 This is your main command center for creating, scheduling, monitoring, and restoring backups.
 
-<!-- [SCREENSHOT NEEDED: screenshot_01_backups_overview.png]
-Description: Overview of the "Backup and restore" tab showing the "Your SSH public key" banner at the top (with the Copy button), the "Add Backup" and "Expand All" buttons, and 2-3 configured backup cards in various states (e.g. one active Remote BuddyBackup, one Remote Generic host, one Local).
--->
+![Backup and restore Overview](images/screenshot_01_backups_overview.png)
 
 #### Your SSH Public Key Banner
 At the top of the page, you'll see **Your SSH public key**.
@@ -64,14 +62,13 @@ Each backup task is contained in a collapsible card. The header summarizes:
 
 Clicking the card header expands the configuration form:
 
-<!-- [SCREENSHOT NEEDED: screenshot_02_backup_card_expanded.png]
-Description: A single backup card expanded showing the 2-column layout ("Source" on left, "Destination" on right), the telemetry banner, form fields, and bottom action buttons (Apply, Send backup now, Create fresh snapshot and send now, Restore data from destination, Remove).
--->
+![Backup Task Card Details](images/screenshot_02_backup_card_expanded.png)
 
 #### Source Settings (Left Column)
 - **Enable on cron schedule**: Toggle automated execution (`Yes` / `No`).
 - **ZFS dataset to backup**: Select the local dataset to replicate (encrypted datasets by default).
 - **Backup child datasets**: Set to `Yes` to recursively include child datasets and snapshots.
+- **Skip parent dataset**: When backing up child datasets recursively, set to `Yes` to replicate only the child datasets while skipping the root parent dataset (useful when replicating entire pools or container datasets without duplicating the parent root).
 - **Cron schedule**: Standard cron expression defining when the backup runs (default: `0 0 * * *` for midnight).
 
 #### Destination Settings (Right Column)
@@ -90,9 +87,7 @@ Select one of three destination types:
    - **Remote host one-time setup helper**: A built-in command generator! It dynamically crafts the one-time root setup command using the exact username, port, parent dataset, and your Unraid public key. Click **Copy** to copy the command and run it once on the remote machine.
    - **Test connection**: Tests SSH connectivity and verifies ZFS permissions on the generic host.
 
-<!-- [SCREENSHOT NEEDED: screenshot_03_generic_host_helper.png]
-Description: Close-up of the Destination column with "Remote (generic ZFS host)" selected, highlighting the "Remote host one-time setup" box with the generated curl command, Copy button, and forum guide link.
--->
+![Generic ZFS Host Setup Helper](images/screenshot_03_generic_host_helper.png)
 
 3. **Local** (Pool-to-Pool on the same Unraid server):
    - **Destination dataset**: The local dataset to receive the backup (must differ from source; autocomplete datalist provided). Can replicate unencrypted datasets locally.
@@ -110,9 +105,7 @@ Clicking **Restore data from destination** opens an interactive wizard:
 - Queries the destination host for available datasets and snapshots.
 - Allows you to browse, select an exact snapshot or full dataset to restore, and choose the target local destination.
 
-<!-- [SCREENSHOT NEEDED: screenshot_04_restore_wizard.png]
-Description: The modal dialog of the Restore Snapshot Wizard showing the snapshot selector dropdown, destination picker, and restore options.
--->
+![Restore Snapshot Wizard](images/screenshot_04_restore_wizard.png)
 
 ---
 
@@ -120,9 +113,7 @@ Description: The modal dialog of the Restore Snapshot Wizard showing the snapsho
 
 BuddyBackup includes built-in automated snapshot creation and pruning powered by **Sanoid**. If you don't use another tool for snapshots, configure your policies here.
 
-<!-- [SCREENSHOT NEEDED: screenshot_05_snapshots_page.png]
-Description: The "Snapshot creation and pruning" tab showing a dataset entry with retention inputs (Hourly, Daily, Weekly, Monthly, Yearly), the "Recursive" toggle, and the "Trigger backup after snapshot creation" dropdown.
--->
+![Snapshot Creation and Pruning](images/screenshot_05_snapshots_page.png)
 
 #### Configuration Options
 - **Dataset**: Select which local dataset to snapshot.
@@ -143,9 +134,7 @@ Description: The "Snapshot creation and pruning" tab showing a dataset entry wit
 
 This tab configures your Unraid server to receive incoming backups from your buddy (or from a remote TrueNAS/Proxmox server).
 
-<!-- [SCREENSHOT NEEDED: screenshot_06_buddys_backups.png]
-Description: The "Buddy's Backups" tab showing incoming buddy cards, telemetry banner ("Storage used by buddy", "Last received backup"), Enable toggle, Buddy's SSH public key input, Destination parent dataset selector with live example note, retention inputs, and the generic sender callout box at the bottom.
--->
+![Buddy's Backups Receiver Configuration](images/screenshot_06_buddys_backups.png)
 
 #### Configuration Options
 - **Enable**: Set to `Yes` to allow incoming backup connections.
@@ -171,9 +160,7 @@ Description: The "Buddy's Backups" tab showing incoming buddy cards, telemetry b
 
 Fine-tune plugin behavior and safety policies:
 
-<!-- [SCREENSHOT NEEDED: screenshot_07_advanced_settings.png]
-Description: The "Advanced Settings" tab showing options such as "Bandwidth rate limit", "Allow unencrypted remote backups", and "Log level".
--->
+![Advanced Settings](images/screenshot_07_advanced_settings.png)
 
 - **Bandwidth rate limit**: Restrict transfer speeds (in KB/s or MB/s) to prevent backup replication from saturating your internet upload bandwidth.
 - **Allow unencrypted remote backups**: By default, BuddyBackup requires remote datasets to be encrypted. If you are operating over a private, trusted VPN and want to back up unencrypted datasets, toggle this setting to `Yes`.
@@ -187,9 +174,7 @@ Displays the live system log from `/var/log/buddybackup.log`.
 - Automatically streams new log entries as backups and replication tasks run.
 - Useful for diagnosing SSH connectivity issues, syncoid output, or permission delegation checks.
 
-<!-- [SCREENSHOT NEEDED: screenshot_08_log_viewer.png]
-Description: The "Log" tab showing real-time log entries of a backup run or connection test.
--->
+![Replication Log Viewer](images/screenshot_08_log_viewer.png)
 
 ---
 
@@ -199,9 +184,7 @@ ZFS BuddyBackup includes a dashboard panel directly on Unraid's main **Dashboard
 - Provides an at-a-glance summary of all configured backups, their health status, last run timestamps, and storage consumed.
 - Includes quick-launch buttons to trigger backups directly from your dashboard.
 
-<!-- [SCREENSHOT NEEDED: screenshot_09_dashboard_tile.png]
-Description: Unraid Dashboard showing the BuddyBackup tile/card with task statuses, destination usage, and quick action buttons.
--->
+![Unraid Dashboard Integration](images/screenshot_09_dashboard_tile.png)
 
 ---
 
@@ -268,9 +251,6 @@ When a generic host pushes backups to Unraid, your Unraid server acts as the sec
      *Do NOT let TrueNAS manage retention on Unraid. TrueNAS will attempt to execute `zfs destroy` on Unraid, which BuddyBackup strictly rejects to keep your backups immutable. Unraid's local Sanoid service manages retention automatically.*
    - **Read-Only**: Leave set to **"Set"** (default) or **"Ignore"**.
 
-<!-- [SCREENSHOT NEEDED: screenshot_10_truenas_replication_task.png]
-Description: TrueNAS SCALE Replication Task configuration screen showing the destination dataset, SSH connection, Use Sudo For ZFS Commands disabled, and Snapshot Retention Policy set to "None".
--->
 
 #### 3. Configure Proxmox VE / Debian (CLI Sender)
 1. Generate an SSH keypair on the Linux host:
@@ -285,21 +265,4 @@ Description: TrueNAS SCALE Replication Task configuration screen showing the des
    - ⚠️ **Critical - No Sudo / Privilege Elevation**: Always include `--no-privilege-elevation`. Sudo mode is not supported on Unraid, and BuddyBackup's restricted shell will reject any command prefixed with `sudo`.
 4. Schedule the command via cron or systemd timer. Older snapshots named with `autosnap_*` will be automatically pruned on Unraid.
 
----
 
-## Screenshot Inventory & Capture Checklist
-
-When taking screenshots for the forum update, ensure clean test/demo dataset names (e.g. `pool/appdata`, `tank/backups/buddy`) and remove any private IP addresses or sensitive tokens.
-
-| Screenshot ID | Location / Page | State / Description to Capture | Status |
-|:---|:---|:---|:---|
-| `screenshot_01_backups_overview.png` | **Backup and restore** | Top SSH key banner with Copy button, action toolbar, and 2-3 collapsed cards with status dots and telemetry badges. | **Needs re-capture** (replaces old forum image) |
-| `screenshot_02_backup_card_expanded.png` | **Backup and restore** | Expanded backup card showing 2-column layout (Source on left, Destination on right), telemetry banner, and bottom actions. | **Needs re-capture** (replaces old forum image) |
-| `screenshot_03_generic_host_helper.png` | **Backup and restore** | Close-up of Destination column with `Remote (generic ZFS host)` selected, showing username, port, and the inline setup helper with curl command & Copy button. | **New screenshot needed** |
-| `screenshot_04_restore_wizard.png` | **Backup and restore** | Modal popup of the Restore Snapshot Wizard showing the dataset/snapshot list and destination selection. | **Needs re-capture** (replaces old forum image) |
-| `screenshot_05_snapshots_page.png` | **Snapshot creation and pruning** | Sanoid configuration card showing hourly/daily/weekly retention inputs and the trigger backup dropdown. | **Needs re-capture** (replaces old forum image) |
-| `screenshot_06_buddys_backups.png` | **Buddy's Backups** | Incoming settings showing telemetry banner, multi-key textarea, destination parent dataset example, retention fields, and generic sender note. | **Needs re-capture** (replaces old forum image) |
-| `screenshot_07_advanced_settings.png` | **Advanced Settings** | Settings page showing bandwidth rate limit and unencrypted remote backup toggle. | **New screenshot needed** |
-| `screenshot_08_log_viewer.png` | **Log** | Live log viewer streaming recent replication and connection test entries. | **New screenshot needed** |
-| `screenshot_09_dashboard_tile.png` | **Unraid Dashboard** | BuddyBackup tile on the main Unraid dashboard showing task statuses and storage metrics. | **New screenshot needed** |
-| `screenshot_10_truenas_replication_task.png` | **TrueNAS SCALE WebGUI** | Data Protection → Replication Task showing `Snapshot Retention Policy: None` and destination dataset path. | **New screenshot needed** |

@@ -933,6 +933,11 @@ for legacy_path in \
     fi
 done
 
+if [ -d "$stage_root/deps" ]; then
+    mkdir -p "$plugin_root/deps"
+    cp -a "$stage_root/deps/"* "$plugin_root/deps/"
+fi
+
 sed -i \
     -e "s#<!ENTITY pkgMD5        \".*\">#<!ENTITY pkgMD5        \"$manifest_package_md5\">#" \
     -e "s#<URL>&gitRelURL;/&pkgName;</URL>#<LOCAL>$package_path</LOCAL>#" \
