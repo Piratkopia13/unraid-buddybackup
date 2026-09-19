@@ -12,6 +12,7 @@ This plugin is fully open source, and I encourage you to review the source to en
 
 - [Official Forum Plugin Guide](https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/)
 - [Local User Guide (Markdown)](docs/USER_GUIDE.md)
+- [Pre-Release & Merge-to-Main Checklist](RELEASE_CHECKLIST.md)
 
 ### Compatibility
 
@@ -26,9 +27,11 @@ This plugin is fully open source, and I encourage you to review the source to en
   - **TrueNAS SCALE**: In TrueNAS, create a Replication Task pointing to Unraid with **Snapshot Retention Policy = None** (since Unraid's allowlist protects backups by strictly denying `zfs destroy`). Keep **Use Sudo For ZFS Commands** disabled (sudo mode is not supported; Unraid relies on native OpenZFS delegation and BuddyBackup's restricted shell strictly blocks `sudo`). Set snapshot naming schema to Sanoid format (`autosnap_%Y-%m-%d_%H:%M:%S_daily`) so Unraid manages retention automatically with Sanoid.
   - **Proxmox VE / Generic Linux**: Run Sanoid/Syncoid on the remote host pushing to Unraid (use `--no-privilege-elevation`, as sudo mode is not supported). See the [forum guide](https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/) for full details.
 
-### Testing lab bootstrap
-
-Initial reproducible test-lab scaffolding is in `testlab/`; see `testlab/README.md` for the test catalog, default matrix behavior, and scenario coverage.
+### Development & Testing
+ 
+- **Unit & Integration Tests**: Run `./testlab/scripts/run-unit-tests.ps1` to execute the full TAP test suite (`t/*.t`).
+- **Pre-Release Checklist**: See [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) for the authoritative pre-merge and release verification workflow.
+- **Test Lab Scaffolding**: Reproducible multi-node test-lab environment is in `testlab/`; see [`testlab/README.md`](testlab/README.md) for the test catalog, default matrix behavior, and scenario coverage.
 
 ![Logo](src/usr/local/emhttp/plugins/buddybackup/images/buddybackup.png)
 

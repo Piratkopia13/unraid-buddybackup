@@ -48,6 +48,21 @@ my $common_php_source = File::Spec->catfile(
     $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'common.php'
 );
 
+# Check if php is available
+my $php_bin = "php";
+my $php_available = 0;
+{
+    my $stdout = gensym;
+    my $stderr = gensym;
+    my $pid = eval { open3(undef, $stdout, $stderr, $php_bin, "-v") };
+    if ($pid) {
+        waitpid($pid, 0);
+        $php_available = 1 if $? == 0;
+    }
+}
+
+plan skip_all => "php CLI is required to test multi_buddy PHP migration and helpers" if !$php_available;
+
 subtest 'disjoint dataset validator logic' => sub {
     my $php_test = <<'PHP';
 function bb_is_dataset_overlapping($dataset, $existing_datasets) {
