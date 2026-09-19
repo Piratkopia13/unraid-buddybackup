@@ -13,6 +13,7 @@ Title="Log"
     }
 
     $(function () {
+        get_log();
         setInterval(function () {
             get_log();
         }, 2000);
@@ -34,4 +35,7 @@ Title="Log"
         resize: vertical;
     }
 </style>
-<textarea readonly id='buddybackup-log'>Loading...</textarea>
+<div id="buddybackup-log-section">
+    <a id="log" name="log" style="display:block; position:relative; top:-20px; visibility:hidden;"></a>
+    <textarea readonly id='buddybackup-log'>Loading...</textarea>
+</div>

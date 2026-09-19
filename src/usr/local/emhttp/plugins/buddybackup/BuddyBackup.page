@@ -411,7 +411,7 @@ Tag="buddybackup"
     function buddybackup_open_log_modal() {
         swal({
             title: "_(BuddyBackup Log)_",
-            text: "<pre id='swalbody' style='max-height:350px; overflow-y:auto; text-align:left; font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-all;'><?=_('Loading log...')?></pre><div style='text-align:right; margin-top:10px;'><a href='/Settings/BuddyBackup/Log' style='text-decoration:none; font-size:12px;'><i class='fa fa-external-link'></i> <?=_('Open Full Log Page')?></a></div>",
+            text: "<pre id='swalbody' style='max-height:350px; overflow-y:auto; text-align:left; font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-all;'><?=_('Loading log...')?></pre><div style='text-align:right; margin-top:10px;'><a href='#buddybackup-log' onclick='buddybackup_open_full_log(); return false;' style='text-decoration:none; font-size:12px;'><i class='fa fa-arrow-down'></i> <?=_('Open Full Log')?></a></div>",
             html: true,
             animation: 'none',
             showConfirmButton: true,
@@ -428,6 +428,35 @@ Tag="buddybackup"
             }
         });
     }
+    function buddybackup_open_full_log() {
+        if (window.swal) {
+            $('.sweet-alert').removeClass('nchan');
+            swal.close();
+        }
+        var logEl = document.getElementById('buddybackup-log') || document.getElementById('buddybackup-log-section');
+        if (logEl) {
+            var panel = $(logEl).closest('[role="tabpanel"], .tab-content');
+            if (panel.length && panel.attr('id')) {
+                var tabBtn = document.querySelector('button[aria-controls="' + panel.attr('id') + '"]');
+                if (tabBtn) {
+                    tabBtn.click();
+                }
+            }
+            setTimeout(function() {
+                logEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (typeof logEl.focus === 'function') {
+                    logEl.focus();
+                }
+            }, 50);
+        }
+    }
+    $(function() {
+        if (window.location.hash === '#buddybackup-log' || window.location.hash === '#log') {
+            setTimeout(function() {
+                buddybackup_open_full_log();
+            }, 250);
+        }
+    });
     function uid() {
         return 'xxxxxxxx'.replace(/[xy]/g, function(c) {
             var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);

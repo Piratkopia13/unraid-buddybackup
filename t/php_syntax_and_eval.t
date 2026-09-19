@@ -288,4 +288,23 @@ subtest "Backups.page title bar and header send_backup resolution" => sub {
     like($content, qr/<input[^>]*class="disable-on-unsaved"[^>]*data-uid=/, "Header Send backup now button includes data-uid attribute");
 };
 
+subtest "BuddyBackup.page log modal anchor navigation and Log.page anchors" => sub {
+    my $bb_page = File::Spec->catfile($plugin_dir, "BuddyBackup.page");
+    open my $fh, "<", $bb_page or die "Cannot open $bb_page: $!";
+    my $bb_content = do { local $/; <$fh> };
+    close $fh;
+
+    unlike($bb_content, qr#/Settings/BuddyBackup/Log#, "BuddyBackup.page does not contain hardcoded /Settings/BuddyBackup/Log standalone link");
+    like($bb_content, qr/function\s+buddybackup_open_full_log\s*\(/, "BuddyBackup.page defines buddybackup_open_full_log");
+    like($bb_content, qr/href=['"]#buddybackup-log['"].*?buddybackup_open_full_log/s, "Log modal links to in-page #buddybackup-log anchor via buddybackup_open_full_log");
+
+    my $log_page = File::Spec->catfile($plugin_dir, "Log.page");
+    open my $lfh, "<", $log_page or die "Cannot open $log_page: $!";
+    my $log_content = do { local $/; <$lfh> };
+    close $lfh;
+
+    like($log_content, qr/id=['"]buddybackup-log['"]/, "Log.page contains buddybackup-log element");
+    like($log_content, qr/id=['"]buddybackup-log-section['"]|id=['"]log['"]/, "Log.page contains log anchor target");
+};
+
 done_testing();
