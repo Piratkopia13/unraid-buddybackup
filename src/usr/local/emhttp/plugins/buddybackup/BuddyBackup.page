@@ -408,30 +408,9 @@ Tag="buddybackup"
             }
         });
     }
-    function buddybackup_open_log_modal() {
-        swal({
-            title: "_(BuddyBackup Log)_",
-            text: "<pre id='swalbody' style='max-height:350px; overflow-y:auto; text-align:left; font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-all;'><?=_('Loading log...')?></pre><div style='text-align:right; margin-top:10px;'><a href='#buddybackup-log' onclick='buddybackup_open_full_log(); return false;' style='text-decoration:none; font-size:12px;'><i class='fa fa-arrow-down'></i> <?=_('Open Full Log')?></a></div>",
-            html: true,
-            animation: 'none',
-            showConfirmButton: true,
-            confirmButtonText: "<?=_('Close')?>"
-        }, function(){
-            $('.sweet-alert').removeClass('nchan');
-        });
-        $('.sweet-alert').addClass('nchan');
-        $.post(api_url, { cmd: "get_log" }, function(data) {
-            var pre = $('pre#swalbody');
-            if (pre.length) {
-                pre.text(data || "<?=_('Log is empty.')?>");
-                pre.scrollTop(pre.prop('scrollHeight'));
-            }
-        });
-    }
-    function buddybackup_open_full_log() {
-        if (window.swal) {
-            $('.sweet-alert').removeClass('nchan');
-            swal.close();
+    function buddybackup_scroll_to_log() {
+        if (typeof get_log === 'function') {
+            get_log();
         }
         var logEl = document.getElementById('buddybackup-log') || document.getElementById('buddybackup-log-section');
         if (logEl) {
@@ -449,6 +428,12 @@ Tag="buddybackup"
                 }
             }, 50);
         }
+    }
+    function buddybackup_open_full_log() {
+        buddybackup_scroll_to_log();
+    }
+    function buddybackup_open_log_modal() {
+        buddybackup_scroll_to_log();
     }
     $(function() {
         if (window.location.hash === '#buddybackup-log' || window.location.hash === '#log') {

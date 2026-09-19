@@ -590,7 +590,7 @@ Title="Backup and restore"
                         </div>
                     </div>
                     <div class="buddybackup-alert-actions">
-                        <button type="button" class="alt" onclick="buddybackup_open_log_modal()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
                     </div>
                 </div>
                 <? elseif ($is_saved && ($telemetry['status_label'] === 'Warning' || $telemetry['status_label'] === 'Alert')): ?>
@@ -605,7 +605,7 @@ Title="Backup and restore"
                         </div>
                     </div>
                     <div class="buddybackup-alert-actions">
-                        <button type="button" class="alt" onclick="buddybackup_open_log_modal()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
                     </div>
                 </div>
                 <? endif; ?>

@@ -239,6 +239,9 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                             <?=_('No incoming backup received from this buddy in over ') . $telemetry['days_overdue'] . _(' days. Last received: ') . $telemetry['last_ran']?>
                         </div>
                     </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
                 </div>
                 <?php endif; ?>
 

@@ -288,15 +288,26 @@ subtest "Backups.page title bar and header send_backup resolution" => sub {
     like($content, qr/<input[^>]*class="disable-on-unsaved"[^>]*data-uid=/, "Header Send backup now button includes data-uid attribute");
 };
 
-subtest "BuddyBackup.page log modal anchor navigation and Log.page anchors" => sub {
+subtest "Direct scroll to log anchor navigation and Log.page anchors" => sub {
     my $bb_page = File::Spec->catfile($plugin_dir, "BuddyBackup.page");
     open my $fh, "<", $bb_page or die "Cannot open $bb_page: $!";
     my $bb_content = do { local $/; <$fh> };
     close $fh;
 
     unlike($bb_content, qr#/Settings/BuddyBackup/Log#, "BuddyBackup.page does not contain hardcoded /Settings/BuddyBackup/Log standalone link");
-    like($bb_content, qr/function\s+buddybackup_open_full_log\s*\(/, "BuddyBackup.page defines buddybackup_open_full_log");
-    like($bb_content, qr/href=['"]#buddybackup-log['"].*?buddybackup_open_full_log/s, "Log modal links to in-page #buddybackup-log anchor via buddybackup_open_full_log");
+    like($bb_content, qr/function\s+buddybackup_scroll_to_log\s*\(/, "BuddyBackup.page defines buddybackup_scroll_to_log");
+
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $b_content = do { local $/; <$bfh> };
+    close $bfh;
+    like($b_content, qr/onclick="buddybackup_scroll_to_log\(\)"/, "Backups.page View Log button calls buddybackup_scroll_to_log");
+
+    my $buddy_page = File::Spec->catfile($plugin_dir, "BuddysBackupSettings.page");
+    open my $bdfh, "<", $buddy_page or die "Cannot open $buddy_page: $!";
+    my $bd_content = do { local $/; <$bdfh> };
+    close $bdfh;
+    like($bd_content, qr/onclick="buddybackup_scroll_to_log\(\)"/, "BuddysBackupSettings.page View Log button calls buddybackup_scroll_to_log");
 
     my $log_page = File::Spec->catfile($plugin_dir, "Log.page");
     open my $lfh, "<", $log_page or die "Cannot open $log_page: $!";
