@@ -272,10 +272,15 @@ EOF
     fi
 
     if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ]; then
-            /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
+            :
+        elif [ -x /etc/rc.d/rc.sshd ]; then
+            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
         else
-            /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+            /usr/sbin/sshd >/dev/null 2>&1 || true
+        fi
+        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
+            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
         fi
     fi
 
@@ -361,10 +366,15 @@ disable_backups_from_buddy() {
     fi
 
     if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ]; then
-            /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
+            :
+        elif [ -x /etc/rc.d/rc.sshd ]; then
+            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
         else
-            /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+            /usr/sbin/sshd >/dev/null 2>&1 || true
+        fi
+        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
+            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
         fi
     fi
 
