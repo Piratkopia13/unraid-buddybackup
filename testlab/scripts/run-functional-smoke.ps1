@@ -1045,6 +1045,7 @@ try {
     }
 
     Write-Host "[testlab] Functional smoke: sending remote and local backups"
+    $nodeSupportsTypedSendBackup = @{}
     foreach ($pair in @(
         @{ Connection = $senderConnection; Type = "remote"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Uid = $senderPlan.remoteBackupUid; Label = "nodeA-remote-send"; Action = "send_backup" },
         @{ Connection = $senderConnection; Type = "local"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Uid = $senderPlan.localBackupUid; Label = "nodeA-local-send"; Action = "send_local_backup" },
@@ -1052,7 +1053,26 @@ try {
         @{ Connection = $receiverConnection; Type = "local"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Uid = $receiverPlan.localBackupUid; Label = "nodeB-local-send"; Action = "send_local_backup" }
     )) {
         $sendArgs = if ($pair.Type -eq "remote") {
-            @($pair.Type, $pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            $nodeName = $pair.Connection.NodeName
+            if (-not $nodeSupportsTypedSendBackup.ContainsKey($nodeName)) {
+                $probeCmd = 'grep -q "local type=" /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup 2>/dev/null && echo "typed" || echo "legacy"'
+                $probeResult = Invoke-NodeSshCommand -NodeConnection $pair.Connection -Command $probeCmd -Label "$nodeName-probe-send-signature" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $probeResult
+                $isTyped = $true
+                if ($Execute -and $probeResult.success) {
+                    $outputStr = ($probeResult.output -join "`n").Trim()
+                    if ($outputStr -eq "legacy") {
+                        $isTyped = $false
+                    }
+                }
+                $nodeSupportsTypedSendBackup[$nodeName] = $isTyped
+            }
+
+            if ($nodeSupportsTypedSendBackup[$nodeName]) {
+                @($pair.Type, $pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            } else {
+                @($pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            }
         } else {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationDataset, $pair.Uid)
         }

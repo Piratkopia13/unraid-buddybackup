@@ -1596,6 +1596,7 @@ if command -v udevadm >/dev/null 2>&1; then
 fi
 
 mkdir -p "$plugin_root"
+rm -f "$plugin_root/incoming.cfg"
 ensure_dataset_absent "$source_dataset"
 ensure_dataset_absent "$local_backup_dataset"
 ensure_dataset_absent "$receive_root_dataset"
@@ -1714,6 +1715,24 @@ known_hosts_key_material_hash_or_empty() {
     fi
 }
 
+authorized_keys_key_material_hash_or_empty() {
+    local path="$1"
+    if [ -f "$path" ]; then
+        awk '
+            /^[[:space:]]*$/ { next }
+            /^[[:space:]]*#/ { next }
+            {
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ /^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)/) {
+                        print $i " " $(i+1)
+                        break
+                    }
+                }
+            }
+        ' "$path" | LC_ALL=C sort | sha256sum | awk '{print $1}'
+    fi
+}
+
 line_or_empty() {
     local key="$1"
     local path="$2"
@@ -1739,6 +1758,7 @@ echo "sender_key_sha256=$(hash_or_empty "$sender_key")"
 echo "known_hosts_sha256=$(hash_or_empty "$managed_known_hosts")"
 echo "known_hosts_key_material_sha256=$(known_hosts_key_material_hash_or_empty "$managed_known_hosts")"
 echo "authorized_keys_sha256=$(hash_or_empty "$authorized_keys")"
+echo "authorized_keys_key_material_sha256=$(authorized_keys_key_material_hash_or_empty "$authorized_keys")"
 echo "sanoid_conf_sha256=$(hash_or_empty "$sanoid_conf")"
 
 for key in \
@@ -1758,6 +1778,19 @@ for key in \
     line=$(line_or_empty "$key" "$plugin_cfg")
     if [ -n "$line" ]; then
         echo "plugin_cfg_line=$line"
+    fi
+done
+
+for key in \
+    BackupDaysAgoWarning \
+    BackupDaysAgoCritical \
+    BuddysBackupDaysAgoWarning \
+    BuddysBackupDaysAgoCritical \
+    UtcTimezone \
+    AllowUnencryptedRemoteBackups; do
+    line=$(line_or_empty "$key" "$plugin_cfg")
+    if [ -n "$line" ]; then
+        echo "general_plugin_cfg_line=$line"
     fi
 done
 
@@ -1802,6 +1835,9 @@ receive_dataset=""
 if [ -f "$plugin_cfg" ]; then
     receive_dataset=$(awk -F= '$1=="ReceiveDestinationDataset" {value=$2; gsub(/^"|"$/, "", value); print value}' "$plugin_cfg" | tail -n 1)
 fi
+if [ -z "$receive_dataset" ] && [ -f "$plugin_root/incoming.cfg" ]; then
+    receive_dataset=$(awk -F= '$1=="destination_dataset" {value=$2; gsub(/^"|"$/, "", value); print value}' "$plugin_root/incoming.cfg" | tail -n 1)
+fi
 
 sanoid_conf_contains_receive_dataset=no
 if [ -n "$receive_dataset" ] && [ -f "$sanoid_conf" ] && grep -Fq "[$receive_dataset]" "$sanoid_conf"; then
@@ -1825,12 +1861,14 @@ function ConvertFrom-UpgradeStateOutput {
                 knownHostsKeyMaterialSha256 = ""
                 knownHostsLineCount = 0
                 authorizedKeysSha256 = ""
+                authorizedKeysKeyMaterialSha256 = ""
                 sanoidConfSha256 = ""
                 sanoidConfContainsReceiveDataset = "no"
                 buddybackupUserPresent = "no"
                 allowUsersContainsBuddybackup = "no"
                 matchUserBuddybackup = "no"
                 pluginCfgLines = @()
+                generalPluginCfgLines = @()
                 backupSections = @()
                 snapshotSections = @()
                 backupCrons = @()
@@ -1851,12 +1889,14 @@ function ConvertFrom-UpgradeStateOutput {
                         "known_hosts_key_material_sha256" { $snapshot.knownHostsKeyMaterialSha256 = $value }
                         "known_hosts_line_count" { $snapshot.knownHostsLineCount = if ([string]::IsNullOrWhiteSpace($value)) { 0 } else { [int]$value } }
                         "authorized_keys_sha256" { $snapshot.authorizedKeysSha256 = $value }
+                        "authorized_keys_key_material_sha256" { $snapshot.authorizedKeysKeyMaterialSha256 = $value }
                         "sanoid_conf_sha256" { $snapshot.sanoidConfSha256 = $value }
                         "sanoid_conf_contains_receive_dataset" { $snapshot.sanoidConfContainsReceiveDataset = $value }
                         "buddybackup_user_present" { $snapshot.buddybackupUserPresent = $value }
                         "allow_users_contains_buddybackup" { $snapshot.allowUsersContainsBuddybackup = $value }
                         "match_user_buddybackup" { $snapshot.matchUserBuddybackup = $value }
                         "plugin_cfg_line" { $snapshot.pluginCfgLines += $value }
+                        "general_plugin_cfg_line" { $snapshot.generalPluginCfgLines += $value }
                         "backup_section" { $snapshot.backupSections += $value }
                         "snapshot_section" { $snapshot.snapshotSections += $value }
                         "backup_cron" { $snapshot.backupCrons += $value }
@@ -1864,6 +1904,7 @@ function ConvertFrom-UpgradeStateOutput {
         }
 
         $snapshot.pluginCfgLines = @($snapshot.pluginCfgLines | Sort-Object -Unique)
+        $snapshot.generalPluginCfgLines = @($snapshot.generalPluginCfgLines | Sort-Object -Unique)
         $snapshot.backupSections = @($snapshot.backupSections | Sort-Object -Unique)
         $snapshot.snapshotSections = @($snapshot.snapshotSections | Sort-Object -Unique)
         $snapshot.backupCrons = @($snapshot.backupCrons | Sort-Object -Unique)
@@ -1982,19 +2023,18 @@ function Compare-UpgradeStateSnapshots {
 
         $differences = @()
         $properties = @(
-                'pluginCfgSha256',
                 'backupsCfgSha256',
                 'snapshotsCfgSha256',
                 'senderKeySha256',
                 'knownHostsKeyMaterialSha256',
                 'knownHostsLineCount',
-                'authorizedKeysSha256',
+                'authorizedKeysKeyMaterialSha256',
                 'sanoidConfSha256',
                 'sanoidConfContainsReceiveDataset',
                 'buddybackupUserPresent',
                 'allowUsersContainsBuddybackup',
                 'matchUserBuddybackup',
-                'pluginCfgLines',
+                'generalPluginCfgLines',
                 'backupSections',
                 'snapshotSections',
                 'backupCrons'
@@ -2407,7 +2447,7 @@ function Run-Scenario {
                     throw "Failed to read boot_id before reboot for $($node.Name)."
                 }
 
-                $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "reboot" -Label "$($node.Name)-reboot" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "sync; reboot" -Label "$($node.Name)-reboot" -DoExecute:$DoExecute
 
                 if ($DoExecute) {
                     $rebootCycle = Wait-ForRebootCycle -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -PreviousBootId $beforeBootId.BootId -TimeoutSeconds $timeout -SettleSeconds $rebootSettleSeconds -ReadyCommand $manualAccessVerifyCommand -ReadyLoggedCommand $manualAccessVerifyLoggedCommand -ReadyLabel $manualAccessLabel
