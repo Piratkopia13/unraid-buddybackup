@@ -29,7 +29,7 @@
 
 ## Interface Walkthrough
 
-In the Unraid WebGUI, access the plugin under **Tools → ZFS Buddy Backup** (or via the settings cog on the BuddyBackup **Dashboard** widget).
+In the Unraid WebGUI, access the plugin under **Tools → ZFS Buddy Backup**.
 
 The interface is organized into five tabs:
 1. [Backup and restore](#1-backup-and-restore)
@@ -49,25 +49,24 @@ The main command center for configuring, monitoring, and restoring backups.
 ![Backup and restore Overview](images/screenshot_01_backups_overview.png)
 
 #### Your SSH Public Key
-Copy your sender public key using the **Copy** button at the top of the page. Send this key to your buddy to add under their **Buddy's Backups** page (or use it when running the setup helper on a generic receiver).
+Send your SSH public key to your buddy to add under their **Buddy's Backups** page (or use it when running the setup helper on a generic receiver).
 
-#### Backup Task Cards
-Each task is organized in a card summarizing:
-- **Status**: Color-coded indicators for `Healthy` (green), `Triggered by snapshot` (green), `Warning` (yellow, overdue), `Alert` (red, critical overdue), `Failed` (red, last run error), or `Disabled` (grey).
+#### Backup Tasks
+Each configured backup task displays:
+- **Status**: Status indicators for `Healthy`, `Triggered by snapshot`, `Warning` (overdue), `Alert` (critical overdue), `Failed` (last run error), or `Disabled`.
 - **Route & Telemetry**: Source dataset `pool/dataset` → destination, last run timestamp, destination size, cron schedule, and snapshot trigger badges.
-- **Quick Action**: A **Send backup now** button on the header to run replication immediately.
-- **Alert Banners**: If a task fails or is overdue, an alert banner appears inside the card displaying the failure date, error details, and a **View Log** shortcut.
+- **Alert Banners**: Displays failure date, error details, and log link if a task is overdue or failed.
 
-![Backup Task Card Details](images/screenshot_02_backup_card_expanded.png)
+![Backup Task Details](images/screenshot_02_backup_card_expanded.png)
 
-#### Source Settings (Left Column)
-- **Enable on cron schedule**: Toggle scheduled automated runs (`Yes` / `No`).
+#### Source Settings
+- **Enable on cron schedule**: Enables scheduled automated runs.
 - **ZFS dataset to backup**: Local dataset to replicate (encrypted datasets by default).
 - **Backup child datasets**: Recursively replicate child datasets and snapshots.
 - **Skip parent dataset**: Replicate only child datasets, skipping the root parent dataset (useful when replicating container datasets or pools without duplicating the parent).
 - **Cron schedule**: Cron expression defining when the backup runs (default: `0 0 * * *` for midnight).
 
-#### Destination Settings (Right Column)
+#### Destination Settings
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
    - **Buddy's hostname or IP**: Remote Unraid VPN/LAN IP.
@@ -78,7 +77,7 @@ Each task is organized in a card summarizing:
    - **Buddy's hostname or IP**: Remote host IP or hostname.
    - **Remote username** & **SSH port**: SSH user (default: `buddybackup`) and port (default: `22`).
    - **Destination dataset**: Target dataset path on remote host (e.g. `tank/backups/unraid/appdata`).
-   - **Remote host one-time setup**: Generates the root command to configure the remote host. Click **Copy** and run it once on the target machine.
+   - **Remote host one-time setup**: Generates the root command to configure the remote host.
    - **Test connection**: Verifies SSH connectivity, ZFS version, dataset existence, encryption support, resume tokens, and delegated permissions.
 
 ![Generic ZFS Host Setup Helper](images/screenshot_03_generic_host_helper.png)
@@ -87,11 +86,10 @@ Each task is organized in a card summarizing:
    - **Destination dataset**: Local target dataset (autocomplete provided).
    - **Write Protection**: Local destination datasets are automatically set to `readonly=on` upon sync to prevent accidental tampering and ransomware corruption.
 
-#### Card Action Buttons
+#### Task Actions
 - **Send backup now**: Runs preflight checks (verifying source dataset, encryption, and snapshots). If no snapshots exist yet, prompts you to create one and send immediately.
 - **Create fresh snapshot and send now**: Takes an immediate local snapshot (`autosnap_YYYY-MM-DD_HH:MM:SS_hourly`) and starts replication.
 - **Restore data from destination**: Opens the **Restore Snapshot Wizard**.
-- **Apply** & **Remove**: Save configuration changes or delete the task.
 
 #### Restore Snapshot Wizard
 
@@ -104,7 +102,7 @@ Each task is organized in a card summarizing:
 3. Choose the destination:
    - **New dataset**: Restores to a new local dataset name.
    - **Restore to selected**: Restores into an existing local dataset (requires at least one common snapshot).
-4. Live progress streams in a terminal with an **Abort** button. Restores continue in the background if closed.
+4. Live progress streams in a terminal; restores continue in the background if closed.
 
 ---
 
@@ -156,17 +154,17 @@ Fine-tune daemon settings, alert thresholds, and security overrides.
 ![Advanced Settings](images/screenshot_07_advanced_settings.png)
 
 #### General
-- **Use UTC timezone** (`No` / `Yes`, default: `No`): Uses UTC timestamps (`TZ=UTC`) for snapshot creation, Sanoid cron, and manual snapshot naming. Useful to align timestamps between servers in different timezones.
+- **Use UTC timezone** (default: `No`): Uses UTC timestamps (`TZ=UTC`) for snapshot creation, Sanoid cron, and manual snapshot naming. Useful to align timestamps between servers in different timezones.
 
 #### Dashboard Panel & Alert Thresholds
-Configure when status indicators turn warning (yellow) or alert (red) on the dashboard and task cards (leave empty or `0` to disable):
+Configure when status indicators turn warning or alert on the dashboard and task cards (leave empty or `0` to disable):
 - **Backup warning** (days, default: `7`): Mark outgoing backup as warning if inactive for this many days.
 - **Backup alert** (days, default: `30`): Mark outgoing backup as alert if inactive for this many days.
 - **Buddy's backup warning** (days, default: `7`): Mark incoming backup as warning if inactive for this many days.
 - **Buddy's backup alert** (days, default: `30`): Mark incoming backup as alert if inactive for this many days.
 
 #### Security Overrides (Danger Zone)
-- **Allow unencrypted remote** (`No` / `Yes`, default: `No`): Overrides the requirement for remote datasets to be encrypted (`zfs send -w`). Enables sending unencrypted datasets over trusted networks.
+- **Allow unencrypted remote** (default: `No`): Overrides the requirement for remote datasets to be encrypted (`zfs send -w`). Enables sending unencrypted datasets over trusted networks.
 
 > [!WARNING]
 > Only enable **Allow unencrypted remote** over trusted private networks (e.g. WireGuard/Tailscale) if you understand the risks. Data is transferred and stored without native ZFS encryption.
@@ -187,11 +185,11 @@ A dashboard widget summarizing your backup health at a glance:
 
 ![Unraid Dashboard Integration](images/screenshot_09_dashboard_tile.png)
 
-- **Header**: Live aggregate counts (`X backup(s), Y autosnap, Z autoprune, Incoming active`) and a settings cog link to **Tools → ZFS Buddy Backup**.
+- **Header**: Live aggregate counts (`X backup(s), Y autosnap, Z autoprune, Incoming active`).
 - **Table Columns**:
   - **Source**: Source dataset or buddy label.
   - **Destination**: Target host and dataset path.
-  - **Status**: Color-coded indicator with schedule badges (cron calendar icon, snapshot trigger bolt).
+  - **Status**: Status indicator with schedule and trigger badges.
   - **Last run**: Human-readable relative timestamp (e.g. `Today, 06:00`).
   - **Size**: Used storage on the destination.
 
@@ -205,7 +203,7 @@ BuddyBackup replicates with non-Unraid OpenZFS hosts like **TrueNAS SCALE**, **P
 
 1. In Unraid (**Tools → ZFS Buddy Backup → Backup and restore**), add a backup with **Type: Remote (generic ZFS host)**.
 2. Enter the remote host IP, username (`buddybackup`), SSH port (`22`), and destination dataset (e.g. `tank/backups/unraid/appdata`).
-3. Click **Copy** in the **Remote host one-time setup** box and run the command as root on the remote host:
+3. Run the generated **Remote host one-time setup** command as root on the remote host:
    ```bash
    curl -fsSL https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/deps/generic_host_setup.sh | bash -s -- --dataset 'tank/backups/unraid' --user 'buddybackup' --port '22' --pubkey 'ssh-ed25519 AAAAC3...'
    ```
@@ -230,7 +228,7 @@ The `generic_host_setup.sh` script is idempotent and self-verifying:
   3. *Run Script*: Run the setup command in the TrueNAS root shell (`sudo -i`).
   4. *Sudo Command Grant*: In TrueNAS UI (*Credentials → Users*), add `/usr/bin/bash -c *` to *Allowed sudo commands with no password* (the allowlist script remains the strict fine-grained gate).
   5. *SSH Parameters*: Paste the printed `Match User buddybackup` block into *System Settings → Services → SSH → Auxiliary Parameters* and restart SSH.
-4. In Unraid, click **Test connection** on the backup entry to verify access.
+4. In Unraid, use **Test connection** on the backup entry to verify access.
 
 ---
 
@@ -242,7 +240,7 @@ Your Unraid server acts as the secure receiver.
 > **Sudo mode is not supported on Unraid**: Unraid grants dataset permissions via native OpenZFS delegation (`zfs allow`). The `buddybackup` user has no sudo privileges, and `restrict_zfs` strictly blocks any `sudo` commands.
 
 #### 1. Prepare Unraid (Receiver)
-Under **Tools → ZFS Buddy Backup → Buddy's Backups**, click **Add Buddy**, enable it, set a **Destination parent dataset** (e.g. `disk1/buddy_backups`), and set your **Snapshot retention** policy.
+Under **Tools → ZFS Buddy Backup → Buddy's Backups**, configure a buddy with a **Destination parent dataset** (e.g. `disk1/buddy_backups`) and your desired **Snapshot retention** policy.
 
 #### 2. Configure TrueNAS SCALE (WebGUI Sender)
 1. **SSH Connection**: In **Credentials → Backup Credentials → SSH Connections**, create a connection (Host: Unraid IP, Port: `22`, User: `buddybackup`). Paste the public key into Unraid's **Buddy's Backups**.
