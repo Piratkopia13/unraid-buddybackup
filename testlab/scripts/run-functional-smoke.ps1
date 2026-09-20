@@ -1055,7 +1055,7 @@ try {
         $sendArgs = if ($pair.Type -eq "remote") {
             $nodeName = $pair.Connection.NodeName
             if (-not $nodeSupportsTypedSendBackup.ContainsKey($nodeName)) {
-                $probeCmd = 'grep -q "local type=" /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup 2>/dev/null && echo "typed" || echo "legacy"'
+                $probeCmd = "sed -n '/^send_backup()/,/^}/p' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup | grep -q 'local type=' && echo 'typed' || echo 'legacy'"
                 $probeResult = Invoke-NodeSshCommand -NodeConnection $pair.Connection -Command $probeCmd -Label "$nodeName-probe-send-signature" -DoExecute:$Execute
                 Add-ReportAction -Report $report -Result $probeResult
                 $isTyped = $true
