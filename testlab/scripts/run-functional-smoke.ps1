@@ -725,6 +725,7 @@ set -euo pipefail
 
 plugin_cfg="/boot/config/plugins/buddybackup/buddybackup.cfg"
 backups_cfg="/boot/config/plugins/buddybackup/backups.cfg"
+incoming_cfg="/boot/config/plugins/buddybackup/incoming.cfg"
 
 set_ini_value() {
   local key="$1"
@@ -846,6 +847,19 @@ mkdir -p "$source_mountpoint"
 zfs create -o mountpoint="$source_mountpoint" "$source_dataset"
 printf 'node=%s\nstage=functional-smoke\n' "$node_name" > "$source_mountpoint/payload.txt"
 sync || true
+
+cat > "$incoming_cfg" <<EOF
+[1ml3g4cy]
+name="Buddy"
+enable="yes"
+destination_dataset="${receive_root_dataset}"
+ssh_key="${peer_public_key}"
+hourly="0"
+daily="7"
+weekly="4"
+monthly="3"
+yearly="0"
+EOF
 
 touch "$plugin_cfg"
 set_ini_value "ReceiveBackups" "enable" "$plugin_cfg"

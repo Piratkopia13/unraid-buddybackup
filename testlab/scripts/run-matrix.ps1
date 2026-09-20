@@ -1301,15 +1301,15 @@ function Test-NodeBaseSetupFromProviderReport {
         return [pscustomobject]@{ Success = $false; Error = "No base setup actions were recorded for '$NodeName'." }
     }
 
-    $pluginInstall = @($actions | Where-Object { $_.label -eq "buddybackup-plugin-install" }) | Select-Object -First 1
+    $pluginInstall = @($actions | Where-Object { $_.label -in @("buddybackup-plugin-install", "workspace-build-install") }) | Select-Object -First 1
     if (-not $pluginInstall) {
         return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install action is missing for '$NodeName'." }
     }
     if (-not $pluginInstall.success) {
-        return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install failed for '$NodeName'." }
+        return [pscustomobject]@{ Success = $false; Error = "$($pluginInstall.label) failed for '$NodeName'." }
     }
     if ($pluginInstall.warningsOrErrorsDetected) {
-        return [pscustomobject]@{ Success = $false; Error = "buddybackup-plugin-install output contained warning/error text for '$NodeName'." }
+        return [pscustomobject]@{ Success = $false; Error = "$($pluginInstall.label) output contained warning/error text for '$NodeName'." }
     }
 
     return [pscustomobject]@{ Success = $true; Error = $null }
