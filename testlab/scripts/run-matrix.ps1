@@ -1597,6 +1597,7 @@ fi
 
 mkdir -p "$plugin_root"
 rm -f "$plugin_root/incoming.cfg"
+rm -f "$plugin_root/buddybackup_known_hosts"
 ensure_dataset_absent "$source_dataset"
 ensure_dataset_absent "$local_backup_dataset"
 ensure_dataset_absent "$receive_root_dataset"
@@ -1671,6 +1672,24 @@ if [[ "$peer_port" != "22" ]]; then
 fi
 
 /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
+
+known_hosts_file="$plugin_root/buddybackup_known_hosts"
+scanned_keys=""
+for attempt in 1 2 3 4 5; do
+    scanned_keys=$(ssh-keyscan "$remote_host" 2>/dev/null || true)
+    if [ -n "$scanned_keys" ]; then
+        break
+    fi
+    sleep 1
+done
+{
+    printf '# buddybackup start\n'
+    if [ -n "$scanned_keys" ]; then
+        printf '%s\n' "$scanned_keys"
+    fi
+    printf '# buddybackup end\n'
+} > "$known_hosts_file"
+chmod 600 "$known_hosts_file"
 
 echo "seeded_node=${node_name}"
 echo "seeded_remote_host=${remote_host}"
@@ -2027,7 +2046,6 @@ function Compare-UpgradeStateSnapshots {
                 'snapshotsCfgSha256',
                 'senderKeySha256',
                 'knownHostsKeyMaterialSha256',
-                'knownHostsLineCount',
                 'authorizedKeysKeyMaterialSha256',
                 'sanoidConfSha256',
                 'sanoidConfContainsReceiveDataset',
