@@ -21,6 +21,14 @@
       "port": 2223,
       "unraidVersion": "7.2.6",
       "pluginVersion": "2026.05.02"
+    },
+    "nodeC": {
+      "name": "buddybackup-node-c-generic",
+      "host": "127.0.0.1",
+      "port": 2224,
+      "platform": "generic-debian",
+      "zfsPool": "bbpool",
+      "datasetRoot": "buddybackup"
     }
   },
   "plugin": {
@@ -58,6 +66,12 @@
   "setup": {
     "applyBaseConfigAfterSsh": true,
     "verifyBaseConfigInMatrix": true,
+    "functionalTests": {
+      "nodeCAliasIp": "10.254.0.24",
+      "genericUser": "buddybackup",
+      "genericSshPort": "22",
+      "allowUnencryptedRemoteBackups": true
+    },
     "manualAccess": {
       "rootPassword": "buddybackup-testlab"
     },

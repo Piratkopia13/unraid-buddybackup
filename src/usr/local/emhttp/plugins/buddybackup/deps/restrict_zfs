@@ -8,39 +8,136 @@ use Scalar::Util qw(looks_like_number);
 
 $ENV{'PATH'} = join(':', grep { length } qw(/usr/local/sbin /usr/sbin /sbin /usr/local/bin /usr/bin /bin), ($ENV{'PATH'} // ''));
 
-my $POOL = qr/'[\w-]+'/;
-my $DATASET = qr/'[\w\/ -]+'/;
-my $DATASET_SNAPSHOT = qr/'[\w\/ -]+('?)@('?)[\w:-]+'/;
+# Sudo mode: generic_host_setup.sh creates this flag file when the zfs binary is not
+# executable for the user (TrueNAS SCALE). Validated commands are then run through
+# sudo -n; the allowlist below remains the fine-grained gate either way.
+my $use_sudo = (-f "$0.sudo") ? 1 : 0;
 
-my $SYNCOID_SNAPSHOT = qr/'[\w\/ -]+'@('?)syncoid_[\w:-]+\1/;
+my $dry_run = 0;
+my $verbose = 0;
+my @log = ();
+my @cli_datasets = ();
+my $cli_uid = '';
+GetOptions(
+    'dry-run'     => \$dry_run,
+    'verbose'     => \$verbose,
+    'log=s@'      => \@log,
+    'dataset=s@'  => \@cli_datasets,
+    'uid=s'       => \$cli_uid,
+);
+@log = ('syslog') unless @log;
+
+# Dataset scope: generic_host_setup.sh installs this allowlist on generic ZFS
+# hosts together with a sibling "<script>.datasets" file listing the datasets
+# the host was configured for. The allowlist also supports --dataset CLI flags
+# directly (used in Unraid authorized_keys per incoming buddy).
+# When dataset scope is provided, the dataset-scoped patterns below are
+# narrowed to those datasets (and their child datasets), so a buddy can never
+# touch anything outside their configured tree. When a scope is provided but
+# lists no valid datasets, every dataset-scoped command is denied. Without any
+# scope, historical unscoped patterns are kept.
+my $scope_loaded = 0;
+my @DATASET_SCOPE;
+if (@cli_datasets) {
+    $scope_loaded = 1;
+    foreach my $cli_ds (@cli_datasets) {
+        push @DATASET_SCOPE, $cli_ds
+            if $cli_ds =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+} elsif ( open( my $scope_fh, '<', $0 . '.datasets' ) ) {
+    $scope_loaded = 1;
+    while ( my $scope_line = <$scope_fh> ) {
+        $scope_line =~ s/\r?\n\z//;
+        next if $scope_line eq q{};
+        next if $scope_line =~ /^#/;
+        push @DATASET_SCOPE, $scope_line
+            if $scope_line =~ /^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/;
+    }
+    close $scope_fh;
+}
+
+if (@DATASET_SCOPE) {
+    $ENV{'BUDDY_DATASET'} = join(',', @DATASET_SCOPE);
+}
+if ($cli_uid =~ /^[A-Za-z0-9_-]+$/) {
+    $ENV{'BUDDY_UID'} = $cli_uid;
+}
+
+my $POOL;
+my $DATASET;
+my $DATASET_SNAPSHOT;
+if ($scope_loaded) {
+    if (@DATASET_SCOPE) {
+        my %scope_pools;
+        foreach my $scope_ds (@DATASET_SCOPE) {
+            my ($scope_pool) = split( /\//, $scope_ds, 2 );
+            $scope_pools{$scope_pool} = 1;
+        }
+        my $scope_alt        = join( '|', map { quotemeta } @DATASET_SCOPE );
+        my $scope_pools_alt  = join( '|', map { quotemeta } sort keys %scope_pools );
+        $DATASET          = qr/(?:'(?:${scope_alt})(?:\/[\w\/ -]*)?'|(?:${scope_alt})(?:\/[\w\/.-]+)?(?=[\s]|\z))/;
+        $DATASET_SNAPSHOT = qr/(?:'(?:${scope_alt})(?:\/[\w\/ -]*)?('?)@('?)[\w:.-]+'|(?:${scope_alt})(?:\/[\w\/.-]+)?@[\w:.-]+(?=[\s]|\z))/;
+        $POOL             = qr/(?:'(?:${scope_pools_alt})'|(?:${scope_pools_alt})(?=[\s]|\z))/;
+    }
+    else {
+        $DATASET          = qr/(?!)/;
+        $DATASET_SNAPSHOT = qr/(?!)/;
+        $POOL             = qr/(?!)/;
+    }
+}
+else {
+    $DATASET          = qr/(?:'[\w\/ -]+'|[\w\/.-]+(?=[\s]|\z))/;
+    $DATASET_SNAPSHOT = qr/(?:'[\w\/ -]+('?)@('?)[\w:.-]+'|[\w\/.-]+@[\w:.-]+(?=[\s]|\z))/;
+    $POOL             = qr/(?:'[\w-]+'|[\w-]+(?=[\s]|\z))/;
+}
 
 my $REDIRS = qr/(?:\s+(?:2>\/dev\/null|2>&1))?/;
 my $PIPE = qr/\s*\|\s*/;
-my $MBUFFER_CMD = qr/mbuffer (?:-[rR] \d+[kM])? (?:-W \d+ -I [\w.:-]+ )?-q -s \d+[kM] -m \d+[kM]/;
+my $MBUFFER_CMD = qr/mbuffer (?:-[rR] \d+[kM])? (?:-W \d+ -I [\w.:-]+ )?-q -s \d+[kM] -m (?:[1-9]\d{0,2}[kM]|1024M)/;
 my $COMPRESS_CMD = qr/(?:(?:gzip -3|zcat|pigz -(?:\d+|dc)|(?:zstd|zstdmt) -(?:\d+|dc)|xz(?: -d)?|lzop(?: -dfc)?|lz4(?: -dc)?)\s*\|)?/;
-my $SHORTOPTSVALS = qr/(?:-[A-Za-z0-9]+(?:\s+[a-z0-9:._=\/-]+)?\s+)*/;
+my $SAFE_PROP_VAL = qr/(?:'[\w:.\/-]+'|"[\w:.\/-]+"|[\w:.\/-]+)/;
+my $SAFE_O_ASSIGN = qr/(?:(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=$SAFE_PROP_VAL|'(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=[\w:.\/-]+'|"(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=[\w:.\/-]+")/ ;
+my $SHORTOPTSVALS = qr/(?:-(?!o\b|x\b)[A-Za-z0-9]+(?:\s+[a-z0-9:._=\/-]+)?\s+|-x\s+[a-z0-9:._-]+\s+|-o\s+$SAFE_O_ASSIGN\s+)*/;
 
 my @ALLOWED_COMMANDS = (
-    qr/exit/,
-    qr/echo -n/,
-    qr/echo ok/,
-    qr/command -v (?:zstd|zstdmt|mbuffer)/,
-    qr/zpool get -o value -H feature\@extensible_dataset $POOL/,
-    qr/ps -Ao args=/,
-    qr/zfs get -H (?:name|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
+    qr/exit(?:\s+\d+)?$REDIRS/,
+    qr/echo -n$REDIRS/,
+    qr/echo ok$REDIRS/,
+    qr/zfs version$REDIRS/,
+    qr/command -v (?:zstd|zstdmt|mbuffer)$REDIRS/,
+    qr/zpool get -o value -H feature\@extensible_dataset $POOL$REDIRS/,
+    qr/ps -Ao args=$REDIRS/,
+    qr/zfs get -H (?:name|encryption|receive_resume_token|-p used|-o value used|syncoid:sync) $DATASET$REDIRS/,
     qr/zfs get -j (?:used) $DATASET$REDIRS/,
     qr/zfs get -j -p -d 1 -t snapshot guid,creation $DATASET$REDIRS/,
     qr/zfs get -Hpd 1 (?:-t (?:snapshot|bookmark) |type,)(?:guid,creation|all) $DATASET$REDIRS/,
-    qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET/,
-    qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET/,
+    qr/zfs get -H -p (?:-r )?-t filesystem,volume(?: -r)? (?:all|[\w:.-]+(?:,[\w:.-]+)*) $DATASET$REDIRS/,
+    qr/zfs get -H -p -t filesystem,volume encryption $POOL$REDIRS/,
+    qr/zfs list -r -j -o name,origin -t filesystem,volume $DATASET$REDIRS/,
+    qr/zfs list -o name,origin -t filesystem,volume -Hr $DATASET$REDIRS/,
+    qr/zfs list -t filesystem,volume -H -o (?:[\w:.-]+(?:,[\w:.-]+)*) -s name (?:-(?:r|d 0) )?$DATASET$REDIRS/,
+    qr/zfs allow $DATASET$REDIRS/,
+    qr/zfs list -H -o name,origin,receive_resume_token -t filesystem,volume(?: -r)? $DATASET$REDIRS/,
+    qr/zfs list -t snapshot -H -o name -s (?:name|creation)(?: -(?:r|d 1))? $DATASET$REDIRS/,
+    qr/zfs list -H -o name -t snapshot(?: -(?:r|d 1))? $DATASET$REDIRS/,
+    qr/zfs get -H -p -o property,value (?:all|[\w:.-]+(?:,[\w:.-]+)*) $DATASET$REDIRS/,
+    qr/zfs get -H -o value receive_resume_token $DATASET$REDIRS/,
+    qr/zfs (?:set readonly=on|inherit readonly) $DATASET$REDIRS/,
+    qr/zfs (?:umount|unmount) $DATASET$REDIRS/,
+    qr/zfs create (?:-u )?(?:-p )?(?:-o $SAFE_O_ASSIGN )*$DATASET$REDIRS/,
+    qr/zfs (?:recv|receive) -x$REDIRS/,
+    qr/zfs (?:recv|receive)\s+$SHORTOPTSVALS$DATASET$REDIRS/,
+    qr/zfs (?:recv|receive) -A $DATASET$REDIRS/,
+    qr/zfs send (?:-[A-Za-z0-9]+ )*$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send (?:-[A-Za-z0-9]+ )*-[iI] $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
-    qr/zfs receive -A $DATASET/,
-    qr/zfs send -w -nvP $DATASET_SNAPSHOT/,
-    qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT/,
-    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
-    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs/,
-    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup/,
+    qr/zfs receive -A $DATASET$REDIRS/,
+    qr/zfs send -w -nvP $DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
+    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs(?:\s+$DATASET)?$REDIRS/,
+    qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php mark_received_backup(?:\s+$DATASET)?$REDIRS/,
 );
 
 sub check_allowed {
@@ -51,35 +148,73 @@ sub check_allowed {
     return 0;
 }
 
-my $dry_run = 0;
-my $verbose = 0;
-my @log = ();
-GetOptions(
-    'dry-run' => \$dry_run,
-    'verbose' => \$verbose,
-    'log=s@'  => \@log,
-);
-@log = ('syslog') unless @log;
+sub unwrap_command {
+    my ($cmd) = @_;
+    $cmd =~ s/^\s+|\s+$//g;
+
+    # Only unwrap when explicitly wrapped in sh -c '...' or sh -c "..."
+    if ($cmd =~ /^sh\s+-c\s+'(.*)'$/s) {
+        my $inner = $1;
+        $inner =~ s/'\\'''/'/g; # unescape fixture '\''
+        $inner =~ s/'\\'\''/'/g; # unescape standard POSIX '\''
+        # TrueNAS / Paramiko wrapper format: PATH=$PATH:... <actual_cmd> 2>&1
+        $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
+        $inner =~ s/^\s+|\s+$//g;
+        return $inner;
+    } elsif ($cmd =~ /^sh\s+-c\s+"(.*)"$/s) {
+        my $inner = $1;
+        $inner =~ s/\\"/"/g; # unescape \"
+        $inner =~ s/^PATH=(?:\$PATH|(?:\/[a-zA-Z0-9_.-]+)+):\S+\s+//;
+        $inner =~ s/^\s+|\s+$//g;
+        return $inner;
+    }
+
+    return $cmd;
+}
 
 my $original_command = $ENV{'SSH_ORIGINAL_COMMAND'};
 die "No SSH_ORIGINAL_COMMAND environment variable" unless defined $original_command;
 
 openlog('buddybackup-restrict-ssh', 'pid', LOG_USER);
 
-foreach my $command (split /;/, $original_command) {
+my $unwrapped = unwrap_command($original_command);
+my $last_exit_code = 0;
+
+foreach my $command (split /;/, $unwrapped) {
     $command =~ s/^\s+|\s+$//g;
+    next if $command eq q{};
     my $is_allowed = check_allowed($command);
 
     my $log_text;
     if (!$is_allowed) {
         $log_text = "blocked command: $command";
+        $last_exit_code = 1;
     } elsif ($dry_run) {
         $log_text = "would run command: $command";
     } else {
         if ($verbose) {
             $log_text = "running command: $command";
         }
-        system('/bin/bash', '-c', $command) == 0 or warn "Failed to execute command: $!";
+        my $cmd_ok = 0;
+        if ($use_sudo) {
+            $cmd_ok = (system('/usr/bin/sudo', '-n', '--', '/usr/bin/bash', '-c', $command) == 0);
+        } else {
+            $cmd_ok = (system('/bin/bash', '-c', $command) == 0);
+        }
+        my $child_status = $?;
+        if (!$cmd_ok) {
+            $last_exit_code = ($child_status >> 8) || ($child_status & 127) || 1;
+        } else {
+            $last_exit_code = 0;
+            # Unified post-receive hook:
+            # If the successful command was a zfs receive (and not -A abort), update telemetry
+            if ($command =~ /zfs\s+(?:recv|receive)\b(?!.*-A)/) {
+                my $php_script = $ENV{'BUDDYBACKUP_RC_PHP'} // '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php';
+                if (-f $php_script) {
+                    system($php_script, 'mark_received_backup');
+                }
+            }
+        }
     }
 
     if ($log_text) {
@@ -87,9 +222,15 @@ foreach my $command (split /;/, $original_command) {
             print STDERR "$log_text\n";
         }
         if (grep { $_ eq 'syslog' } @log) {
-            syslog(LOG_INFO, $log_text);
+            syslog(LOG_INFO, '%s', $log_text);
         }
+    }
+
+    if (!$is_allowed && !$dry_run) {
+        exit 1;
     }
 }
 
 closelog();
+
+exit $last_exit_code unless $dry_run;

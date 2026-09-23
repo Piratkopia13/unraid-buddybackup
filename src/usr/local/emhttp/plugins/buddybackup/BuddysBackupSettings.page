@@ -2,90 +2,354 @@ Menu="BuddyBackup:3"
 Title="Buddy's Backups"
 ---
 <script>
-function update_example() {
-  var val = $('form').find('select[name=ReceiveDestinationDataset]').val();
-  $('#buddybackup-destination-example').text("Example for what buddy can use as destination dataset: "+val+"/my-stuff");
+function update_buddy_example(el) {
+  if (!el) return;
+  var form = $(el).closest('form.buddybackup-incoming-entry');
+  var val = form.find('select[name=destination_dataset]').val();
+  var example_text = val ? ("_(Example for what buddy can use as destination dataset:)_ " + val + "/my-stuff") : "";
+  form.find('.buddybackup-destination-example').text(example_text);
 }
-function update_key_textarea(ta) {
-  ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
-  if (ta.value.split('\n').length > 1) {
-    $('#buddybackup-multiple-keys span').remove();
-    $('#buddybackup-multiple-keys').append('<span style="color: #ffffa3;">Important: all keys you add will have access to retrieve data from all child datasets in the parent dataset specified below.</span>');
-  } else {
-    $('#buddybackup-multiple-keys span').remove();
+
+function is_dataset_overlapping(dsA, dsB) {
+  if (!dsA || !dsB) return false;
+  dsA = dsA.replace(/^\/+|\/+$/g, '');
+  dsB = dsB.replace(/^\/+|\/+$/g, '');
+  return dsA === dsB || dsA.startsWith(dsB + '/') || dsB.startsWith(dsA + '/');
+}
+
+function buddy_input_changed(el, on_change) {
+  var form = $(el).closest('form.buddybackup-incoming-entry');
+  if (on_change) {
+    form.find("input[name='#apply']").not('.lock').prop('disabled', false);
   }
+  update_buddy_example(form.find('select[name=destination_dataset]')[0]);
 }
-$(function() { 
-  $('form').find('select[name=ReceiveDestinationDataset]').each(function(){$(this).on('input change', update_example)});
-  update_example();
 
-  // Resize textarea for Buddy's SSH public key and add important note when more than one key is added
-  $('form').find('textarea[name=DestinationPubSSHKey]').each(function(){$(this).on('input', function() {update_key_textarea(this);})});
-  update_key_textarea($('form').find('textarea[name=DestinationPubSSHKey]')[0]);
-})
+$(function() {
+  $('form.buddybackup-incoming-entry').each(function() {
+    var form = $(this);
+    form.find('select,input[type=text],input[type=number],textarea').not('.lock').on('input change', function() {
+      buddy_input_changed(this, true);
+    });
+    update_buddy_example(form.find('select[name=destination_dataset]')[0]);
+  });
+});
 
+function add_buddy() {
+  var template = $("#buddybackup-buddy-entry-template");
+  var list = $("#buddybackup-buddy-list");
+  var new_uid = uid();
+  var new_entry = $(template.html());
+  new_entry.attr("id", "entry-" + new_uid);
+  new_entry.addClass("is-expanded");
+  new_entry.find(".buddybackup-header-chevron").removeClass("fa-chevron-right").addClass("fa-chevron-down");
+  var new_form = new_entry.find("form.buddybackup-incoming-entry");
+  new_form.attr("method", "POST").attr("action", "/update.php").attr("target", "progressFrame");
+  new_form.find("input[name='#section']").val(new_uid);
+
+  new_form.find('select,input[type=text],input[type=number],textarea').not('.lock').on('input change', function() {
+    buddy_input_changed(this, true);
+  });
+
+  new_form.find("input[name='#apply']").not('.lock').prop('disabled', false);
+  update_buddy_example(new_form.find('select[name=destination_dataset]')[0]);
+
+  list.append(new_entry);
+}
+
+function remove_buddy(btn) {
+  swal({title:"_(Proceed?)_", text:"_(Remove this buddy entry?)_", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){
+    if (p) {
+      var card = $(btn).closest(".buddybackup-entry-card");
+      var form = card.find("form.buddybackup-incoming-entry");
+      var the_uid = form.find("input[name='#section']").val();
+      var saved = form.find("input[name='#saved']").val();
+      if (saved != "true") {
+        card.remove();
+        return;
+      }
+      $.post(api_url, {cmd: 'remove_incoming_section', 'section': the_uid}, function(data) {
+        if (data == '') {
+          card.remove();
+        } else {
+          alert(data);
+        }
+      });
+    }
+  });
+}
+
+function verify_and_submit_buddy(btn) {
+  var form = $(btn).closest("form.buddybackup-incoming-entry");
+  var current_uid = form.find("input[name='#section']").val();
+  var name = (form.find("input[name='name']").val() || '').trim();
+  var enabled = form.find("select[name='enable']").val() === 'yes';
+  var destination_dataset = (form.find("select[name='destination_dataset']").val() || '').trim();
+  var ssh_key = (form.find("input[name='ssh_key']").val() || '').trim();
+
+  if (name === '') {
+    swal({title:"_(Missing Name)_", text:"_(Please enter a name for this buddy.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
+    return;
+  }
+
+  if (enabled) {
+    if (destination_dataset === '') {
+      swal({title:"_(Missing Destination)_", text:"_(Please select a destination parent dataset for this buddy.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
+      return;
+    }
+    if (destination_dataset.indexOf('/') === -1) {
+      swal({title:"_(Invalid Destination)_", text:"_(Destination parent dataset must be a dedicated sub-dataset (e.g. )_<strong>" + destination_dataset + "/buddy_backups</strong>_( ), not a bare root disk or pool.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
+      return;
+    }
+    if (ssh_key === '') {
+      swal({title:"_(Missing SSH Key)_", text:"_(Please enter your buddy's SSH public key.)_", type:'warning', html:true, confirmButtonText:"_(Ok)_"});
+      return;
+    }
+
+    // Check for overlapping datasets across other buddy cards
+    var overlap_found = false;
+    var overlapping_name = '';
+    var overlapping_ds = '';
+
+    $("#buddybackup-buddy-list .buddybackup-entry-card").each(function() {
+      var other_card = $(this);
+      var other_form = other_card.find("form.buddybackup-incoming-entry");
+      var other_uid = other_form.find("input[name='#section']").val();
+      if (other_uid === current_uid) return;
+
+      var other_ds = (other_form.find("select[name='destination_dataset']").val() || '').trim();
+      var other_enabled = other_form.find("select[name='enable']").val() === 'yes';
+      if (!other_enabled || other_ds === '') return;
+
+      if (is_dataset_overlapping(destination_dataset, other_ds)) {
+        overlap_found = true;
+        overlapping_name = (other_form.find("input[name='name']").val() || 'Another buddy').trim();
+        overlapping_ds = other_ds;
+        return false;
+      }
+    });
+
+    if (overlap_found) {
+      swal({
+        title:"_(Dataset Conflict)_",
+        text:"_(Destination dataset overlaps with)_ <strong>" + overlapping_name + "</strong> (" + overlapping_ds + ").<br><br>_(Each buddy must have an independent, non-overlapping dataset for security isolation.)_",
+        type:'error',
+        html:true,
+        confirmButtonText:"_(Ok)_"
+      });
+      return;
+    }
+  }
+
+  form.submit();
+}
 </script>
+
 <?php
   $disabled = ($disable_receive) ? "disabled" : "";
 ?>
-<form markdown="1" method="POST" action="/update.php" target="progressFrame">
-<input type="hidden" name="#file" value="<?=$plugin?>/<?=$plugin?>.cfg" <?=$disabled?>>
-<input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
-<input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
-_(Enable)_:
-: <select name="ReceiveBackups" class="align" <?=$disabled?>>
-    <?=mk_option($cfg['ReceiveBackups'], "disable", "_(No)_");?>
-    <?=mk_option($cfg['ReceiveBackups'], "enable", "_(Yes)_");?>
-  </select>
 
-:enable_backup_receive_plug:
-    > Enable receival of Buddy's backups. Buddy will not be able to connect to you unless this is enabled.
-:end
+<p class="page-desc" style="margin-bottom: 14px;">
+_(Configure incoming backups from your buddies. When enabled, each buddy can replicate their encrypted ZFS snapshots to their assigned destination dataset with independent retention policies and isolated SSH keys.)_
+</p>
 
-<dl>
-  <dt>_(Buddy's SSH public key (get this from your buddy))_:</dt>
-  <dd>
-    <textarea name="DestinationPubSSHKey" class="align" wrap="off" oninput="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px';" <?=$disabled?>>
-    <?=$cfg['DestinationPubSSHKey'];?>
-  </textarea>
-    <div id="buddybackup-multiple-keys" class="buddybackup-field-note">
-      You can add multiple keys, just make sure there is only one key per line.<br>
+<div class="buddybackup-section-toolbar">
+    <div>
+        <input type="button" value="<?=_('Add Buddy')?>" onclick="add_buddy()" <?=$disabled?>>
     </div>
-  </dd>
-</dl>
+    <div>
+        <button type="button" class="ur-btn" onclick="buddybackup_toggle_all('buddybackup-buddy-list', this)">
+            <i class="fa fa-expand"></i> <span><?=_('Expand All')?></span>
+        </button>
+    </div>
+</div>
 
-<dl>
-  <dt>_(Destination parent dataset)_:</dt>
-  <dd>
-    <select name="ReceiveDestinationDataset" class="align" <?=$disabled?>>
-  <?=datasets($cfg["ReceiveDestinationDataset"], false)?>
-    </select>
-    <div class="buddybackup-field-note">Buddy should prefix their destination dataset with this, but always end with a child dataset.
-Buddy can use any child dataset following this as destination, but not this dataset directly.<br>
-<span id="buddybackup-destination-example"></span></div>
-  </dd>
-</dl>
+<div id="buddybackup-buddy-list" data-collapsed="true">
+<?php
+    function buddy_entry($uid, $data) {
+        global $plugin;
+        global $rc_script;
+        global $disabled;
+        global $bb_cfg;
 
-_(Snapshot retention)_:
-: <span class="buddy-retention-group">
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionHourly" value="<?=$cfg['ReceiveDestinationRententionHourly'];?>" class="narrow"> <span>Hourly</span></label>
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionMonthly" value="<?=$cfg['ReceiveDestinationRententionMonthly'];?>" class="narrow"> <span>Monthly</span></label>
-    </span>
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionDaily" value="<?=$cfg['ReceiveDestinationRententionDaily'];?>" class="narrow"> <span>Daily</span></label>
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionYearly" value="<?=$cfg['ReceiveDestinationRententionYearly'];?>" class="narrow"> <span>Yearly</span></label>
-    </span>
-    <span class="buddy-retention-row">
-      <label class="buddy-retention-item"><input type="number" name="ReceiveDestinationRententionWeekly" value="<?=$cfg['ReceiveDestinationRententionWeekly'];?>" class="narrow"> <span>Weekly</span></label>
-    </span>
-  </span>
+        $is_saved = !empty($data);
+        $is_enabled = ($data['enable'] ?? '') === 'yes';
+        $buddy_name = !empty($data['name']) ? htmlspecialchars($data['name']) : ($is_saved ? _('Buddy') : _('(New Buddy)'));
+        $dest = !empty($data['destination_dataset']) ? htmlspecialchars($data['destination_dataset']) : _('(No dataset selected)');
 
-:retention_plug:
-    > [Sanoid](https://github.com/jimsalterjrs/sanoid/wiki/Sanoid#options) policy for how many snapshots containing your buddy's backup should be kept. Set this to balance disk usage with number of kept backups that your buddy wants.
-:end
+        $telemetry = bb_task_telemetry($uid, true);
 
-&nbsp;
-: <input type="submit" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-</form>
+        if (!$is_saved) {
+            $status_dot_class = "orange-text";
+            $status_text = _("New Buddy");
+        } else if (!$is_enabled) {
+            $status_dot_class = "grey-text";
+            $status_text = _("Disabled");
+        } else if (empty($telemetry['has_run'])) {
+            $status_dot_class = "grey-text";
+            $status_text = _("Never ran");
+        } else {
+            $status_dot_class = $telemetry["status_class"];
+            $status_text = ($telemetry["status_label"] == "Healthy") ? _("Enabled") : _($telemetry["status_label"]);
+        }
+        ?>
+        <div class="buddybackup-entry-card <?= (!$is_saved) ? 'is-expanded' : '' ?>" id="entry-<?=$uid?>">
+            <div class="buddybackup-entry-header" onclick="buddybackup_toggle_card(this)">
+                <div class="buddybackup-header-left">
+                    <i class="fa fa-chevron-<?= (!$is_saved) ? 'down' : 'right' ?> buddybackup-header-chevron"></i>
+                    <span class="<?=$status_dot_class?>"><i class="fa fa-circle buddybackup-status-dot"></i><?=$status_text?></span>
+                    <span class="buddybackup-header-route">
+                        <span><i class="fa fa-user-circle"></i> <?=$buddy_name?></span>
+                        <span class="route-arrow"><i class="fa fa-arrow-right"></i></span>
+                        <span class="route-dest"><?=$dest?></span>
+                    </span>
+                    <?php if ($is_saved): ?>
+                    <?php if (!empty($telemetry['has_run'])): ?>
+                    <span class="buddybackup-header-telemetry">
+                        <span class="metric-item <?=$telemetry['last_ran_class']?>" title="<?=_('Last received backup')?>">
+                            <i class="fa fa-clock-o"></i> <?=$telemetry['last_ran']?>
+                        </span>
+                        <?php if ($telemetry['dest_size'] != '-'): ?>
+                        <span class="metric-item grey-text" title="<?=_('Storage used by buddy')?>">
+                            <i class="fa fa-database"></i> <?=$telemetry['dest_size']?>
+                        </span>
+                        <?php endif; ?>
+                    </span>
+                    <?php endif; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="buddybackup-entry-body">
+                <form class="buddybackup-incoming-entry" markdown="1" method="POST" action="/update.php" target="progressFrame">
+                <input type="hidden" name="#file" value="<?=$plugin?>/incoming.cfg" <?=$disabled?>>
+                <input type="hidden" name="#section" value="<?=$uid?>">
+                <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
+                <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
+                <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
+
+                <?php if ($is_saved and $is_enabled and !empty($telemetry['has_run']) and ($telemetry['status_label'] === 'Warning' or $telemetry['status_label'] === 'Alert')): ?>
+                <div class="buddybackup-alert-banner <?=$telemetry['status_label'] === 'Alert' ? 'buddybackup-alert-error' : 'buddybackup-alert-warning'?>" style="margin-bottom: 18px;">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=$telemetry['status_label'] === 'Alert' ? _('Buddy Inactive (Critical)') : _('Buddy Inactive (Warning)')?></strong>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=_('No incoming backup received from this buddy in over ') . $telemetry['days_overdue'] . _(' days. Last received: ') . $telemetry['last_ran']?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_('Buddy Name')?>:</dt>
+                  <dd>
+                    <input type="text" name="name" class="align" style="max-width: 350px;" value="<?=htmlspecialchars($data['name'] ?? ($is_saved ? 'Buddy' : ''))?>" placeholder="<?=_('e.g. Alice, Bob (TrueNAS)')?>" <?=$disabled?>>
+                    <div class="buddybackup-field-note"><?=_('A friendly label to identify this buddy.')?></div>
+                  </dd>
+                </dl>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_('Enable')?>:</dt>
+                  <dd>
+                    <select name="enable" class="align" <?=$disabled?>>
+                      <?=mk_option($data['enable'] ?? 'no', "no", _("No"));?>
+                      <?=mk_option($data['enable'] ?? 'no', "yes", _("Yes"));?>
+                    </select>
+                    <div class="buddybackup-field-note"><?=_('Enable receival of this buddy\'s backups. Buddy will not be able to connect unless this is enabled.')?></div>
+                  </dd>
+                </dl>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_("Buddy's SSH public key")?>:</dt>
+                  <dd>
+                    <input type="text" name="ssh_key" class="align" style="width: 100%; max-width: 650px; font-family: monospace;" value="<?=htmlspecialchars(trim($data['ssh_key'] ?? ''));?>" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... buddy@host" <?=$disabled?>>
+                    <div class="buddybackup-field-note"><?=_('Get this public key from your buddy.')?></div>
+                  </dd>
+                </dl>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_('Destination parent dataset')?>:</dt>
+                  <dd>
+                    <select name="destination_dataset" class="align" <?=$disabled?>>
+                      <?=datasets($data["destination_dataset"] ?? '', false)?>
+                    </select>
+                    <div class="buddybackup-field-note">
+                      <?=_('Select a dedicated parent dataset (e.g. disk1/buddy_backups). Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
+                      <?=_('This parent dataset is configured as read-only with no mountpoint (mountpoint=none) to keep incoming backups immutable and isolated.')?><br>
+                      <span class="buddybackup-destination-example"></span>
+                    </div>
+                  </dd>
+                </dl>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_('Snapshot retention')?>:</dt>
+                  <dd>
+                    <div class="buddybackup-retention-row-clean">
+                      <div class="buddybackup-retention-item-clean">
+                        <label><?=_('Hourly:')?></label>
+                        <input type="number" name="hourly" min="0" value="<?=htmlspecialchars($data['hourly'] ?? 0);?>" <?=$disabled?>>
+                      </div>
+                      <div class="buddybackup-retention-item-clean">
+                        <label><?=_('Daily:')?></label>
+                        <input type="number" name="daily" min="0" value="<?=htmlspecialchars($data['daily'] ?? 7);?>" <?=$disabled?>>
+                      </div>
+                      <div class="buddybackup-retention-item-clean">
+                        <label><?=_('Weekly:')?></label>
+                        <input type="number" name="weekly" min="0" value="<?=htmlspecialchars($data['weekly'] ?? 4);?>" <?=$disabled?>>
+                      </div>
+                      <div class="buddybackup-retention-item-clean">
+                        <label><?=_('Monthly:')?></label>
+                        <input type="number" name="monthly" min="0" value="<?=htmlspecialchars($data['monthly'] ?? 3);?>" <?=$disabled?>>
+                      </div>
+                      <div class="buddybackup-retention-item-clean">
+                        <label><?=_('Yearly:')?></label>
+                        <input type="number" name="yearly" min="0" value="<?=htmlspecialchars($data['yearly'] ?? 0);?>" <?=$disabled?>>
+                      </div>
+                    </div>
+                    <div class="buddybackup-field-note"><?=_('Sanoid policy for how many snapshots containing this buddy\'s backup should be kept.')?></div>
+                  </dd>
+                </dl>
+
+                <div class="buddybackup-card-actions" style="margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(128, 128, 128, 0.25);">
+                  <div class="buddybackup-card-actions-left">
+                    <input type="button" onclick="verify_and_submit_buddy(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+                  </div>
+                  <div>
+                    <input type="button" name="#remove" value="<?=_('Remove')?>" class="ur-btn-danger" onclick="remove_buddy(this)">
+                  </div>
+                </div>
+
+                </form>
+            </div>
+        </div>
+    <?php
+    }
+
+    if (is_array($incoming_cfg)) {
+        foreach ($incoming_cfg as $uid => $data) {
+            buddy_entry($uid, $data);
+        }
+    }
+?>
+</div>
+
+<div id="buddybackup-buddy-entry-template" style="display:none;">
+    <?php buddy_entry("", null); ?>
+</div>
+
+<div style="margin-top: 20px; padding: 12px 14px; background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px;">
+    <div style="font-weight: 600; font-size: 12px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;">
+        <span><i class="fa fa-server"></i> _(Pushing from TrueNAS SCALE, Proxmox VE, or Linux to this server?)_</span>
+        <a href="https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/" target="_blank" rel="noopener noreferrer" style="font-weight: normal; font-size: 11px;">
+            _(View forum guide)_ <i class="fa fa-external-link"></i>
+        </a>
+    </div>
+    <div class="buddybackup-field-note" style="margin: 0; font-size: 11px;">
+        _(Configure remote snapshots with the)_ <code>autosnap_</code> _(prefix so Sanoid manages retention on Unraid. Sudo mode is not supported (BuddyBackup relies on native ZFS delegation and strictly blocks sudo) — in TrueNAS replication tasks, leave 'Use Sudo For ZFS Commands' disabled, or pass)_ <code>--no-privilege-elevation</code> _(with Syncoid. Set destination snapshot retention to 'None' — destructive operations like)_ <code>zfs destroy</code> _(are blocked by BuddyBackup to keep backups immutable.)_
+    </div>
+</div>

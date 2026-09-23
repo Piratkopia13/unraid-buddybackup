@@ -27,6 +27,12 @@
         remove_ini_section($backup_cfg, $section, $backup_cfg_file);
         echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update");
     }
+    function remove_incoming_section($section) {
+        global $incoming_cfg;
+        global $incoming_cfg_file;
+        remove_ini_section($incoming_cfg, $section, $incoming_cfg_file);
+        echo shell_exec("/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update");
+    }
 
     function get_top_level_pids($filter) {
         $ret = array();
@@ -77,6 +83,9 @@
             break;
         case 'remove_backup_section':
             remove_backup_section($_POST["section"]);
+            break;
+        case 'remove_incoming_section':
+            remove_incoming_section($_POST["section"]);
             break;
         case 'kill_running_backups':
             kill_running_backups();

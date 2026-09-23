@@ -4,17 +4,46 @@ Title="Backup and restore"
 <?php
     $public_ssh_key_path = "/boot/config/plugins/$plugin/buddybackup_sender_key.pub";
     if (file_exists($public_ssh_key_path)) {
-        $public_ssh_key	= file_get_contents($public_ssh_key_path);
-        if ($public_ssh_key === false) {
+        $content = file_get_contents($public_ssh_key_path);
+        if ($content === false) {
             $public_ssh_key = "Failed to read file";
+        } else {
+            $public_ssh_key = trim($content);
         }
     } else {
-        $public_ssh_key	= "Reinstall plugin. SSH key not found.";
+        $public_ssh_key = "Reinstall plugin. SSH key not found.";
     }
 
+    $setup_script_url = "https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/deps/generic_host_setup.sh";
     $disabled = ($disable_send) ? "disabled" : "";
 ?>
 <script>
+    var bb_setup_script_url = <?=json_encode($setup_script_url)?>;
+    var bb_public_ssh_key = <?=json_encode($public_ssh_key)?>;
+
+    function shell_single_quote(value) {
+        return "'" + String(value).replace(/'/g, "'\\''") + "'";
+    }
+    function update_generic_setup_helper(form) {
+        var user = form.find('input[name="destination_user"]').val() || 'buddybackup';
+        var port = form.find('input[name="destination_port"]').val() || '22';
+        var fullDataset = (form.find('input[name="destination_dataset"]').val() || '').trim();
+        var parentDataset = 'tank/backups/unraid';
+        if (fullDataset) {
+            var lastSlash = fullDataset.lastIndexOf('/');
+            if (lastSlash > 0) {
+                parentDataset = fullDataset.substring(0, lastSlash);
+            } else {
+                parentDataset = fullDataset;
+            }
+        }
+        var cmd = 'curl -fsSL ' + bb_setup_script_url + ' | bash -s --';
+        cmd += ' --dataset ' + shell_single_quote(parentDataset);
+        cmd += ' --user ' + shell_single_quote(user);
+        cmd += ' --port ' + shell_single_quote(port);
+        cmd += ' --pubkey ' + shell_single_quote(bb_public_ssh_key);
+        form.find('.buddybackup-generic-cmd-input').val(cmd);
+    }
     function shell_escape_arg(value) {
         return String(value).replace(/(["\\$`])/g, '\\$1');
     }
@@ -46,8 +75,35 @@ Title="Backup and restore"
                 output.append("Failed! Error: "+error);
             });
     }
+    function get_backup_form(target) {
+        var $el = $(target);
+        if ($el.is("form.buddybackup-backup-entry")) {
+            return $el;
+        }
+        var form = $el.closest("form.buddybackup-backup-entry");
+        if (form.length) {
+            return form;
+        }
+        form = $el.closest(".buddybackup-entry-card").find("form.buddybackup-backup-entry");
+        if (form.length) {
+            return form;
+        }
+        var cardUid = $el.data('uid') || $el.closest("[id^='entry-']").attr("id");
+        if (cardUid) {
+            var entryId = String(cardUid).startsWith("entry-") ? cardUid : "entry-" + cardUid;
+            form = $("#" + entryId).find("form.buddybackup-backup-entry");
+            if (form.length) {
+                return form;
+            }
+        }
+        return $el.closest(".buddybackup-card").find("form.buddybackup-backup-entry");
+    }
     function start_saved_backup(form, command_name, initial_message) {
         var the_uid = form.find("input[name='#section']").val();
+        if (!the_uid) {
+            show_send_backup_error('Could not determine backup entry ID.');
+            return;
+        }
         var cmd = '<?=$rc_name?> '+command_name+' '+the_uid+' echopid';
         start_backup_command(cmd, initial_message);
     }
@@ -80,7 +136,12 @@ Title="Backup and restore"
     }
     function request_send_backup_preflight(form) {
         var the_uid = form.find("input[name='#section']").val();
+        if (!the_uid) {
+            show_send_backup_error('Could not determine backup entry ID.');
+            return;
+        }
         var cmd = '<?=$rc_name?> preflight_send_backup '+the_uid;
+        var dest_type = form.find("select[name='type']").val();
 
         $.post('/webGui/include/StartCommand.php',{cmd:cmd,start:2})
             .done(function(raw_response) {
@@ -115,35 +176,54 @@ Title="Backup and restore"
             });
     }
     function test_connection(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
-        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
-        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
-        buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+        var form = get_backup_form(btn);
+        var dest_type = form.find("select[name='type']").val();
+        if (dest_type == "remote_generic") {
+            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+            var remote_user = shell_escape_arg(form.find('input[name="destination_user"]').val() || 'buddybackup');
+            var remote_port = shell_escape_arg(form.find('input[name="destination_port"]').val() || '22');
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'" remote_generic "'+remote_user+'" "'+remote_port+'"', '_(Connection test)_', "Testing connection to "+ip+"..")
+        } else {
+            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+        }
     }
     function send_backup(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         request_send_backup_preflight(form);
     }
     function create_snapshot_and_send(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         start_saved_backup(form, 'create_snapshot_and_send', "\nCreating fresh snapshot and running backup..\n");
     }
 
     function backup_input_changed(ctx, on_change = false) {
         var form = $(ctx).parentsUntil('form').parent();
+        var card = form.closest('.buddybackup-entry-card');
+        var scope = card.length ? card : form;
         if (on_change) {
             form.find("input[name='#apply']").not('.lock').prop('disabled', false);
-            form.find('input.disable-on-unsaved').not('.lock').prop('disabled',true).addClass("lock").val(function() {
-                return this.value + ' (apply changes to do this)';
-            });
-            form.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled',true).addClass("lock");
+            scope.find('input.disable-on-unsaved').not('.lock').prop('disabled', true).addClass("lock").attr('title', '_(Apply changes to enable this)_');
+            scope.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled', true).addClass("lock");
         }
         var dest_type = form.find("select[name='type']").val();
-        if (dest_type == "remote") {
+        var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
+        if (dest_type == "remote" || dest_type == "remote_generic") {
             form.find('.buddybackup-type-remote').show();
+            form.find('.buddybackup-note-local').hide();
+            if (dest_type == "remote_generic") {
+                form.find('.buddybackup-type-generic').show();
+                form.find('.buddybackup-note-remote').hide();
+                form.find('.buddybackup-note-generic').show();
+                update_generic_setup_helper(form);
+            } else {
+                form.find('.buddybackup-type-generic').hide();
+                form.find('.buddybackup-note-remote').show();
+                form.find('.buddybackup-note-generic').hide();
+            }
             form.find('input[name="destination_dataset"]').removeAttr('list');
-
-            var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
 
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
@@ -155,12 +235,22 @@ Title="Backup and restore"
             source_dataset.val(source_dataset_val);
         } else if (dest_type == "local") {
             form.find('.buddybackup-type-remote').hide();
+            form.find('.buddybackup-type-generic').hide();
+            form.find('.buddybackup-note-remote').hide();
+            form.find('.buddybackup-note-generic').hide();
+            form.find('.buddybackup-note-local').show();
             form.find('input[name="destination_dataset"]').attr('list', 'local-datasets');
 
             var source_dataset = form.find('select[name="source_dataset"]');
             var source_dataset_val = source_dataset.val();
             source_dataset.html($('datalist#local-datasets').html());
             source_dataset.val(source_dataset_val);
+        }
+        var is_recursive = form.find("select[name='recursive']").val() == "yes";
+        if (is_recursive) {
+            form.find('.buddybackup-skip-parent-row').show();
+        } else {
+            form.find('.buddybackup-skip-parent-row').hide();
         }
     }
     $(function() { 
@@ -172,18 +262,21 @@ Title="Backup and restore"
         var template = $("#buddybackup-backup-entry-template");
         var list = $("#buddybackup-backup-list");
         var new_uid = uid();
-        var new_dataset = $("<div/>").attr("id", new_uid).html(template.html());
-        var new_form = new_dataset.find("form.buddybackup-backup-entry")
+        var new_entry = $(template.html());
+        new_entry.attr("id", "entry-" + new_uid);
+        new_entry.addClass("is-expanded");
+        new_entry.find(".buddybackup-header-chevron").removeClass("fa-chevron-right").addClass("fa-chevron-down");
+        var new_form = new_entry.find("form.buddybackup-backup-entry");
         new_form.attr("method", "POST").attr("action", "/update.php").attr("target", "progressFrame");
         new_form.find("input[name='#section']").val(new_uid);
 
         new_form.find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
             .not('.lock').each(function(){backup_input_changed(this); $(this).on('input change', function(){backup_input_changed(this, true)})});
 
-        list.append(new_dataset);
+        list.append(new_entry);
     }
     function verify_and_submit_backup(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         var dest_type = form.find("select[name='type']").val();
         var saved = form.find("input[name='#saved']").val();
         var abort = false;
@@ -201,16 +294,17 @@ Title="Backup and restore"
     }
     function remove_backup(btn) {
         swal({title:"_(Proceed)_?", text:"Remove backup", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
-            var form = $(btn).closest("form.buddybackup-backup-entry");
+            var card = $(btn).closest(".buddybackup-entry-card");
+            var form = card.find("form.buddybackup-backup-entry");
             var the_uid = form.find("input[name='#section']").val();
             var saved = form.find("input[name='#saved']").val();
             if (saved != "true") {
-                form.remove();
+                card.remove();
                 return;
             }
             $.post(api_url,{cmd:'remove_backup_section', 'section':the_uid},function(data) {
                 if (data == '') {
-                    form.remove();
+                    card.remove();
                 } else {
                     alert(data);
                 }
@@ -218,7 +312,7 @@ Title="Backup and restore"
         }});
     }
     function restore_from_destination(btn) {
-        var form = $(btn).closest("form.buddybackup-backup-entry");
+        var form = get_backup_form(btn);
         var the_uid = form.find("input[name='#section']").val();
         var saved = form.find("input[name='#saved']").val();
         if (saved != "true") {
@@ -229,101 +323,425 @@ Title="Backup and restore"
         var csrf_token = $('input[name="csrf_token"]').val();
         openBox('/plugins/<?=$plugin?>/restore_wizard.php?uid='+the_uid+'&csrf_token='+csrf_token, 'Restore snapshot wizard', 500, 600, false);
     }
-</script>
-<style>
-    .buddybackup-backup-entry table{
-        background-color: inherit;
+
+    if (typeof buddybackup_copy_key === 'undefined') {
+        function buddybackup_copy_to_clipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text).then(function() {
+                    return true;
+                }).catch(function() {
+                    return buddybackup_fallback_copy(text);
+                });
+            }
+            return Promise.resolve(buddybackup_fallback_copy(text));
+        }
+
+        function buddybackup_fallback_copy(text) {
+            var successful = false;
+            try {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.setAttribute('readonly', '');
+                ta.style.position = 'fixed';
+                ta.style.top = '0';
+                ta.style.left = '0';
+                ta.style.width = '2em';
+                ta.style.height = '2em';
+                ta.style.padding = '0';
+                ta.style.border = 'none';
+                ta.style.outline = 'none';
+                ta.style.boxShadow = 'none';
+                ta.style.background = 'transparent';
+                ta.style.opacity = '0.01';
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                ta.setSelectionRange(0, text.length);
+                successful = document.execCommand('copy');
+                document.body.removeChild(ta);
+            } catch (e) {
+                successful = false;
+            }
+            return successful;
+        }
+
+        function buddybackup_copy_key(btn, text) {
+            var $btn = $(btn);
+            var $input = $btn.siblings('input[type="text"]');
+            if (!$input.length) {
+                $input = $btn.closest('.buddybackup-field-with-btn').find('input[type="text"]');
+            }
+            if (!$input.length) {
+                $input = $('#buddybackup_public_key');
+            }
+
+            if (typeof text === 'undefined' || text === null || text === '') {
+                text = $input.val() || '';
+            }
+            text = String(text).trim();
+
+            var existingTimer = $btn.data('copy-timer');
+            if (existingTimer) {
+                clearTimeout(existingTimer);
+                $btn.removeData('copy-timer');
+            }
+
+            var isButtonTag = $btn.is('button');
+            var origHtml = $btn.data('orig-html');
+            var origVal = $btn.data('orig-val');
+            if (!origHtml && isButtonTag) {
+                origHtml = $btn.html();
+                $btn.data('orig-html', origHtml);
+            } else if (!origVal && !isButtonTag) {
+                origVal = $btn.val();
+                $btn.data('orig-val', origVal);
+            }
+
+            var $feedback = $btn.siblings('.buddybackup-copy-feedback');
+            if (!$feedback.length) {
+                $feedback = $btn.closest('.buddybackup-field-with-btn').find('.buddybackup-copy-feedback');
+            }
+
+            if ($input.length) {
+                $input.addClass('is-copied');
+                try {
+                    $input[0].focus();
+                    $input[0].select();
+                } catch (e) {}
+            }
+
+            buddybackup_copy_to_clipboard(text).then(function(success) {
+                if (success) {
+                    $btn.addClass('is-copied');
+                    if (isButtonTag) {
+                        $btn.html('<i class="fa fa-check"></i> <span><?=_("Copied!")?></span>');
+                    } else {
+                        $btn.val("<?=_('Copied!')?>");
+                    }
+                    if ($feedback.length) {
+                        $feedback.removeClass('is-error').html('<i class="fa fa-check-circle"></i> <?=_("Copied to clipboard!")?>').css('display', 'inline-flex');
+                    }
+                } else {
+                    $btn.removeClass('is-copied');
+                    if ($feedback.length) {
+                        $feedback.addClass('is-error').html('<i class="fa fa-exclamation-triangle"></i> <?=_("Press Ctrl+C to copy")?>').css('display', 'inline-flex');
+                    }
+                }
+
+                var timer = setTimeout(function() {
+                    $btn.removeClass('is-copied');
+                    if (isButtonTag) {
+                        $btn.html($btn.data('orig-html') || origHtml);
+                    } else {
+                        $btn.val($btn.data('orig-val') || origVal);
+                    }
+                    if ($input.length) {
+                        $input.removeClass('is-copied');
+                    }
+                    if ($feedback.length) {
+                        $feedback.fadeOut(200, function() {
+                            $(this).empty().css('display', 'none');
+                        });
+                    }
+                    $btn.removeData('copy-timer');
+                }, 2500);
+
+                $btn.data('copy-timer', timer);
+            });
+        }
     }
-</style>
+</script>
 
-_(Your SSH public key (send this to you buddy))_:
-: <input disabled type="text" class="align" style="opacity:1;" value="<?=$public_ssh_key;?>" <?=$disabled?>>
+<div style="margin-bottom: 16px;">
+    <dl class="buddybackup-form-dl" style="margin-bottom: 0;">
+        <dt style="padding-top: 17px;">_(Your SSH public key)_:</dt>
+        <dd>
+            <div class="buddybackup-field-with-btn buddybackup-key-row" style="max-width: 650px;">
+                <input readonly type="text" id="buddybackup_public_key" class="buddybackup-key-input" style="font-family: monospace;" value="<?=htmlspecialchars($public_ssh_key)?>" onclick="this.select()" title="<?=_('Click to select all')?>" <?=$disabled?>>
+                <button type="button" class="ur-btn buddybackup-copy-btn" onclick="buddybackup_copy_key(this)" <?=$disabled?>>
+                    <i class="fa fa-clipboard"></i> <span><?=_('Copy')?></span>
+                </button>
+                <span class="buddybackup-copy-feedback" style="display: none;"></span>
+            </div>
+            <div class="buddybackup-field-note">_(Send this to your buddy so they can add it to their incoming receiver settings.)_</div>
+        </dd>
+    </dl>
+</div>
 
-<div id="buddybackup-backup-list">
+<div class="buddybackup-section-toolbar">
+    <div>
+        <input type="button" value="_(Add Backup)_" onclick="add_backup()" <?=$disabled?>>
+    </div>
+    <div>
+        <button type="button" class="ur-btn" onclick="buddybackup_toggle_all('buddybackup-backup-list', this)">
+            <i class="fa fa-expand"></i> <span><?=_('Expand All')?></span>
+        </button>
+    </div>
+</div>
+
+<div id="buddybackup-backup-list" data-collapsed="true">
 <?php
     function backup_entry($uid, $data) {
         global $cfg;
         global $plugin;
         global $rc_script;
         global $disabled;
+        global $snapshot_cfg;
+
+        $telemetry = bb_task_telemetry($uid);
+        $is_saved = !empty($data);
+        $is_enabled = ($data['enable'] ?? '') === 'yes';
+        $cron_value = $data['backup_cron'] ?? ($is_saved ? '' : '0 0 * * *');
+        $has_cron = !empty(trim($cron_value));
+        $cron = htmlspecialchars($cron_value);
+
+        $triggering_snapshots = [];
+        if (!empty($snapshot_cfg) && is_array($snapshot_cfg)) {
+            foreach ($snapshot_cfg as $snap_uid => $snap) {
+                if (($snap['trigger'] ?? '') === $uid) {
+                    $triggering_snapshots[] = $snap['dataset'] ?? _('snapshot');
+                }
+            }
+        }
+        $is_triggered = !empty($triggering_snapshots);
+
+        $source = !empty($data['source_dataset']) ? htmlspecialchars($data['source_dataset']) : _('(New task)');
+        $type = $data['type'] ?? 'remote';
+        if ($type == 'local') {
+            $dest = 'local:' . htmlspecialchars($data['destination_dataset'] ?? '');
+        } else {
+            $dest = htmlspecialchars($data['destination_host'] ?? '') . ':' . htmlspecialchars($data['destination_dataset'] ?? '');
+        }
+
+        if (!$is_saved) {
+            $status_dot_class = "orange-text";
+            $status_text = _("New Task");
+        } else if (!$is_enabled && !$is_triggered) {
+            $status_dot_class = "grey-text";
+            $status_text = _("Disabled");
+        } else if ($telemetry["last_status"] === "failed") {
+            $status_dot_class = "red-text";
+            $status_text = _("Failed");
+        } else if (!$is_enabled && $is_triggered) {
+            $status_dot_class = $telemetry["status_class"];
+            $status_text = ($telemetry["status_label"] == "Healthy") ? _("Triggered by snapshot") : _($telemetry["status_label"]) . " " . _("(Triggered)");
+        } else if ($is_enabled && $is_triggered) {
+            $status_dot_class = $telemetry["status_class"];
+            $status_text = ($telemetry["status_label"] == "Healthy") ? _("Enabled + Triggered") : _($telemetry["status_label"]) . " " . _("(Cron + Trigger)");
+        } else {
+            $status_dot_class = $telemetry["status_class"];
+            $status_text = ($telemetry["status_label"] == "Healthy") ? _("Enabled") : _($telemetry["status_label"]);
+        }
         ?>
-        <form class="buddybackup-backup-entry buddybackup-list-entry" markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
-        <input type="hidden" name="#file" value="<?=$plugin?>/backups.cfg" <?=$disabled?>>
-        <input type="hidden" name="#section" value="<?=$uid?>">
-        <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
-        <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
-        <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
+        <div class="buddybackup-entry-card <?= (!$is_saved) ? 'is-expanded' : '' ?>" id="entry-<?=$uid?>">
+            <div class="buddybackup-entry-header" onclick="buddybackup_toggle_card(this)">
+                <div class="buddybackup-header-left">
+                    <i class="fa fa-chevron-<?= (!$is_saved) ? 'down' : 'right' ?> buddybackup-header-chevron"></i>
+                    <span class="<?=$status_dot_class?>"><i class="fa fa-circle buddybackup-status-dot"></i><?=$status_text?></span>
+                    <span class="buddybackup-header-route">
+                        <span><?=$source?></span>
+                        <span class="route-arrow"><i class="fa fa-arrow-right"></i></span>
+                        <span class="route-dest"><?=$dest?></span>
+                    </span>
+                    <? if ($is_saved): ?>
+                    <span class="buddybackup-header-telemetry">
+                        <span class="metric-item <?=$telemetry['last_ran_class']?>" title="_(Last run)_">
+                            <i class="fa fa-clock-o"></i> <?=$telemetry['last_ran']?>
+                        </span>
+                        <? if ($telemetry['dest_size'] != '-'): ?>
+                        <span class="metric-item grey-text" title="_(Destination size)_">
+                            <i class="fa fa-database"></i> <?=$telemetry['dest_size']?>
+                        </span>
+                        <? endif; ?>
+                        <? if ($has_cron): ?>
+                        <span class="metric-item grey-text" title="_(Cron schedule)_">
+                            <i class="fa fa-calendar-o"></i> (<?=$cron?>)
+                        </span>
+                        <? endif; ?>
+                        <? if ($is_triggered): ?>
+                        <span class="metric-item grey-text" title="<?=_('Triggered after snapshot of: ') . htmlspecialchars(implode(', ', $triggering_snapshots))?>">
+                            <i class="fa fa-bolt"></i> <?=_('Snapshot trigger')?>
+                        </span>
+                        <? endif; ?>
+                    </span>
+                    <? endif; ?>
+                </div>
+                <div class="buddybackup-header-right" onclick="event.stopPropagation()">
+                    <? if ($is_saved): ?>
+                    <input class="disable-on-unsaved" data-uid="<?=$uid?>" type="button" value="<?=_('Send backup now')?>" onclick="send_backup(this)" <?=$disabled?>>
+                    <? endif; ?>
+                </div>
+            </div>
 
-        _(Enable on cron schedule)_:
-        : <select name="enable" class="align" <?=$disabled?>>
-                <?=mk_option($data['enable'], "no", "_(No)_");?>
-                <?=mk_option($data['enable'], "yes", "_(Yes)_");?>
-            </select>
+            <div class="buddybackup-entry-body">
+                <form class="buddybackup-backup-entry" markdown="1" name="backup_to_buddy_form" method="POST" action="/update.php" target="progressFrame">
+                <input type="hidden" name="#file" value="<?=$plugin?>/backups.cfg" <?=$disabled?>>
+                <input type="hidden" name="#section" value="<?=$uid?>">
+                <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
+                <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
+                <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
 
-        <table>
-        <tr>
-            <th scope="col">Source</th>
-            <th scope="col">Destination</th>
-        </tr>
-        <tr><td>
-        <dl>
-            <dt>_(ZFS dataset to backup)_:</dt>
-            <dd>
-                <select name="source_dataset" class="align" <?=$disabled?>>
-                <?=datasets($data["source_dataset"], $data['type']!='local' && $cfg["AllowUnencryptedRemoteBackups"]!='yes')?>
-                </select>
-            </dd>
-        </dl>
-        <dl>
-            <dt>_(Backup child datasets)_:</dt>
-            <dd>
-                <select name="recursive" class="align" <?=$disabled?>>
-                    <?=mk_option($data['recursive'], "no", "_(No)_");?>
-                    <?=mk_option($data['recursive'], "yes", "_(Yes)_");?>
-                </select>
-            </dd>
-        </dl>
-        <dl>
-            <dt>_(Cron schedule)_:</dt>
-            <dd><input type="text" list="cron" name="backup_cron" class="align" value="<?=$data['backup_cron'];?>" <?=$disabled?>></dd>
-        </dl>
-        </td><td>
-        <dl>
-            <dt>_(Type)_:</dt>
-            <dd>
-                <select name="type" class="align" <?=$disabled?>>
-                    <?=mk_option($data['type'], "remote", "_(Remote)_");?>
-                    <?=mk_option($data['type'], "local", "_(Local)_");?>
-                </select>
-            </dd>
-        </dl>
-        <dl class="buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
-            <dt>_(Buddy's hostname or IP address)_:</dt>
-            <dd>
-                <input type="text" name="destination_host" class="align" value="<?=$data['destination_host'];?>" <?=$disabled?>>
-                <input type="button" value="_(Test connection)_" onclick="test_connection(this)" style="margin:0px;" <?=$disabled?>>
-            </dd>
-        </dl>
-        <dl>
-            <dt>_(Destination dataset)_:</dt>
-            <dd>
-                <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
-                <div class="buddybackup-field-note buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.</div>
-            </dd>
-        </dl>
-        </td>
-        </tr></table>
+                <? if ($is_saved && $telemetry['last_status'] === 'failed'): ?>
+                <div class="buddybackup-alert-banner buddybackup-alert-error">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-circle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=_('Last backup failed')?></strong>
+                            <? if (!empty($telemetry['last_error_time'])): ?>
+                            <span class="grey-text" style="font-weight:normal; margin-left:6px;">(<?=date('Y-m-d H:i', $telemetry['last_error_time'])?>)</span>
+                            <? endif; ?>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=htmlspecialchars($telemetry['last_error_message'] ?: _('Backup exited with an error.'))?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
+                </div>
+                <? elseif ($is_saved && ($telemetry['status_label'] === 'Warning' || $telemetry['status_label'] === 'Alert')): ?>
+                <div class="buddybackup-alert-banner <?=$telemetry['status_label'] === 'Alert' ? 'buddybackup-alert-error' : 'buddybackup-alert-warning'?>">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=$telemetry['status_label'] === 'Alert' ? _('Backup Critical (Overdue)') : _('Backup Warning (Overdue)')?></strong>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=_('This backup has not successfully completed in over ') . $telemetry['days_overdue'] . _(' days.') . ($telemetry['has_run'] ? (' ' . _('Last successful run: ') . $telemetry['last_ran']) : '')?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="buddybackup_scroll_to_log()"><i class="fa fa-file-text-o"></i> <?=_('View Log')?></button>
+                    </div>
+                </div>
+                <? endif; ?>
 
-        <div style="text-align:center;">
-            <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
-            <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
-            <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
-            <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
-            <input style="margin-left:50px;" type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_backup(this)">
+                <dl class="buddybackup-form-dl">
+                    <dt>_(Enable on cron schedule)_:</dt>
+                    <dd>
+                        <select name="enable" class="align" <?=$disabled?>>
+                            <?=mk_option($data['enable'], "no", "_(No)_");?>
+                            <?=mk_option($data['enable'], "yes", "_(Yes)_");?>
+                        </select>
+                    </dd>
+                </dl>
+
+                <div class="buddybackup-grid">
+                    <div>
+                        <div class="buddybackup-col-header"><?=_('Source')?></div>
+                        <dl class="buddybackup-form-dl">
+                            <dt class="buddybackup-source-dt">_(ZFS dataset to backup)_:</dt>
+                            <dd>
+                                <select name="source_dataset" class="align" <?=$disabled?>>
+                                <?=datasets($data["source_dataset"], $data['type']!='local' && $cfg["AllowUnencryptedRemoteBackups"]!='yes')?>
+                                </select>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl">
+                            <dt>_(Backup child datasets)_:</dt>
+                            <dd>
+                                <select name="recursive" class="align" <?=$disabled?>>
+                                    <?=mk_option($data['recursive'], "no", "_(No)_");?>
+                                    <?=mk_option($data['recursive'], "yes", "_(Yes)_");?>
+                                </select>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl buddybackup-skip-parent-row" <?=($data['recursive'] ?? '') !== 'yes' ? 'style="display:none;"' : ''?>>
+                            <dt>_(Skip parent dataset)_:</dt>
+                            <dd>
+                                <select name="skip_parent" class="align" <?=$disabled?>>
+                                    <?=mk_option($data['skip_parent'] ?? 'no', "no", "_(No)_");?>
+                                    <?=mk_option($data['skip_parent'] ?? 'no', "yes", "_(Yes)_");?>
+                                </select>
+                                <div class="buddybackup-field-note">_(Replicate child datasets only, skipping the root parent dataset.)_</div>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl">
+                            <dt>_(Cron schedule)_:</dt>
+                            <dd>
+                                <input type="text" list="cron" name="backup_cron" class="align" value="<?=$cron;?>" placeholder="0 0 * * *" <?=$disabled?>>
+                                <div class="buddybackup-field-note">_(Cron expression for automated runs.)_</div>
+                            </dd>
+                        </dl>
+                    </div>
+
+                    <div>
+                        <div class="buddybackup-col-header"><?=_('Destination')?></div>
+                        <dl class="buddybackup-form-dl">
+                            <dt>_(Type)_:</dt>
+                            <dd>
+                                <select name="type" class="align" <?=$disabled?>>
+                                    <?=mk_option($data['type'], "remote", "_(Remote (BuddyBackup))_");?>
+                                    <?=mk_option($data['type'], "remote_generic", "_(Remote (generic ZFS host))_");?>
+                                    <?=mk_option($data['type'], "local", "_(Local)_");?>
+                                </select>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
+                            <dt>_(Buddy's hostname or IP)_:</dt>
+                            <dd>
+                                <div class="buddybackup-field-with-btn">
+                                    <input type="text" name="destination_host" value="<?=$data['destination_host'];?>" <?=$disabled?>>
+                                    <input type="button" value="_(Test connection)_" onclick="test_connection(this)" <?=$disabled?>>
+                                </div>
+                            </dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl buddybackup-type-generic" style="display:none;">
+                            <dt>_(Remote username)_:</dt>
+                            <dd><input type="text" name="destination_user" class="align" value="<?=$data['destination_user'];?>" placeholder="buddybackup" <?=$disabled?>></dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl buddybackup-type-generic" style="display:none;">
+                            <dt>_(SSH port)_:</dt>
+                            <dd><input type="text" name="destination_port" class="align" value="<?=$data['destination_port'];?>" placeholder="22" <?=$disabled?>></dd>
+                        </dl>
+                        <dl class="buddybackup-form-dl">
+                            <dt>_(Destination dataset)_:</dt>
+                            <dd>
+                                <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
+                                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-local buddybackup-note-local" <?=($data['type']!='local')?'style="display:none;"':''?>>_(Note: local destination datasets are automatically set to read-only once synced to protect against accidental edits and ransomware.)_</div>
+                            </dd>
+                        </dl>
+                        <div class="buddybackup-type-generic" style="display:none; margin-top: 10px;">
+                            <div style="background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px; padding: 10px 12px;">
+                                <div style="font-weight: 600; font-size: 11px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;">
+                                    <span><i class="fa fa-terminal"></i> _(Remote host one-time setup)_:</span>
+                                    <a href="https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/" target="_blank" rel="noopener noreferrer" style="font-weight: normal; font-size: 11px;">
+                                        _(Setup guide)_ <i class="fa fa-external-link"></i>
+                                    </a>
+                                </div>
+                                <div class="buddybackup-field-note" style="margin-top: 0; margin-bottom: 6px;">
+                                    _(Run as root on the remote host (TrueNAS SCALE, Proxmox VE, Debian/Ubuntu) to configure the user, ZFS permissions, and SSH keys.)_
+                                </div>
+                                <div class="buddybackup-field-with-btn">
+                                    <input readonly type="text" class="buddybackup-generic-cmd-input" style="font-family: monospace; font-size: 11px;" onclick="this.select()" title="<?=_('Click to select all')?>">
+                                    <button type="button" class="ur-btn buddybackup-copy-btn" onclick="buddybackup_copy_key(this)">
+                                        <i class="fa fa-clipboard"></i> <span><?=_('Copy')?></span>
+                                    </button>
+                                    <span class="buddybackup-copy-feedback" style="display: none;"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="buddybackup-card-actions">
+                    <div class="buddybackup-card-actions-left">
+                        <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+                        <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
+                        <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
+                        <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">
+                    </div>
+                    <div>
+                        <input type="button" name="#remove" value="<?=_('Remove')?>" class="ur-btn-danger" onclick="remove_backup(this)">
+                    </div>
+                </div>
+
+                </form>
+            </div>
         </div>
-
-        </form>
-    <?
+    <?php
     }
     foreach ($backup_cfg as $uid => $data) {
         backup_entry($uid, $data);
@@ -335,4 +753,3 @@ _(Your SSH public key (send this to you buddy))_:
         backup_entry("", null);
     ?>
 </div>
-<span class="pad-left"><input type="button" value="_(Add)_" onclick="add_backup()"></span>

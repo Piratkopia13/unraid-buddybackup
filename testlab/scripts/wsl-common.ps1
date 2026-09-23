@@ -77,8 +77,7 @@ function Invoke-WslRootBash {
         }
 
         $didPushLocation = $false
-        $currentProviderPath = (Get-Location).ProviderPath
-        if ($currentProviderPath -and $currentProviderPath -match '^[\\/]{2}') {
+        if ($env:TEMP -and (Test-Path -LiteralPath $env:TEMP)) {
             Push-Location $env:TEMP
             $didPushLocation = $true
         }

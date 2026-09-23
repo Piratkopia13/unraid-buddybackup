@@ -96,7 +96,6 @@ function Get-TestLabDependencyPackagePaths {
 
     return @(
         Get-ChildItem -Path $depsRoot -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notmatch '\.md5$' } |
             Sort-Object -Property Name |
             ForEach-Object { $_.FullName }
     )

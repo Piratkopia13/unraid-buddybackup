@@ -725,6 +725,7 @@ set -euo pipefail
 
 plugin_cfg="/boot/config/plugins/buddybackup/buddybackup.cfg"
 backups_cfg="/boot/config/plugins/buddybackup/backups.cfg"
+incoming_cfg="/boot/config/plugins/buddybackup/incoming.cfg"
 
 set_ini_value() {
   local key="$1"
@@ -846,6 +847,19 @@ mkdir -p "$source_mountpoint"
 zfs create -o mountpoint="$source_mountpoint" "$source_dataset"
 printf 'node=%s\nstage=functional-smoke\n' "$node_name" > "$source_mountpoint/payload.txt"
 sync || true
+
+cat > "$incoming_cfg" <<EOF
+[1ml3g4cy]
+name="Buddy"
+enable="yes"
+destination_dataset="${receive_root_dataset}"
+ssh_key="${peer_public_key}"
+hourly="0"
+daily="7"
+weekly="4"
+monthly="3"
+yearly="0"
+EOF
 
 touch "$plugin_cfg"
 set_ini_value "ReceiveBackups" "enable" "$plugin_cfg"
@@ -1031,6 +1045,7 @@ try {
     }
 
     Write-Host "[testlab] Functional smoke: sending remote and local backups"
+    $nodeSupportsTypedSendBackup = @{}
     foreach ($pair in @(
         @{ Connection = $senderConnection; Type = "remote"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = $senderPlan.remoteHost; DestinationDataset = $senderPlan.remoteDestinationDataset; Uid = $senderPlan.remoteBackupUid; Label = "nodeA-remote-send"; Action = "send_backup" },
         @{ Connection = $senderConnection; Type = "local"; SourceDataset = $senderPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $senderPlan.localBackupDataset; Uid = $senderPlan.localBackupUid; Label = "nodeA-local-send"; Action = "send_local_backup" },
@@ -1038,7 +1053,26 @@ try {
         @{ Connection = $receiverConnection; Type = "local"; SourceDataset = $receiverPlan.sourceDataset; Recursive = "no"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Uid = $receiverPlan.localBackupUid; Label = "nodeB-local-send"; Action = "send_local_backup" }
     )) {
         $sendArgs = if ($pair.Type -eq "remote") {
-            @($pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            $nodeName = $pair.Connection.NodeName
+            if (-not $nodeSupportsTypedSendBackup.ContainsKey($nodeName)) {
+                $probeCmd = "sed -n '/^send_backup()/,/^}/p' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup | grep -q 'local type=' && echo 'typed' || echo 'legacy'"
+                $probeResult = Invoke-NodeSshCommand -NodeConnection $pair.Connection -Command $probeCmd -Label "$nodeName-probe-send-signature" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $probeResult
+                $isTyped = $true
+                if ($Execute -and $probeResult.success) {
+                    $outputStr = ($probeResult.output -join "`n").Trim()
+                    if ($outputStr -eq "legacy") {
+                        $isTyped = $false
+                    }
+                }
+                $nodeSupportsTypedSendBackup[$nodeName] = $isTyped
+            }
+
+            if ($nodeSupportsTypedSendBackup[$nodeName]) {
+                @($pair.Type, $pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            } else {
+                @($pair.SourceDataset, $pair.Recursive, $pair.DestinationHost, $pair.DestinationDataset, $pair.Uid)
+            }
         } else {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationDataset, $pair.Uid)
         }
