@@ -628,13 +628,23 @@ send_mark_received_backup() {
     local remote_user="${3:-}"
     local remote_port="${4:-}"
     
-    local cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup"
+    local base_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup"
+    local cmd="${base_cmd}"
     if [[ -n "${destination_dataset}" ]]; then
         cmd+=" $(shell_single_quote "${destination_dataset}")"
     fi
     local ssh_result
     ssh_result=$(run_remote_ssh "${destination_host}" "${cmd}" "${remote_user}" "${remote_port}" 2>&1)
     local error_code=$?
+
+    # If the targeted mark_received_backup call failed and a dataset argument was provided,
+    # retry without arguments for backwards compatibility with older plugin versions (v2026.05.29 and earlier)
+    # whose restrict_zfs allowlist only permits the exact unparameterized command.
+    if [[ $error_code -ne 0 && -n "${destination_dataset}" ]]; then
+        ssh_result=$(run_remote_ssh "${destination_host}" "${base_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        error_code=$?
+    fi
+
     if [[ $error_code -ne 0 ]]; then
         write "" "Failed to send mark_received_backup to buddy"
     fi

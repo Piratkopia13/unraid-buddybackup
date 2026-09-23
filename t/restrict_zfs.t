@@ -254,6 +254,11 @@ subtest 'allowed commands' => sub {
             expected_lines => ['would run command: /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup'],
         },
         {
+            label => 'mark received backup callback with dataset',
+            command => qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset},
+            expected_lines => ["would run command: /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset"],
+        },
+        {
             label => 'multiple allowed commands',
             command => q{echo ok; echo -n},
             expected_lines => [

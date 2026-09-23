@@ -147,6 +147,8 @@ sub assert_inventory_allowed {
 subtest 'current receiver command surface accepted by previously released allowlists' => sub {
     my $workdir = tempdir(CLEANUP => 1);
 
+    my $blocked_cmd = qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset};
+
     my $older_release_script = extract_allowlist('2025.09.13', $workdir);
     if (!defined $older_release_script) {
         plan skip_all => 'tag 2025.09.13 not available in this checkout';
@@ -156,6 +158,15 @@ subtest 'current receiver command surface accepted by previously released allowl
         '2025.09.13 buddy',
         $older_release_script,
         receiver_command_inventory(0),
+    );
+
+    # Verify that older release strictly rejects the parameterized mark_received_backup command,
+    # ensuring we test why the unparameterized fallback is required.
+    my $blocked_res = run_restrict($older_release_script, $blocked_cmd);
+    like(
+        $blocked_res->{stderr},
+        qr/^\Qblocked command: $blocked_cmd\E\r?\n?$/,
+        '2025.09.13 buddy blocks parameterized mark_received_backup (necessitating fallback)',
     );
 
     my $previous_release_script = extract_allowlist('2026.05.29', $workdir);
@@ -168,6 +179,13 @@ subtest 'current receiver command surface accepted by previously released allowl
         $previous_release_script,
         receiver_command_inventory(1),
     );
+
+    my $blocked_prev_res = run_restrict($previous_release_script, $blocked_cmd);
+    like(
+        $blocked_prev_res->{stderr},
+        qr/^\Qblocked command: $blocked_cmd\E\r?\n?$/,
+        '2026.05.29 buddy blocks parameterized mark_received_backup (necessitating fallback)',
+    );
 };
 
 subtest 'older releases still send commands the current allowlist accepts' => sub {
@@ -179,7 +197,101 @@ subtest 'older releases still send commands the current allowlist accepts' => su
         'current buddy',
         $current_script,
         receiver_command_inventory(0),
+        qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset},
     );
+};
+
+subtest 'send_mark_received_backup fallback logic' => sub {
+    my $rc_path = File::Spec->catfile(
+        $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'scripts', 'rc.buddybackup'
+    );
+    ok(-f $rc_path, 'rc.buddybackup exists');
+
+    my $bash_test = <<'BASH';
+set -e
+calls_file=$(mktemp)
+trap 'rm -f "$calls_file"' EXIT
+
+fail_param=0
+fail_base=0
+
+shell_single_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+run_remote_ssh() {
+    local host="$1"
+    local cmd="$2"
+    echo "$cmd" >> "$calls_file"
+    if [[ "$cmd" == *" mark_received_backup '"* ]]; then
+        if [[ $fail_param -eq 1 ]]; then
+            return 1
+        fi
+    elif [[ "$cmd" == *" mark_received_backup" ]]; then
+        if [[ $fail_base -eq 1 ]]; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
+write() {
+    echo "WRITE: $2"
+}
+
+# Source the send_mark_received_backup definition directly from rc.buddybackup
+eval "$(sed -n '/^send_mark_received_backup() {/,/^}/p' "$1")"
+
+# Test 1: Modern receiver (parameterized succeeds on first try)
+: > "$calls_file"
+fail_param=0
+fail_base=0
+send_mark_received_backup "buddy.example" "tank/backup/dest" "buddyuser" "22"
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 1 failed: expected 1 call, got ${#calls[@]}"; exit 1; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php mark_received_backup 'tank/backup/dest'" ]] || { echo "Test 1 cmd mismatch: ${calls[0]}"; exit 1; }
+
+# Test 2: Legacy receiver (parameterized rejected, fallback without dataset succeeds)
+: > "$calls_file"
+fail_param=1
+fail_base=0
+out=$(send_mark_received_backup "buddy.example" "tank/backup/dest" "buddyuser" "22")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 2 ]] || { echo "Test 2 failed: expected 2 calls, got ${#calls[@]}"; exit 2; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php mark_received_backup 'tank/backup/dest'" ]] || { echo "Test 2 call 0 mismatch: ${calls[0]}"; exit 2; }
+[[ "${calls[1]}" == *"/rc.buddybackup.php mark_received_backup" ]] || { echo "Test 2 call 1 mismatch: ${calls[1]}"; exit 2; }
+[[ -z "$out" ]] || { echo "Test 2 unexpected error output: $out"; exit 2; }
+
+# Test 3: Total connection failure (both calls fail -> writes failure message)
+: > "$calls_file"
+fail_param=1
+fail_base=1
+out=$(send_mark_received_backup "buddy.example" "tank/backup/dest" "buddyuser" "22")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 2 ]] || { echo "Test 3 failed: expected 2 calls, got ${#calls[@]}"; exit 3; }
+[[ "$out" == *"Failed to send mark_received_backup to buddy"* ]] || { echo "Test 3 expected failure log, got: $out"; exit 3; }
+
+# Test 4: Empty destination dataset (only 1 call made)
+: > "$calls_file"
+fail_param=0
+fail_base=0
+send_mark_received_backup "buddy.example" "" "buddyuser" "22"
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 4 failed: expected 1 call, got ${#calls[@]}"; exit 4; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php mark_received_backup" ]] || { echo "Test 4 cmd mismatch: ${calls[0]}"; exit 4; }
+
+echo "ALL_BASH_TESTS_PASSED"
+BASH
+
+    my $stdout = gensym;
+    my $stderr = gensym;
+    my $pid = open3(undef, $stdout, $stderr, 'bash', '-c', $bash_test, 'bash', $rc_path);
+    my $out = do { local $/; <$stdout> // '' };
+    my $err = do { local $/; <$stderr> // '' };
+    waitpid($pid, 0);
+
+    is($? >> 8, 0, 'send_mark_received_backup fallback test exited with 0') or diag("stderr: $err\nstdout: $out");
+    like($out, qr/ALL_BASH_TESTS_PASSED/, 'all fallback test scenarios passed');
 };
 
 done_testing();
