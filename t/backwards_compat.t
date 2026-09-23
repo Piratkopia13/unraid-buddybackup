@@ -5,7 +5,7 @@ use Cwd qw(getcwd);
 use File::Basename qw(dirname);
 use File::Spec;
 use FindBin qw($Bin);
-use File::Temp qw(tempdir);
+use File::Temp qw(tempdir tempfile);
 use IPC::Open3 qw(open3);
 use Symbol qw(gensym);
 use Test::More;
@@ -207,7 +207,14 @@ subtest 'send_mark_received_backup fallback logic' => sub {
     );
     ok(-f $rc_path, 'rc.buddybackup exists');
 
-    my $bash_test = <<'BASH';
+    open my $rc_fh, '<', $rc_path or die "Cannot open $rc_path: $!";
+    my $rc_content = do { local $/; <$rc_fh> };
+    close $rc_fh;
+
+    my ($fn_code) = $rc_content =~ m{(send_mark_received_backup\(\)\s*\{.*?\n\})}s;
+    ok(defined $fn_code, 'send_mark_received_backup function extracted from rc.buddybackup');
+
+    my $bash_test = <<'BASH_PRE';
 set -e
 calls_file=$(mktemp)
 trap 'rm -f "$calls_file"' EXIT
@@ -238,9 +245,10 @@ run_remote_ssh() {
 write() {
     echo "WRITE: $2"
 }
+BASH_PRE
 
-# Source the send_mark_received_backup definition directly from rc.buddybackup
-eval "$(sed -n '/^send_mark_received_backup() {/,/^}/p' "$1")"
+    $bash_test .= "\n" . $fn_code . "\n";
+    $bash_test .= <<'BASH_POST';
 
 # Test 1: Modern receiver (parameterized succeeds on first try)
 : > "$calls_file"
@@ -281,11 +289,16 @@ readarray -t calls < "$calls_file"
 [[ "${calls[0]}" == *"/rc.buddybackup.php mark_received_backup" ]] || { echo "Test 4 cmd mismatch: ${calls[0]}"; exit 4; }
 
 echo "ALL_BASH_TESTS_PASSED"
-BASH
+BASH_POST
 
+    my $stdin;
     my $stdout = gensym;
     my $stderr = gensym;
-    my $pid = open3(undef, $stdout, $stderr, 'bash', '-c', $bash_test, 'bash', $rc_path);
+    my $pid = open3($stdin, $stdout, $stderr, 'bash', '-s');
+    binmode($stdin, ':raw');
+    print $stdin $bash_test;
+    close $stdin;
+
     my $out = do { local $/; <$stdout> // '' };
     my $err = do { local $/; <$stderr> // '' };
     waitpid($pid, 0);

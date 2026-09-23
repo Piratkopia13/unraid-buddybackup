@@ -201,7 +201,7 @@ All user guide screenshots should be captured in Unraid Dark Mode (`theme="black
   ```xml
   <!ENTITY version      "YYYY.MM.DD">
   ```
-  *(If releasing multiple builds in a single day, append a letter suffix, e.g. `2026.09.19a`).*
+  *(If releasing multiple builds in a single day, append a letter suffix, e.g. `2026.09.23a`).*
 
 ### 4.2 Build Package & Synchronize MD5
 - [ ] **Package `buddybackup.txz`**: Build the release archive from `src/`. Ensure owner is `root:root` and file permissions are preserved.
