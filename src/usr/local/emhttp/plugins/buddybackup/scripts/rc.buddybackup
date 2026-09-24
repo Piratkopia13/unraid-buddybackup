@@ -299,25 +299,85 @@ EOF
 
 allow_buddy_dataset() {
     local dataset="$1"
+    local immutable="${2:-yes}"
     if [[ -z "${dataset}" ]]; then
         return
+    fi
+    if [[ ! "${dataset}" =~ ^[A-Za-z0-9][A-Za-z0-9_.:\ -]*(/[A-Za-z0-9][A-Za-z0-9_.:\ -]*)*$ ]]; then
+        return 1
+    fi
+    if [[ "${immutable}" != "no" ]]; then
+        immutable="yes"
+    fi
+    # If dataset does not exist in ZFS, return cleanly (e.g. pool not imported yet during boot)
+    if ! zfs list -H -o name "${dataset}" >/dev/null 2>&1; then
+        return 0
     fi
     # note: this spins up disk
     zfs allow -u "${username}" create,mount,receive,send,readonly "${dataset}" >/dev/null 2>&1
 
-    # Only apply mountpoint=none and readonly=on if dataset is a sub-dataset (contains a slash).
+    # Only apply mountpoint and readonly settings if dataset is a sub-dataset (contains a slash).
     # Never apply mountpoint=none or readonly=on to a bare pool/disk root (e.g. "disk1" or "tank"),
     # as that would unmount the root filesystem or mark the entire pool read-only.
     if [[ "${dataset}" == *"/"* ]]; then
-        local current_mp
-        current_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
-        if [[ "${current_mp}" != "none" && "${current_mp}" != "legacy" ]]; then
-            zfs unmount "${dataset}" >/dev/null 2>&1 || true
-            zfs set mountpoint=none "${dataset}" >/dev/null 2>&1 || true
+        if [[ "${immutable}" == "no" ]]; then
+            local current_mp
+            current_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
+            if [[ "${current_mp}" == "none" ]]; then
+                zfs inherit -r mountpoint "${dataset}" >/dev/null 2>&1 || true
+            fi
+            zfs set readonly=off "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r readonly "${dataset}" >/dev/null 2>&1 || true
+            zfs set exec=on "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r exec "${dataset}" >/dev/null 2>&1 || true
+            zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r setuid "${dataset}" >/dev/null 2>&1 || true
+
+            # Mount dataset and any child datasets in forward order (parent first)
+            zfs list -H -o name -r "${dataset}" 2>/dev/null | sort | while IFS= read -r ds; do
+                zfs mount "${ds}" >/dev/null 2>&1 || true
+            done
+
+            local final_mounted final_keystatus
+            final_mounted=$(zfs get -H -o value mounted "${dataset}" 2>/dev/null)
+            final_keystatus=$(zfs get -H -o value keystatus "${dataset}" 2>/dev/null)
+            if [[ "${final_mounted}" != "yes" && "${final_keystatus}" != "unavailable" ]]; then
+                local warn="BuddyBackup: Dataset '${dataset}' could not be mounted."
+                logger -t "${plugin}" "${warn}"
+                append_to_buddybackup_log "${warn}"
+                unraid_notify "${warn}" "warning"
+                return 1
+            fi
+        else
+            # Unmount children first, then parent in reverse order
+            zfs list -H -o name -r "${dataset}" 2>/dev/null | sort -r | while IFS= read -r ds; do
+                zfs unmount "${ds}" >/dev/null 2>&1 || true
+            done
+
+            local current_mp
+            current_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
+            if [[ "${current_mp}" != "none" && "${current_mp}" != "legacy" ]]; then
+                zfs set mountpoint=none "${dataset}" >/dev/null 2>&1 || true
+            fi
+            zfs set readonly=on "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r readonly "${dataset}" >/dev/null 2>&1 || true
+            zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r setuid "${dataset}" >/dev/null 2>&1 || true
+            zfs set exec=off "${dataset}" >/dev/null 2>&1 || true
+            zfs inherit -r exec "${dataset}" >/dev/null 2>&1 || true
+
+            local final_mp final_mounted any_mounted
+            final_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
+            final_mounted=$(zfs get -H -o value mounted "${dataset}" 2>/dev/null)
+            any_mounted=$(zfs list -H -o mounted -r "${dataset}" 2>/dev/null | grep -w "yes" | head -n 1)
+            if [[ ( "${final_mp}" != "none" && "${final_mp}" != "legacy" ) || "${final_mounted}" == "yes" || -n "${any_mounted}" ]]; then
+                local err="BuddyBackup: Failed to lock dataset '${dataset}'. Filesystem is currently in use by another process (stop Docker or services using this path)."
+                logger -t "${plugin}" "${err}"
+                append_to_buddybackup_log "${err}"
+                unraid_notify "${err}" "alert"
+                return 1
+            fi
         fi
-        zfs set readonly=on "${dataset}" >/dev/null 2>&1 || true
-        zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
-        zfs set exec=off "${dataset}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -1061,13 +1121,13 @@ test_connection_cmd() {
             echo "Buddy's configured receive dataset: ${remote_receive_dataset_html}<br>"
 
             if [[ -z "${destination_dataset}" ]]; then
-                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset_html}/'.</span><br>"
+                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset_html}/' or match '${remote_receive_dataset_html}'.</span><br>"
             elif [[ "${destination_dataset}" == "${remote_receive_dataset}/"* ]]; then
                 echo "Destination dataset is under the receiver's configured dataset.<br>"
             elif [[ "${destination_dataset}" == "${remote_receive_dataset}" ]]; then
-                echo "<span style='color:red'>Destination dataset must be a child dataset under '${remote_receive_dataset_html}', not the parent dataset itself.</span><br>"
+                echo "Destination dataset matches the receiver's configured dataset.<br>"
             else
-                echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${remote_receive_dataset_html}/'.</span><br>"
+                echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${remote_receive_dataset_html}/' or match it.</span><br>"
             fi
         elif [[ "${zfs_probe_result}" != "ok" ]]; then
             if [[ -z "${zfs_probe_result}" ]] && [[ -n "${destination_dataset}" ]]; then
@@ -1597,7 +1657,8 @@ case "$1" in
         setup_buddy_user
     ;;
     ('allow_buddy_dataset')
-        allow_buddy_dataset "${2}"
+        allow_buddy_dataset "${2}" "${3:-yes}"
+        exit $?
     ;;
     ('enable_backups_from_buddy')
         enable_backups_from_buddy
