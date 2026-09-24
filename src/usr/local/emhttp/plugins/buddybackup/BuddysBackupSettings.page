@@ -236,7 +236,7 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                             <strong><?=$telemetry['status_label'] === 'Alert' ? _('Buddy Inactive (Critical)') : _('Buddy Inactive (Warning)')?></strong>
                         </div>
                         <div class="buddybackup-alert-message">
-                            <?=_('No incoming backup received from this buddy in over ') . $telemetry['days_overdue'] . _(' days. Last received: ') . $telemetry['last_ran']?>
+                            <?=sprintf(_('No incoming backup received from this buddy in over %s days. Last received: %s'), $telemetry['days_overdue'], $telemetry['last_ran'])?>
                         </div>
                     </div>
                     <div class="buddybackup-alert-actions">

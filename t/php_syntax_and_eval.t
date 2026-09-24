@@ -382,4 +382,20 @@ subtest "Progress modal Done transition and skip_parent configuration" => sub {
     like($sh_content, qr/--skip-parent/, "rc.buddybackup includes --skip-parent syncoid flag support");
 };
 
+subtest "Overdue alert message formatting" => sub {
+    my $buddy_page = File::Spec->catfile($plugin_dir, "BuddysBackupSettings.page");
+    open my $fh, "<", $buddy_page or die "Cannot open $buddy_page: $!";
+    my $buddy_content = do { local $/; <$fh> };
+    close $fh;
+
+    like($buddy_content, qr/sprintf\(_\('No incoming backup received from this buddy in over %s days\. Last received: %s'\)/, "BuddysBackupSettings.page formats overdue warning with sprintf and proper spaces");
+
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $backups_content = do { local $/; <$bfh> };
+    close $bfh;
+
+    like($backups_content, qr/sprintf\(_\('This backup has not successfully completed in over %s days\. Last successful run: %s'\)/, "Backups.page formats overdue warning with sprintf and proper spaces");
+};
+
 done_testing();
