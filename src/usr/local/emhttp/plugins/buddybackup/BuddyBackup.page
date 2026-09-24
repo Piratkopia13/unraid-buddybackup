@@ -412,7 +412,7 @@ Tag="buddybackup"
         if (typeof get_log === 'function') {
             get_log();
         }
-        var logEl = document.getElementById('buddybackup-log') || document.getElementById('buddybackup-log-section');
+        var logEl = document.getElementById('buddybackup-log-section') || document.getElementById('buddybackup-log');
         if (logEl) {
             var panel = $(logEl).closest('[role="tabpanel"], .tab-content');
             if (panel.length && panel.attr('id')) {
@@ -423,8 +423,9 @@ Tag="buddybackup"
             }
             setTimeout(function() {
                 logEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                if (typeof logEl.focus === 'function') {
-                    logEl.focus();
+                var ta = document.getElementById('buddybackup-log');
+                if (ta) {
+                    ta.scrollTop = ta.scrollHeight;
                 }
             }, 50);
         }
