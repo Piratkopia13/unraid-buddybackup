@@ -2642,12 +2642,13 @@ chmod 700 "$post_boot_refresh_script"
         default {
             throw "Unknown scenario: $Scenario"
         }
-    } finally {
-        if ($results.Count -gt 0 -and (-not [string]::IsNullOrWhiteSpace($CellDir))) {
-            $scenarioPath = Join-Path -Path $CellDir -ChildPath ("scenario-{0}.json" -f $Scenario)
-            $results | ConvertTo-Json -Depth 8 | Set-Content -Path $scenarioPath
-        }
     }
+} finally {
+    if ($results.Count -gt 0 -and (-not [string]::IsNullOrWhiteSpace($CellDir))) {
+        $scenarioPath = Join-Path -Path $CellDir -ChildPath ("scenario-{0}.json" -f $Scenario)
+        $results | ConvertTo-Json -Depth 8 | Set-Content -Path $scenarioPath
+    }
+}
 
     $failed = @($results | Where-Object { -not $_.Success })
     if ($failed.Count -gt 0) {
