@@ -214,12 +214,19 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
             $some_children_key_locked = $has_children and ($mount_status['children_encrypted_locked'] > 0);
 
             if ($cfg_immutable) {
-                if ($is_mounted or ($mp !== 'none' and $mp !== 'legacy') or ($mount_status['children_mounted'] ?? 0) > 0) {
+                $is_subdataset = (strpos($dest_raw, '/') !== false);
+                $readonly_failed = ($is_subdataset and !$is_readonly);
+                if ($readonly_failed or $is_mounted or ($mp !== 'none' and $mp !== 'legacy') or ($mount_status['children_mounted'] ?? 0) > 0) {
                     $ds_pill_label = _('Lock Failed');
                     $ds_pill_class = 'red-text';
                     $ds_pill_icon = 'fa-exclamation-triangle';
-                    $ds_pill_title = _('Dataset is still mounted or in use');
-                    $ds_disk_desc = _('Failed to lock dataset (filesystem is in use by another process)');
+                    if ($readonly_failed and !$is_mounted and ($mp === 'none' or $mp === 'legacy')) {
+                        $ds_pill_title = _('Dataset is unmounted but is not set to read-only');
+                        $ds_disk_desc = _('Failed to lock dataset (dataset is not read-only)');
+                    } else {
+                        $ds_pill_title = _('Dataset is still mounted or in use');
+                        $ds_disk_desc = _('Failed to lock dataset (filesystem is in use by another process)');
+                    }
                 } else {
                     $ds_pill_label = _('Locked');
                     $ds_pill_class = 'grey-text';

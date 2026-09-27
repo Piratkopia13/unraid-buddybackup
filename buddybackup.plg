@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.09.27">
+  <!ENTITY version      "2026.09.27a">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "72e7aeb67d0dfd5ceeec8ef1f34c74f6">
+  <!ENTITY pkgMD5        "0c2fe31494c30e2441b005ce5d09146c">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,10 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.09.27a
+- Fix destination dataset immutability and property inheritance to ensure readonly=on is preserved for TrueNAS replication tasks and child datasets
+- Fix WebGUI status check to verify destination dataset read-only enforcement
 
 ###2026.09.27
 - Add 'Immutable dataset' option for incoming buddy configurations to control whether received backups are kept write-protected and unmounted
