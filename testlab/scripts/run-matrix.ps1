@@ -2421,6 +2421,20 @@ function Run-Scenario {
 
                 if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
                     $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                    if (-not $senderCompare.Success -and $senderCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeA (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeA-post-upgrade-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $senderAfter = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$DoExecute
+                            $results += $senderAfter.Result
+                            $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                            if ($senderCompare.Success -or ($senderCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
+                    }
                     $results += [pscustomobject]@{
                         Label = 'nodeA-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
@@ -2432,6 +2446,20 @@ function Run-Scenario {
 
                 if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
                     $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                    if (-not $receiverCompare.Success -and $receiverCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeB (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeB-post-upgrade-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$DoExecute
+                            $results += $receiverAfter.Result
+                            $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                            if ($receiverCompare.Success -or ($receiverCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
+                    }
                     $results += [pscustomobject]@{
                         Label = 'nodeB-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
@@ -2585,12 +2613,18 @@ chmod 700 "$post_boot_refresh_script"
 
                     $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
                     if (-not $stateCompare.Success -and $stateCompare.Error -like "*knownHostsKeyMaterialSha256*") {
-                        Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-reboot for $($node.Name)"
-                        $refreshResult = Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "$($node.Name)-post-reboot-refresh-retry" -DoExecute:$DoExecute
-                        $results += $refreshResult
-                        $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
-                        $results += $afterSnapshot.Result
-                        $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-reboot for $($node.Name) (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "$($node.Name)-post-reboot-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
+                            $results += $afterSnapshot.Result
+                            $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
+                            if ($stateCompare.Success -or ($stateCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
                     }
 
                     $results += [pscustomobject]@{
