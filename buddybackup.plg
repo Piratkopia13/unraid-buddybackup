@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.09.23">
+  <!ENTITY version      "2026.09.27">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "60552c0f2f3bd5d80f88f97d42b13ff8">
+  <!ENTITY pkgMD5        "0939ed0aba13c0bfb2e9c5a7f1f1470a">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,11 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.09.27
+- Add 'Immutable dataset' option for incoming buddy configurations to control whether received backups are kept write-protected and unmounted
+- Add live dataset mount status indicators (Locked, Mounted, Key Locked, Lock Failed) with a status banner to retry locking busy datasets
+- Support destination dataset matching the receiver's parent dataset when replicating child datasets with 'Skip parent dataset'
 
 ###2026.09.23
 - Support for generic OpenZFS sources and destinations (TrueNAS SCALE, Proxmox VE, Debian/Ubuntu) with raw encrypted sends and zero-knowledge storage
