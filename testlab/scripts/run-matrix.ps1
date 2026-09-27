@@ -1196,12 +1196,22 @@ function Wait-ForRebootCycle {
             }
         }
 
+        if ($SettleSeconds -gt 0) {
+            Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
+            Start-Sleep -Seconds $SettleSeconds
+        }
+
         return [pscustomobject]@{
             Success = $true
             Error = $null
             BootId = $confirmedBootId
             ReadyResult = $readyResult.Result
         }
+    }
+
+    if ($SettleSeconds -gt 0) {
+        Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
+        Start-Sleep -Seconds $SettleSeconds
     }
 
     return [pscustomobject]@{

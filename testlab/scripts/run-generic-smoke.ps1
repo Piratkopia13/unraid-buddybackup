@@ -273,7 +273,7 @@ function Test-IsTransientSshFailure {
         return $false
     }
 
-    if ([int]$Result.exitCode -ne 255) {
+    if ([int]$Result.exitCode -notin @(255, -1)) {
         return $false
     }
 

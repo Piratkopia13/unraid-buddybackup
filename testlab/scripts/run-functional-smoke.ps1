@@ -445,7 +445,7 @@ function Test-IsTransientSshFailure {
         return $false
     }
 
-    if ([int]$Result.exitCode -ne 255) {
+    if ([int]$Result.exitCode -notin @(255, -1)) {
         return $false
     }
 
@@ -476,7 +476,7 @@ function Test-IsRetryableTestConnectionFailure {
 
     $outputText = Get-ResultOutputText -Result $Result
     if ([string]::IsNullOrWhiteSpace($outputText)) {
-        return [int]$Result.exitCode -eq 255
+        return [int]$Result.exitCode -in @(255, -1)
     }
 
     return $outputText -match '(?i)Host key verification failed|SSH security validation failed'
