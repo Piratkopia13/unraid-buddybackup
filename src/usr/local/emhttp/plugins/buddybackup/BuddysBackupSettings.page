@@ -17,12 +17,24 @@ function is_dataset_overlapping(dsA, dsB) {
   return dsA === dsB || dsA.startsWith(dsB + '/') || dsB.startsWith(dsA + '/');
 }
 
+function update_buddy_immutable_warning(el) {
+  if (!el) return;
+  var form = $(el).closest('form.buddybackup-incoming-entry');
+  var is_immutable = form.find('select[name=immutable]').val() !== 'no';
+  if (is_immutable) {
+    form.find('.buddybackup-immutable-warning').hide();
+  } else {
+    form.find('.buddybackup-immutable-warning').show();
+  }
+}
+
 function buddy_input_changed(el, on_change) {
   var form = $(el).closest('form.buddybackup-incoming-entry');
   if (on_change) {
     form.find("input[name='#apply']").not('.lock').prop('disabled', false);
   }
   update_buddy_example(form.find('select[name=destination_dataset]')[0]);
+  update_buddy_immutable_warning(form.find('select[name=immutable]')[0]);
 }
 
 $(function() {
@@ -32,6 +44,7 @@ $(function() {
       buddy_input_changed(this, true);
     });
     update_buddy_example(form.find('select[name=destination_dataset]')[0]);
+    update_buddy_immutable_warning(form.find('select[name=immutable]')[0]);
   });
 });
 
@@ -53,6 +66,7 @@ function add_buddy() {
 
   new_form.find("input[name='#apply']").not('.lock').prop('disabled', false);
   update_buddy_example(new_form.find('select[name=destination_dataset]')[0]);
+  update_buddy_immutable_warning(new_form.find('select[name=immutable]')[0]);
 
   list.append(new_entry);
 }
@@ -179,6 +193,82 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
 
         $telemetry = bb_task_telemetry($uid, true);
 
+        $dest_raw = $data['destination_dataset'] ?? '';
+        $mount_status = (!empty($dest_raw) and $dest_raw !== 'none') ? bb_dataset_mount_status($dest_raw) : null;
+
+        $ds_pill_label = "";
+        $ds_pill_class = "";
+        $ds_pill_icon = "";
+        $ds_pill_title = "";
+        $ds_disk_desc = "";
+
+        if ($mount_status) {
+            $is_mounted = ($mount_status['mounted'] ?? '') === 'yes';
+            $is_readonly = ($mount_status['readonly'] ?? '') === 'on';
+            $is_key_unavailable = ($mount_status['keystatus'] ?? '') === 'unavailable';
+            $mp = $mount_status['mountpoint'] ?? '';
+            $cfg_immutable = ($data['immutable'] ?? 'yes') === 'yes';
+
+            $has_children = ($mount_status['children_count'] ?? 0) > 0;
+            $all_children_key_locked = $has_children and ($mount_status['children_encrypted_locked'] === $mount_status['children_count']);
+            $some_children_key_locked = $has_children and ($mount_status['children_encrypted_locked'] > 0);
+
+            if ($cfg_immutable) {
+                if ($is_mounted or ($mp !== 'none' and $mp !== 'legacy') or ($mount_status['children_mounted'] ?? 0) > 0) {
+                    $ds_pill_label = _('Lock Failed');
+                    $ds_pill_class = 'red-text';
+                    $ds_pill_icon = 'fa-exclamation-triangle';
+                    $ds_pill_title = _('Dataset is still mounted or in use');
+                    $ds_disk_desc = _('Failed to lock dataset (filesystem is in use by another process)');
+                } else {
+                    $ds_pill_label = _('Locked');
+                    $ds_pill_class = 'grey-text';
+                    $ds_pill_icon = 'fa-lock';
+                    if ($is_key_unavailable or $some_children_key_locked) {
+                        $ds_pill_title = _('Dataset is locked, unmounted, and key is not loaded');
+                        $ds_disk_desc = _('Locked and unmounted (encryption key not loaded)');
+                    } else {
+                        $ds_pill_title = _('Dataset is locked and unmounted');
+                        $ds_disk_desc = _('Locked and unmounted');
+                    }
+                }
+            } else {
+                if ($is_key_unavailable) {
+                    $ds_pill_label = _('Key Locked');
+                    $ds_pill_class = 'orange-text';
+                    $ds_pill_icon = 'fa-key';
+                    $ds_pill_title = _('Encryption key is not loaded on this server');
+                    $ds_disk_desc = _('Encryption key not loaded (dataset cannot mount without key)');
+                } else if ($is_mounted) {
+                    if ($all_children_key_locked) {
+                        $ds_pill_label = _('Key Locked');
+                        $ds_pill_class = 'orange-text';
+                        $ds_pill_icon = 'fa-key';
+                        $ds_pill_title = sprintf(_('Mounted at %s (child datasets are encrypted and locked)'), htmlspecialchars($mp));
+                        $ds_disk_desc = sprintf(_('Mounted at %s (received child datasets are encrypted; cannot mount without key)'), htmlspecialchars($mp));
+                    } else if ($some_children_key_locked) {
+                        $ds_pill_label = _('Mounted (Partial)');
+                        $ds_pill_class = 'orange-text';
+                        $ds_pill_icon = 'fa-folder-open';
+                        $ds_pill_title = sprintf(_('Mounted at %s (some child datasets are encrypted and locked)'), htmlspecialchars($mp));
+                        $ds_disk_desc = sprintf(_('Mounted at %s (some child datasets are encrypted; cannot mount without key)'), htmlspecialchars($mp));
+                    } else {
+                        $ds_pill_label = _('Mounted');
+                        $ds_pill_class = 'green-text';
+                        $ds_pill_icon = 'fa-folder-open';
+                        $ds_pill_title = sprintf(_('Mounted at %s'), htmlspecialchars($mp));
+                        $ds_disk_desc = sprintf(_('Mounted at %s'), htmlspecialchars($mp)) . ($is_readonly ? _(' (Read-only)') : _(' (Read-write)'));
+                    }
+                } else {
+                    $ds_pill_label = _('Not Mounted');
+                    $ds_pill_class = 'red-text';
+                    $ds_pill_icon = 'fa-exclamation-triangle';
+                    $ds_pill_title = _('Dataset is not mounted');
+                    $ds_disk_desc = sprintf(_('Unmounted (mountpoint=%s, readonly=%s)'), htmlspecialchars($mp), htmlspecialchars($mount_status['readonly'] ?? ''));
+                }
+            }
+        }
+
         if (!$is_saved) {
             $status_dot_class = "orange-text";
             $status_text = _("New Buddy");
@@ -193,10 +283,10 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
             $status_text = ($telemetry["status_label"] == "Healthy") ? _("Enabled") : _($telemetry["status_label"]);
         }
         ?>
-        <div class="buddybackup-entry-card <?= (!$is_saved) ? 'is-expanded' : '' ?>" id="entry-<?=$uid?>">
+        <div class="buddybackup-entry-card <?= (!$is_saved or $ds_pill_label === _('Lock Failed')) ? 'is-expanded' : '' ?>" id="entry-<?=htmlspecialchars($uid, ENT_QUOTES)?>">
             <div class="buddybackup-entry-header" onclick="buddybackup_toggle_card(this)">
                 <div class="buddybackup-header-left">
-                    <i class="fa fa-chevron-<?= (!$is_saved) ? 'down' : 'right' ?> buddybackup-header-chevron"></i>
+                    <i class="fa fa-chevron-<?= (!$is_saved or $ds_pill_label === _('Lock Failed')) ? 'down' : 'right' ?> buddybackup-header-chevron"></i>
                     <span class="<?=$status_dot_class?>"><i class="fa fa-circle buddybackup-status-dot"></i><?=$status_text?></span>
                     <span class="buddybackup-header-route">
                         <span><i class="fa fa-user-circle"></i> <?=$buddy_name?></span>
@@ -204,8 +294,8 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                         <span class="route-dest"><?=$dest?></span>
                     </span>
                     <?php if ($is_saved): ?>
-                    <?php if (!empty($telemetry['has_run'])): ?>
                     <span class="buddybackup-header-telemetry">
+                        <?php if (!empty($telemetry['has_run'])): ?>
                         <span class="metric-item <?=$telemetry['last_ran_class']?>" title="<?=_('Last received backup')?>">
                             <i class="fa fa-clock-o"></i> <?=$telemetry['last_ran']?>
                         </span>
@@ -214,8 +304,13 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                             <i class="fa fa-database"></i> <?=$telemetry['dest_size']?>
                         </span>
                         <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($ds_pill_label): ?>
+                        <span class="metric-item <?=$ds_pill_class?>" title="<?=htmlspecialchars($ds_pill_title, ENT_QUOTES)?>">
+                            <i class="fa <?=$ds_pill_icon?>"></i> <?=$ds_pill_label?>
+                        </span>
+                        <?php endif; ?>
                     </span>
-                    <?php endif; ?>
                     <?php endif; ?>
                 </div>
             </div>
@@ -223,10 +318,27 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
             <div class="buddybackup-entry-body">
                 <form class="buddybackup-incoming-entry" markdown="1" method="POST" action="/update.php" target="progressFrame">
                 <input type="hidden" name="#file" value="<?=$plugin?>/incoming.cfg" <?=$disabled?>>
-                <input type="hidden" name="#section" value="<?=$uid?>">
+                <input type="hidden" name="#section" value="<?=htmlspecialchars($uid, ENT_QUOTES)?>">
                 <input type="hidden" name="#saved" value="<?=($data)?'true':'false'?>">
                 <input type="hidden" name="#command" value="<?=$rc_script?>" <?=$disabled?>>
                 <input type="hidden" name="#arg[1]" value="update" <?=$disabled?>>
+
+                <?php if ($is_saved and $is_enabled and $ds_pill_label === _('Lock Failed')): ?>
+                <div class="buddybackup-alert-banner buddybackup-alert-error" style="margin-bottom: 18px;">
+                    <div class="buddybackup-alert-icon"><i class="fa fa-exclamation-triangle"></i></div>
+                    <div class="buddybackup-alert-content">
+                        <div class="buddybackup-alert-title">
+                            <strong><?=_('Lockdown Blocked (Filesystem In Use)')?></strong>
+                        </div>
+                        <div class="buddybackup-alert-message">
+                            <?=_('The dataset could not be locked because files are in use by an active process on this server (e.g. Docker container, terminal shell, or SMB connection). Stop any processes accessing this path and retry.')?>
+                        </div>
+                    </div>
+                    <div class="buddybackup-alert-actions">
+                        <button type="button" class="alt" onclick="verify_and_submit_buddy(this)"><i class="fa fa-refresh"></i> <?=_('Retry Lock')?></button>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <?php if ($is_saved and $is_enabled and !empty($telemetry['has_run']) and ($telemetry['status_label'] === 'Warning' or $telemetry['status_label'] === 'Alert')): ?>
                 <div class="buddybackup-alert-banner <?=$telemetry['status_label'] === 'Alert' ? 'buddybackup-alert-error' : 'buddybackup-alert-warning'?>" style="margin-bottom: 18px;">
@@ -236,7 +348,7 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                             <strong><?=$telemetry['status_label'] === 'Alert' ? _('Buddy Inactive (Critical)') : _('Buddy Inactive (Warning)')?></strong>
                         </div>
                         <div class="buddybackup-alert-message">
-                            <?=_('No incoming backup received from this buddy in over ') . $telemetry['days_overdue'] . _(' days. Last received: ') . $telemetry['last_ran']?>
+                            <?=sprintf(_('No incoming backup received from this buddy in over %s days. Last received: %s'), $telemetry['days_overdue'], $telemetry['last_ran'])?>
                         </div>
                     </div>
                     <div class="buddybackup-alert-actions">
@@ -280,9 +392,29 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                     </select>
                     <div class="buddybackup-field-note">
                       <?=_('Select a dedicated parent dataset (e.g. disk1/buddy_backups). Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
-                      <?=_('This parent dataset is configured as read-only with no mountpoint (mountpoint=none) to keep incoming backups immutable and isolated.')?><br>
                       <span class="buddybackup-destination-example"></span>
                     </div>
+                  </dd>
+                </dl>
+
+                <dl class="buddybackup-form-dl">
+                  <dt><?=_('Immutable dataset')?>:</dt>
+                  <dd>
+                    <select name="immutable" class="align" <?=$disabled?>>
+                      <?=mk_option($data['immutable'] ?? 'yes', "yes", _("Yes"));?>
+                      <?=mk_option($data['immutable'] ?? 'yes', "no", _("No"));?>
+                    </select>
+                    <div class="buddybackup-field-note">
+                      <?=_('When enabled (recommended), sets mountpoint=none, readonly=on, and disables binary execution to keep received datasets immutable and isolated from the host.')?>
+                    </div>
+                    <div class="buddybackup-field-note red-text buddybackup-immutable-warning" style="<?=($data['immutable'] ?? 'yes') === 'no' ? '' : 'display:none;'?>">
+                      <i class="fa fa-exclamation-triangle"></i> <?=_('Warning: Disabling immutability allows received datasets to mount directly on the host, removes write protection, and permits binary execution. Only disable this if you fully trust the sender and understand the security and data integrity risks.')?>
+                    </div>
+                    <?php if ($ds_disk_desc): ?>
+                    <div class="buddybackup-field-note <?=$ds_pill_class?>" style="margin-top: 4px;">
+                      <i class="fa <?=$ds_pill_icon?>"></i> <strong><?=_('Disk status:')?></strong> <?=$ds_disk_desc?>
+                    </div>
+                    <?php endif; ?>
                   </dd>
                 </dl>
 

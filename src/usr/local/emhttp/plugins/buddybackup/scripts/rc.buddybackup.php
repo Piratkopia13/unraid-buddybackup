@@ -103,10 +103,6 @@ function is_valid_zfs_dataset_name($dataset) {
     return true;
 }
 
-function is_valid_remote_host($host) {
-    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $host) === 1;
-}
-
 function normalize_remote_identity($user, $port, &$error_message = null) {
     $user = trim((string)$user);
     $port = trim((string)$port);
@@ -378,6 +374,7 @@ function ensure_incoming_config_migrated() {
                     "name" => $buddy_name,
                     "enable" => (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no",
                     "destination_dataset" => $cfg["ReceiveDestinationDataset"] ?? "",
+                    "immutable" => "yes",
                     "ssh_key" => $key,
                     "hourly" => $cfg["ReceiveDestinationRententionHourly"] ?? 0,
                     "daily" => $cfg["ReceiveDestinationRententionDaily"] ?? 7,
@@ -454,11 +451,20 @@ function sync_incoming_buddies() {
             $first_dataset = $dataset;
         }
 
+        $immutable = (($buddy['immutable'] ?? 'yes') === 'no') ? 'no' : 'yes';
+
         if (strpos($dataset, '/') === false) {
             BB_LOG("Destination parent dataset '$dataset' is a pool root; mountpoint=none and readonly=on skipped to avoid unmounting pool root.");
         }
 
-        passthru(build_shell_command(array($rc, 'allow_buddy_dataset', $dataset)));
+        passthru(build_shell_command(array($rc, 'allow_buddy_dataset', $dataset, $immutable)), $allow_rc);
+        if ($allow_rc !== 0) {
+            if ($immutable === 'yes') {
+                BB_WARN("Failed to lock dataset '$dataset' for buddy UID '$uid' (filesystem may be in use).");
+            } else {
+                BB_WARN("Failed to mount or configure dataset '$dataset' for buddy UID '$uid'.");
+            }
+        }
 
         $raw_key = trim($buddy['ssh_key'] ?? '');
         if ($raw_key === '') continue;

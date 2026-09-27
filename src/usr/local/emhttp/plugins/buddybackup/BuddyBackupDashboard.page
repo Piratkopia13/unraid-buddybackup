@@ -194,15 +194,15 @@ foreach ($bb_enabled_backups as $uid => $bcfg) {
 
   $schedule_badge = "";
   if ($is_triggered) {
-    $trigger_title = _("Triggered after snapshot of: ") . htmlspecialchars(implode(', ', $bb_triggering_snaps[$uid]));
+    $trigger_title = sprintf(_("Triggered after snapshot of: %s"), htmlspecialchars(implode(', ', $bb_triggering_snaps[$uid])));
     $schedule_badge .= ' <i class="fa fa-bolt orange-text" title="' . $trigger_title . '"></i>';
   }
   if ($has_cron) {
-    $cron_title = _("Cron schedule: ") . htmlspecialchars($cron_expr);
+    $cron_title = sprintf(_("Cron schedule: %s"), htmlspecialchars($cron_expr));
     $schedule_badge .= ' <i class="fa fa-calendar-o grey-text" title="' . $cron_title . '"></i>';
   }
 
-  $status_tooltip = _($telemetry["status_label"]) . " (" . _("Last run: ") . $telemetry["last_ran"] . ")";
+  $status_tooltip = _($telemetry["status_label"]) . " (" . sprintf(_("Last run: %s"), $telemetry["last_ran"]) . ")";
 
   $bb_backups_table_content .= <<<EOT
     <tr class="buddybackup-dash-row">
@@ -242,7 +242,7 @@ if (is_array($bb_incoming_cfg)) {
     $dest_ds = htmlspecialchars($dest_ds_raw);
     $buddy_telemetry = bb_task_telemetry($uid, true, $bb_cfg);
     $buddy_status_text = strtolower(_($buddy_telemetry["status_label"]));
-    $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . _("Last received: ") . $buddy_telemetry["last_ran"] . ")";
+    $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . sprintf(_("Last received: %s"), $buddy_telemetry["last_ran"]) . ")";
 
     $bb_buddys_backup_table_content .= <<<EOT
       <tr class="buddybackup-dash-row">
@@ -273,7 +273,7 @@ if (is_array($bb_incoming_cfg)) {
   $buddy_telemetry = bb_task_telemetry("", true, $bb_cfg);
   $buddy_title = str_replace(array('&apos;', '&#39;', '&#039;'), "'", _("Buddy's Backup"));
   $buddy_status_text = strtolower(_($buddy_telemetry["status_label"]));
-  $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . _("Last received: ") . $buddy_telemetry["last_ran"] . ")";
+  $buddy_status_tooltip = _($buddy_telemetry["status_label"]) . " (" . sprintf(_("Last received: %s"), $buddy_telemetry["last_ran"]) . ")";
 
   $bb_buddys_backup_table_content = <<<EOT
     <tr class="buddybackup-dash-row">

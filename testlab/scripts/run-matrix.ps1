@@ -480,6 +480,16 @@ if ! grep -Eq '^[[:space:]]*Match[[:space:]]+User[[:space:]]+buddybackup([[:spac
     exit 1
 fi
 
+if pgrep -f 'testlab-postboot-refresh.sh' >/dev/null 2>&1; then
+    echo "testlab-postboot-refresh is still running" >&2
+    exit 1
+fi
+
+if pgrep -f 'rc.buddybackup.php update' >/dev/null 2>&1; then
+    echo "rc.buddybackup.php update is still running" >&2
+    exit 1
+fi
+
 remote_hosts_configured=0
 if [ -f "$plugin_root/backups.cfg" ] && grep -Eq '^destination_host="' "$plugin_root/backups.cfg"; then
     remote_hosts_configured=1
@@ -1196,12 +1206,22 @@ function Wait-ForRebootCycle {
             }
         }
 
+        if ($SettleSeconds -gt 0) {
+            Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
+            Start-Sleep -Seconds $SettleSeconds
+        }
+
         return [pscustomobject]@{
             Success = $true
             Error = $null
             BootId = $confirmedBootId
             ReadyResult = $readyResult.Result
         }
+    }
+
+    if ($SettleSeconds -gt 0) {
+        Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
+        Start-Sleep -Seconds $SettleSeconds
     }
 
     return [pscustomobject]@{
@@ -1567,7 +1587,8 @@ persist_peer_forward_rule() {
         !skip { print }
     ' "$go_file" > "$tmp_go"
 
-    cat >> "$tmp_go" <<EOF
+    local rule_block
+    rule_block=$(cat <<EOF
 
 $start_marker
 if command -v iptables >/dev/null 2>&1; then
@@ -1576,6 +1597,18 @@ if command -v iptables >/dev/null 2>&1; then
 fi
 $end_marker
 EOF
+)
+
+    if grep -q '#BUDDYBACKUP_TESTLAB_POSTBOOT_REFRESH_BEGIN' "$tmp_go" 2>/dev/null; then
+        awk -v rule="$rule_block" '
+            $0 ~ /^#BUDDYBACKUP_TESTLAB_POSTBOOT_REFRESH_BEGIN/ {
+                print rule
+            }
+            { print }
+        ' "$tmp_go" > "${tmp_go}.2" && mv "${tmp_go}.2" "$tmp_go"
+    else
+        printf '%s\n' "$rule_block" >> "$tmp_go"
+    fi
 
     mv "$tmp_go" "$go_file"
 }
@@ -2244,7 +2277,8 @@ function Run-Scenario {
 
     Write-Host "[testlab] Starting scenario '$Scenario' for cell $($Cell.id)"
 
-    switch ($Scenario) {
+    try {
+        switch ($Scenario) {
         "fresh-install" {
             $results += Install-Plugin -Lab $Lab -NodeConnection $sender -PluginRequest $Cell.nodeAPluginRequest -DoExecute:$DoExecute
             $results += Install-Plugin -Lab $Lab -NodeConnection $receiver -PluginRequest $Cell.nodeBPluginRequest -DoExecute:$DoExecute
@@ -2387,6 +2421,20 @@ function Run-Scenario {
 
                 if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
                     $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                    if (-not $senderCompare.Success -and $senderCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeA (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeA-post-upgrade-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $senderAfter = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$DoExecute
+                            $results += $senderAfter.Result
+                            $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
+                            if ($senderCompare.Success -or ($senderCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
+                    }
                     $results += [pscustomobject]@{
                         Label = 'nodeA-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
@@ -2398,6 +2446,20 @@ function Run-Scenario {
 
                 if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
                     $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                    if (-not $receiverCompare.Success -and $receiverCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeB (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeB-post-upgrade-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$DoExecute
+                            $results += $receiverAfter.Result
+                            $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
+                            if ($receiverCompare.Success -or ($receiverCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
+                    }
                     $results += [pscustomobject]@{
                         Label = 'nodeB-upgrade-state-compare'
                         Command = 'compare pre-upgrade and post-upgrade BuddyBackup state'
@@ -2459,6 +2521,57 @@ function Run-Scenario {
                     }
                 }
 
+                $postBootRefreshCommand = ((@'
+plugin_root="/boot/config/plugins/buddybackup"
+post_boot_refresh_script="$plugin_root/testlab-postboot-refresh.sh"
+mkdir -p "$plugin_root"
+cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
+#!/bin/bash
+set -euo pipefail
+
+attempts=60
+while [ "$attempts" -gt 0 ]; do
+    if [ -x /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php ] && [ -f /boot/config/plugins/buddybackup/buddybackup.cfg ]; then
+        plugin_root="/boot/config/plugins/buddybackup"
+        backups_cfg="$plugin_root/backups.cfg"
+        remote_hosts=()
+        if [ -f "$backups_cfg" ]; then
+            while IFS= read -r host; do
+                [ -n "$host" ] && remote_hosts+=("$host")
+            done < <(awk -F= '$1=="destination_host" {value=$2; gsub(/^"|"$/, "", value); if (value != "") print value}' "$backups_cfg" 2>/dev/null || true)
+        fi
+
+        all_reachable=1
+        for rhost in "${remote_hosts[@]}"; do
+            if ! ssh-keyscan -T 3 "$rhost" 2>/dev/null | grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-'; then
+                all_reachable=0
+                break
+            fi
+        done
+
+        if [ "$all_reachable" -eq 1 ]; then
+            /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
+
+            if [ "${#remote_hosts[@]}" -gt 0 ]; then
+                if grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+                    exit 0
+                fi
+            else
+                exit 0
+            fi
+        fi
+    fi
+
+    sleep 2
+    attempts=$((attempts - 1))
+done
+
+exit 0
+EOF_BUDDYBACKUP_POSTBOOT_REFRESH
+chmod 700 "$post_boot_refresh_script"
+'@) -replace "`r`n", "`n").Trim()
+                $results += Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command $postBootRefreshCommand -LoggedCommand "ensure post-boot refresh script on $($node.Name)" -Label "$($node.Name)-ensure-postboot-refresh" -DoExecute:$DoExecute
+
                 $beforeBootId = Get-RemoteBootId -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Label "$($node.Name)-boot-id-before-reboot" -DoExecute:$DoExecute
                 $results += $beforeBootId.Result
                 if ($DoExecute -and (-not $beforeBootId.Result.Success -or [string]::IsNullOrWhiteSpace($beforeBootId.BootId))) {
@@ -2499,6 +2612,21 @@ function Run-Scenario {
                     }
 
                     $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
+                    if (-not $stateCompare.Success -and $stateCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                        for ($attempt = 1; $attempt -le 5; $attempt++) {
+                            Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-reboot for $($node.Name) (attempt $attempt)"
+                            Start-Sleep -Seconds 2
+                            $refreshResult = Invoke-RemoteCommand -User $node.Connection.User -TargetHost $node.Connection.Host -Port $node.Connection.Port -IdentityFile $node.Connection.IdentityFile -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "$($node.Name)-post-reboot-refresh-retry-$attempt" -DoExecute:$DoExecute
+                            $results += $refreshResult
+                            $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
+                            $results += $afterSnapshot.Result
+                            $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
+                            if ($stateCompare.Success -or ($stateCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                                break
+                            }
+                        }
+                    }
+
                     $results += [pscustomobject]@{
                         Label = "$($node.Name)-post-reboot-state-compare"
                         Command = "compare pre-reboot and post-reboot BuddyBackup state"
@@ -2549,9 +2677,12 @@ function Run-Scenario {
             throw "Unknown scenario: $Scenario"
         }
     }
-
-    $scenarioPath = Join-Path -Path $CellDir -ChildPath ("scenario-{0}.json" -f $Scenario)
-    $results | ConvertTo-Json -Depth 8 | Set-Content -Path $scenarioPath
+} finally {
+    if ($results.Count -gt 0 -and (-not [string]::IsNullOrWhiteSpace($CellDir))) {
+        $scenarioPath = Join-Path -Path $CellDir -ChildPath ("scenario-{0}.json" -f $Scenario)
+        $results | ConvertTo-Json -Depth 8 | Set-Content -Path $scenarioPath
+    }
+}
 
     $failed = @($results | Where-Object { -not $_.Success })
     if ($failed.Count -gt 0) {

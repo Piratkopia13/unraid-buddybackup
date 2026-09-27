@@ -959,8 +959,34 @@ set -euo pipefail
 attempts=60
 while [ "$attempts" -gt 0 ]; do
     if [ -x /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php ] && [ -f /boot/config/plugins/buddybackup/buddybackup.cfg ]; then
-        /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
-        exit 0
+        plugin_root="/boot/config/plugins/buddybackup"
+        backups_cfg="$plugin_root/backups.cfg"
+        remote_hosts=()
+        if [ -f "$backups_cfg" ]; then
+            while IFS= read -r host; do
+                [ -n "$host" ] && remote_hosts+=("$host")
+            done < <(awk -F= '$1=="destination_host" {value=$2; gsub(/^"|"$/, "", value); if (value != "") print value}' "$backups_cfg" 2>/dev/null || true)
+        fi
+
+        all_reachable=1
+        for rhost in "${remote_hosts[@]}"; do
+            if ! ssh-keyscan -T 3 "$rhost" 2>/dev/null | grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-'; then
+                all_reachable=0
+                break
+            fi
+        done
+
+        if [ "$all_reachable" -eq 1 ]; then
+            /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
+
+            if [ "${#remote_hosts[@]}" -gt 0 ]; then
+                if grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+                    exit 0
+                fi
+            else
+                exit 0
+            fi
+        fi
     fi
 
     sleep 2

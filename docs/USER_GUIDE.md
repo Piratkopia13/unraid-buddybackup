@@ -71,7 +71,7 @@ Each configured backup task displays:
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
    - **Buddy's hostname or IP**: Remote Unraid VPN/LAN IP.
    - **Test connection**: Verifies SSH connectivity and command restriction (`restrict_zfs`).
-   - **Destination dataset**: Must start with your buddy's configured parent dataset, followed by a child dataset name (e.g. `tank/backups/buddy/my-data`).
+   - **Destination dataset**: Must start with or match your buddy's configured parent dataset (e.g. `tank/backups/buddy/my-data`, or matching the parent dataset directly when replicating child datasets with **Skip parent dataset**).
 
 2. **Remote (generic ZFS host)** (Unraid → TrueNAS SCALE / Proxmox VE / Linux):
    - **Buddy's hostname or IP**: Remote host IP or hostname.
@@ -131,14 +131,20 @@ Configures your Unraid server to receive incoming backups from buddies or extern
 - **Buddy Name**: Friendly label to identify this buddy (e.g. `Alex (Offsite)`, `Bob (TrueNAS)`).
 - **Enable**: Allow incoming connections for this buddy.
 - **Buddy's SSH public key**: Paste buddy's public SSH key (restricted to `restrict_zfs` in `authorized_keys`).
-- **Destination parent dataset**: Dedicated sub-dataset where your buddy's backups live (e.g. `disk1/buddy_backups`).
+- **Destination parent dataset**: Dedicated sub-dataset where your buddy's backups live (e.g. `disk1/buddy_backups` or `cache/appdata`).
   - Must be a dedicated sub-dataset (contains a `/`), not a bare root disk or pool. Overlapping datasets across buddies are disallowed for isolation.
-  - Automatically configured with `readonly=on`, `mountpoint=none`, `setuid=off`, and `exec=off` to keep incoming backups immutable and isolated from Unraid's VFS tree.
-  - Restoring via the Restore Wizard creates writable datasets. For an emergency in-place failover:
-    ```bash
-    zfs set readonly=off <pool/dataset>
-    zfs inherit mountpoint <pool/dataset>
-    ```
+- **Immutable dataset** (default: `Yes`):
+  - When enabled (`Yes`), the dataset is configured with `readonly=on`, `mountpoint=none`, `setuid=off`, and `exec=off` to keep incoming backups immutable and isolated from Unraid's VFS tree. Restoring via the Restore Wizard creates writable datasets.
+  - When disabled (`No`), datasets remain mounted at `/mnt/...`, write protection is disabled (`readonly=off`), and binary execution is allowed (`exec=on`).
+  - **Live Dataset Status Indicators**:
+    - **Locked** (grey): Immutable, unmounted, and write-protected (`mountpoint=none`, `readonly=on`).
+    - **Mounted** (green): Mounted and accessible at `/mnt/...` (`readonly=off`).
+    - **Key Locked** (orange): Encrypted dataset (or parent dataset whose received child datasets are encrypted) whose encryption key is not loaded on this server. The data cannot be accessed or mounted without the key.
+    - **Mounted (Partial)** (orange): Parent is mounted, but some received child datasets are encrypted and locked.
+    - **Lock Failed** (red): The dataset could not be unmounted because active processes on the host (e.g. Docker containers, open terminal sessions, or SMB clients) are currently using files in this mount path. Stop processes using the path and re-apply.
+    - **Not Mounted** (red): Immutability is disabled, but the dataset is currently unmounted.
+  > [!WARNING]
+  > Disabling immutability allows received datasets to mount directly into `/mnt/...`, enables write access, and allows binary execution. Only disable this if you fully trust the sender and understand the security and data integrity risks.
 - **Snapshot retention**: Local Sanoid policy for how long to keep your buddy's snapshots (Hourly, Daily, Weekly, Monthly, Yearly).
 
 > [!NOTE]

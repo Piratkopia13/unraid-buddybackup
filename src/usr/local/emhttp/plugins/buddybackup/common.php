@@ -81,6 +81,7 @@
             $incoming["name"] = $buddy_name;
             $incoming["enable"] = (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no";
             $incoming["destination_dataset"] = $cfg["ReceiveDestinationDataset"] ?? "";
+            $incoming["immutable"] = "yes";
             $incoming["ssh_key"] = $key;
             $incoming["hourly"] = $cfg["ReceiveDestinationRententionHourly"] ?? 0;
             $incoming["daily"] = $cfg["ReceiveDestinationRententionDaily"] ?? 7;
@@ -286,5 +287,46 @@
         } else {
             return date("Y-m-d H:i", $timestamp);
         }
+    }
+
+    function bb_dataset_mount_status($dataset) {
+        if (empty($dataset) || !is_string($dataset) || !preg_match('/^[A-Za-z0-9][A-Za-z0-9_.: \/-]*$/', $dataset)) return null;
+        $output = array();
+        $code = 0;
+        exec("zfs get -H -t filesystem -o name,property,value mounted,readonly,keystatus,mountpoint -r -- " . escapeshellarg($dataset) . " 2>/dev/null", $output, $code);
+        if ($code !== 0 || empty($output)) return null;
+
+        $by_name = array();
+        foreach ($output as $line) {
+            $parts = explode("\t", trim($line));
+            if (count($parts) >= 3) {
+                $by_name[$parts[0]][$parts[1]] = $parts[2];
+            }
+        }
+
+        if (!isset($by_name[$dataset])) {
+            return null;
+        }
+
+        $parent = $by_name[$dataset];
+        $parent['children_count'] = 0;
+        $parent['children_encrypted_locked'] = 0;
+        $parent['children_mounted'] = 0;
+        $parent['children_unmounted'] = 0;
+
+        foreach ($by_name as $name => $props) {
+            if ($name === $dataset || strpos($name, '@') !== false) continue;
+            $parent['children_count']++;
+            if (($props['keystatus'] ?? '') === 'unavailable') {
+                $parent['children_encrypted_locked']++;
+            }
+            if (($props['mounted'] ?? '') === 'yes') {
+                $parent['children_mounted']++;
+            } else {
+                $parent['children_unmounted']++;
+            }
+        }
+
+        return $parent;
     }
 ?>

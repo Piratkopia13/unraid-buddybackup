@@ -171,6 +171,7 @@ function ensure_incoming_config_migrated() {
                     "name" => $buddy_name,
                     "enable" => (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no",
                     "destination_dataset" => $cfg["ReceiveDestinationDataset"] ?? "",
+                    "immutable" => "yes",
                     "ssh_key" => $key,
                     "hourly" => $cfg["ReceiveDestinationRententionHourly"] ?? 0,
                     "daily" => $cfg["ReceiveDestinationRententionDaily"] ?? 7,
@@ -215,6 +216,7 @@ PHP
     like($migrated_content, qr/\[1ml3g4cy\]/, 'contains legacy section uid [1ml3g4cy]');
     like($migrated_content, qr/enable="yes"/, 'migrated enable status is yes');
     like($migrated_content, qr/destination_dataset="tank\/backups\/alice"/, 'migrated destination dataset preserved');
+    like($migrated_content, qr/immutable="yes"/, 'migrated immutable status is yes');
     like($migrated_content, qr/daily="14"/, 'migrated retention settings preserved');
 
     my $remaining_plugin_cfg = do { local $/; open my $h, '<', $plugin_cfg; <$h> };
@@ -291,6 +293,7 @@ function ensure_incoming_config_migrated() {
                     "name" => $buddy_name,
                     "enable" => (($cfg["ReceiveBackups"] ?? "") == "enable") ? "yes" : "no",
                     "destination_dataset" => $cfg["ReceiveDestinationDataset"] ?? "",
+                    "immutable" => "yes",
                     "ssh_key" => $key,
                     "hourly" => $cfg["ReceiveDestinationRententionHourly"] ?? 0,
                     "daily" => $cfg["ReceiveDestinationRententionDaily"] ?? 7,
@@ -347,6 +350,7 @@ PHP
     my $buddy1 = $parsed_incoming->{'1ml3g4cy'};
     is($buddy1->{name}, 'Buddy 1 (alice@unraid)', 'first buddy named with index and SSH key comment');
     is($buddy1->{destination_dataset}, 'tank/backups', 'first buddy inherits destination_dataset');
+    is($buddy1->{immutable}, 'yes', 'first buddy inherits immutable=yes');
     is($buddy1->{daily}, '21', 'first buddy inherits daily retention');
     like($buddy1->{ssh_key}, qr/AAAAC3NzaC1lZDI1NTE5AAAAIG111111111111111111111111111111 alice\@unraid/, 'first buddy gets key 1');
 
@@ -356,6 +360,7 @@ PHP
     my $buddy2 = $parsed_incoming->{$second_uid};
     is($buddy2->{name}, 'Buddy 2 (bob@truenas)', 'second buddy named with index and SSH key comment');
     is($buddy2->{destination_dataset}, 'tank/backups', 'second buddy inherits same destination_dataset');
+    is($buddy2->{immutable}, 'yes', 'second buddy inherits immutable=yes');
     is($buddy2->{daily}, '21', 'second buddy inherits same daily retention');
     like($buddy2->{ssh_key}, qr/AAAAC3NzaC1lZDI1NTE5AAAAIG222222222222222222222222222222 bob\@truenas/, 'second buddy gets key 2');
 };

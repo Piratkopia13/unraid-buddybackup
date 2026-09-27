@@ -559,7 +559,7 @@ Title="Backup and restore"
                         </span>
                         <? endif; ?>
                         <? if ($is_triggered): ?>
-                        <span class="metric-item grey-text" title="<?=_('Triggered after snapshot of: ') . htmlspecialchars(implode(', ', $triggering_snapshots))?>">
+                        <span class="metric-item grey-text" title="<?=sprintf(_('Triggered after snapshot of: %s'), htmlspecialchars(implode(', ', $triggering_snapshots)))?>">
                             <i class="fa fa-bolt"></i> <?=_('Snapshot trigger')?>
                         </span>
                         <? endif; ?>
@@ -607,7 +607,7 @@ Title="Backup and restore"
                             <strong><?=$telemetry['status_label'] === 'Alert' ? _('Backup Critical (Overdue)') : _('Backup Warning (Overdue)')?></strong>
                         </div>
                         <div class="buddybackup-alert-message">
-                            <?=_('This backup has not successfully completed in over ') . $telemetry['days_overdue'] . _(' days.') . ($telemetry['has_run'] ? (' ' . _('Last successful run: ') . $telemetry['last_ran']) : '')?>
+                            <?=!empty($telemetry['has_run']) ? sprintf(_('This backup has not successfully completed in over %s days. Last successful run: %s'), $telemetry['days_overdue'], $telemetry['last_ran']) : sprintf(_('This backup has not successfully completed in over %s days.'), $telemetry['days_overdue'])?>
                         </div>
                     </div>
                     <div class="buddybackup-alert-actions">
@@ -698,7 +698,7 @@ Title="Backup and restore"
                             <dt>_(Destination dataset)_:</dt>
                             <dd>
                                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
-                                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with buddy's set destination parent dataset, followed by a child dataset name.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with or match buddy's set destination parent dataset.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-local buddybackup-note-local" <?=($data['type']!='local')?'style="display:none;"':''?>>_(Note: local destination datasets are automatically set to read-only once synced to protect against accidental edits and ransomware.)_</div>
                             </dd>

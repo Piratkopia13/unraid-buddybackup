@@ -135,7 +135,8 @@ $required_functions = [
     "datasets",
     "backups",
     "bb_is_dataset_overlapping",
-    "bb_format_dashboard_time"
+    "bb_format_dashboard_time",
+    "bb_dataset_mount_status"
 ];
 
 $missing = [];
@@ -296,6 +297,8 @@ subtest "Direct scroll to log anchor navigation and Log.page anchors" => sub {
 
     unlike($bb_content, qr#/Settings/BuddyBackup/Log#, "BuddyBackup.page does not contain hardcoded /Settings/BuddyBackup/Log standalone link");
     like($bb_content, qr/function\s+buddybackup_scroll_to_log\s*\(/, "BuddyBackup.page defines buddybackup_scroll_to_log");
+    like($bb_content, qr/scrollHeight/, "BuddyBackup.page scrolls log window to bottom using scrollHeight");
+    unlike($bb_content, qr/logEl\.focus\(\)/, "BuddyBackup.page does not focus logEl directly to avoid scrolling to oldest entries");
 
     my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
     open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
@@ -380,6 +383,77 @@ subtest "Progress modal Done transition and skip_parent configuration" => sub {
     close $sfh;
 
     like($sh_content, qr/--skip-parent/, "rc.buddybackup includes --skip-parent syncoid flag support");
+};
+
+subtest "Dataset immutability toggle and destination match support" => sub {
+    my $buddy_page = File::Spec->catfile($plugin_dir, "BuddysBackupSettings.page");
+    open my $fh, "<", $buddy_page or die "Cannot open $buddy_page: $!";
+    my $buddy_content = do { local $/; <$fh> };
+    close $fh;
+
+    my $common_php = File::Spec->catfile($plugin_dir, "common.php");
+    open my $cfh, "<", $common_php or die "Cannot open $common_php: $!";
+    my $common_content = do { local $/; <$cfh> };
+    close $cfh;
+
+    like($common_content, qr/zfs get -H -t filesystem -o name,property,value mounted,readonly,keystatus,mountpoint -r/, "common.php restricts bb_dataset_mount_status to filesystem datasets");
+    like($common_content, qr/strpos\(\$name,\s*'\@'\)\s*!==\s*false/, "common.php ignores snapshots in bb_dataset_mount_status");
+    like($common_content, qr/preg_match\('\/\^\[A-Za-z0-9\]\[A-Za-z0-9_.: \\\/-\]\*\$\/',\s*\$dataset\)/, "common.php supports space in bb_dataset_mount_status regex");
+
+    like($buddy_content, qr/name="immutable"/, "BuddysBackupSettings.page defines immutable dropdown");
+    like($buddy_content, qr/class="[^"]*buddybackup-immutable-warning[^"]*"/, "BuddysBackupSettings.page defines immutable warning container");
+
+    like($buddy_content, qr/bb_dataset_mount_status/, "BuddysBackupSettings.page calls bb_dataset_mount_status");
+    like($buddy_content, qr/\$ds_pill_label/, "BuddysBackupSettings.page defines ds_pill_label");
+    like($buddy_content, qr/Lock Failed/, "BuddysBackupSettings.page handles Lock Failed state");
+    like($buddy_content, qr/children_mounted/, "BuddysBackupSettings.page checks children_mounted for Lock Failed state");
+    like($buddy_content, qr/Key Locked/, "BuddysBackupSettings.page handles Key Locked state");
+    like($buddy_content, qr/Mounted \(Partial\)/, "BuddysBackupSettings.page handles Mounted (Partial) state for partially encrypted child datasets");
+    like($buddy_content, qr/Retry Lock/, "BuddysBackupSettings.page provides Retry Lock action banner");
+
+    my $rc_php = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup.php");
+    open my $rfh, "<", $rc_php or die "Cannot open $rc_php: $!";
+    my $rc_content = do { local $/; <$rfh> };
+    close $rfh;
+
+    like($rc_content, qr/\$immutable\s*=.*?\$buddy\['immutable'\]/, "rc.buddybackup.php evaluates immutable from buddy config");
+    like($rc_content, qr/'allow_buddy_dataset',\s*\$dataset,\s*\$immutable/, "rc.buddybackup.php passes immutable to allow_buddy_dataset");
+    like($rc_content, qr/\$allow_rc/, "rc.buddybackup.php captures allow_buddy_dataset exit status");
+    like($rc_content, qr/"immutable"\s*=>\s*"yes"/, "rc.buddybackup.php sets immutable=yes during legacy migration");
+
+    my $rc_sh = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup");
+    open my $sfh, "<", $rc_sh or die "Cannot open $rc_sh: $!";
+    my $sh_content = do { local $/; <$sfh> };
+    close $sfh;
+
+    like($sh_content, qr/allow_buddy_dataset\(\)\s*\{\s*local dataset="\$1"\s*local immutable="\$\{2:-yes\}"/s, "rc.buddybackup allow_buddy_dataset accepts immutable parameter");
+    like($sh_content, qr/if ! zfs list -H -o name "\$\{dataset\}" >\/dev\/null 2>&1;\s*then\s*return 0;?\s*fi/s, "rc.buddybackup returns cleanly when dataset does not exist");
+    like($sh_content, qr/Destination dataset matches the receiver's configured dataset\./, "rc.buddybackup allows matching destination dataset in test_connection");
+    like($sh_content, qr/Failed to lock dataset/, "rc.buddybackup verifies unmount and warns if locking fails");
+    like($sh_content, qr/unraid_notify "\$\{err\}" "alert"/, "rc.buddybackup alerts via unraid_notify on lock failure");
+    like($sh_content, qr/append_to_buddybackup_log "\$\{err\}"/, "rc.buddybackup writes lock failure to plugin log file");
+    like($sh_content, qr/any_mounted=.*?zfs list -H -o mounted -r/s, "rc.buddybackup checks any_mounted across dataset tree");
+    like($sh_content, qr/"\$\{final_mp\}" != "none" && "\$\{final_mp\}" != "legacy"/, "rc.buddybackup allows legacy mountpoint when checking lockdown status");
+    like($sh_content, qr/zfs list -H -o name -r "\$\{dataset\}".*?sort.*?while IFS= read -r ds/s, "rc.buddybackup mounts children in sorted order");
+    like($sh_content, qr/zfs list -H -o name -r "\$\{dataset\}".*?sort -r.*?while IFS= read -r ds/s, "rc.buddybackup unmounts children in reverse sorted order");
+    like($sh_content, qr/zfs set setuid=off "\$\{dataset\}"/, "rc.buddybackup strictly sets setuid=off even when immutability is disabled");
+    unlike($sh_content, qr/setuid=on/, "rc.buddybackup never enables setuid on backup datasets");
+};
+
+subtest "Overdue alert message formatting" => sub {
+    my $buddy_page = File::Spec->catfile($plugin_dir, "BuddysBackupSettings.page");
+    open my $fh, "<", $buddy_page or die "Cannot open $buddy_page: $!";
+    my $buddy_content = do { local $/; <$fh> };
+    close $fh;
+
+    like($buddy_content, qr/sprintf\(_\('No incoming backup received from this buddy in over %s days\. Last received: %s'\)/, "BuddysBackupSettings.page formats overdue warning with sprintf and proper spaces");
+
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $backups_content = do { local $/; <$bfh> };
+    close $bfh;
+
+    like($backups_content, qr/sprintf\(_\('This backup has not successfully completed in over %s days\. Last successful run: %s'\)/, "Backups.page formats overdue warning with sprintf and proper spaces");
 };
 
 done_testing();
