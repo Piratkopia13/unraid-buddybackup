@@ -321,17 +321,27 @@ allow_buddy_dataset() {
     # as that would unmount the root filesystem or mark the entire pool read-only.
     if [[ "${dataset}" == *"/"* ]]; then
         if [[ "${immutable}" == "no" ]]; then
+            # If parent had mountpoint=none (e.g. previously locked), restore it to inherit
             local current_mp
             current_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)
             if [[ "${current_mp}" == "none" ]]; then
-                zfs inherit -r mountpoint "${dataset}" >/dev/null 2>&1 || true
+                zfs inherit mountpoint "${dataset}" >/dev/null 2>&1 || true
             fi
             zfs set readonly=off "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r readonly "${dataset}" >/dev/null 2>&1 || true
             zfs set exec=on "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r exec "${dataset}" >/dev/null 2>&1 || true
             zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r setuid "${dataset}" >/dev/null 2>&1 || true
+
+            # Children inherit from parent (skip parent with tail -n +2)
+            zfs list -H -t filesystem -o name -r "${dataset}" 2>/dev/null | tail -n +2 | while IFS= read -r ds; do
+                local child_mp
+                child_mp=$(zfs get -H -o value mountpoint "${ds}" 2>/dev/null)
+                if [[ "${child_mp}" == "none" ]]; then
+                    zfs inherit mountpoint "${ds}" >/dev/null 2>&1 || true
+                fi
+                zfs inherit readonly "${ds}" >/dev/null 2>&1 || true
+                zfs inherit exec "${ds}" >/dev/null 2>&1 || true
+                zfs inherit setuid "${ds}" >/dev/null 2>&1 || true
+            done
 
             # Mount dataset and any child datasets in forward order (parent first)
             zfs list -H -o name -r "${dataset}" 2>/dev/null | sort | while IFS= read -r ds; do
@@ -360,11 +370,20 @@ allow_buddy_dataset() {
                 zfs set mountpoint=none "${dataset}" >/dev/null 2>&1 || true
             fi
             zfs set readonly=on "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r readonly "${dataset}" >/dev/null 2>&1 || true
             zfs set setuid=off "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r setuid "${dataset}" >/dev/null 2>&1 || true
             zfs set exec=off "${dataset}" >/dev/null 2>&1 || true
-            zfs inherit -r exec "${dataset}" >/dev/null 2>&1 || true
+
+            # Children inherit mountpoint=none, readonly=on, setuid=off, exec=off from parent
+            zfs list -H -t filesystem -o name -r "${dataset}" 2>/dev/null | tail -n +2 | while IFS= read -r ds; do
+                local child_mp
+                child_mp=$(zfs get -H -o value mountpoint "${ds}" 2>/dev/null)
+                if [[ "${child_mp}" != "none" && "${child_mp}" != "legacy" ]]; then
+                    zfs inherit mountpoint "${ds}" >/dev/null 2>&1 || true
+                fi
+                zfs inherit readonly "${ds}" >/dev/null 2>&1 || true
+                zfs inherit setuid "${ds}" >/dev/null 2>&1 || true
+                zfs inherit exec "${ds}" >/dev/null 2>&1 || true
+            done
 
             local final_mp final_mounted any_mounted
             final_mp=$(zfs get -H -o value mountpoint "${dataset}" 2>/dev/null)

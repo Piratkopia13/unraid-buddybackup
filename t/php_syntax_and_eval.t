@@ -438,6 +438,11 @@ subtest "Dataset immutability toggle and destination match support" => sub {
     like($sh_content, qr/zfs list -H -o name -r "\$\{dataset\}".*?sort -r.*?while IFS= read -r ds/s, "rc.buddybackup unmounts children in reverse sorted order");
     like($sh_content, qr/zfs set setuid=off "\$\{dataset\}"/, "rc.buddybackup strictly sets setuid=off even when immutability is disabled");
     unlike($sh_content, qr/setuid=on/, "rc.buddybackup never enables setuid on backup datasets");
+    unlike($sh_content, qr/zfs inherit -r (?:readonly|setuid|exec)\s+["']?\$\{dataset\}["']?/, "rc.buddybackup never runs recursive property inheritance on parent dataset");
+    like($sh_content, qr/zfs set readonly=on\s+["']?\$\{dataset\}["']?/, "rc.buddybackup sets readonly=on on parent dataset");
+    like($sh_content, qr/tail -n \+2.*?zfs inherit readonly/s, "rc.buddybackup only inherits readonly on child datasets");
+    like($sh_content, qr/tail -n \+2.*?zfs inherit mountpoint/s, "rc.buddybackup inherits mountpoint on child datasets");
+    like($buddy_content, qr/readonly_failed.*?Lock Failed/s, "BuddysBackupSettings.page flags Lock Failed if readonly is not on");
 };
 
 subtest "Overdue alert message formatting" => sub {
