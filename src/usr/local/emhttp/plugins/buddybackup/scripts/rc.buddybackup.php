@@ -103,10 +103,6 @@ function is_valid_zfs_dataset_name($dataset) {
     return true;
 }
 
-function is_valid_remote_host($host) {
-    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/', $host) === 1;
-}
-
 function normalize_remote_identity($user, $port, &$error_message = null) {
     $user = trim((string)$user);
     $port = trim((string)$port);
