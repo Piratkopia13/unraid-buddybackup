@@ -247,6 +247,74 @@ run_and_write_output() {
     return "${error_code}"
 }
 
+# Runs a user-configured snapshot hook script locally (never on the remote host).
+# The script path is executed with an explicit argv and a hard timeout; we never
+# eval the hook, so shell metacharacters in the path or its arguments are inert.
+# Output is streamed through the normal write()/logger channels and the hook's
+# exit status is returned to the caller.
+run_hook() {
+    local hook_path="${1:-}"
+    local hook_timeout="${2:-30}"
+    local label="${3:-hook}"
+    local nchan="${4:-send}"
+
+    if [[ -z "${hook_path}" ]]; then
+        return 0
+    fi
+
+    # Defend against a malformed timeout value; fall back to the documented default.
+    if ! [[ "${hook_timeout}" =~ ^[0-9]+$ ]] || (( 10#${hook_timeout} < 1 )); then
+        hook_timeout=30
+    fi
+
+    if [[ ! -x "${hook_path}" ]]; then
+        write "${nchan}" "${label} script '${hook_path}' is missing or not executable."
+        logger "${label} script '${hook_path}' is missing or not executable" -t"${plugin}"
+        return 127
+    fi
+
+    logger "Running ${label} script '${hook_path}' (timeout ${hook_timeout}s)" -t"${plugin}"
+    write "${nchan}" "Running ${label} script '${hook_path}' (timeout ${hook_timeout}s).."
+
+    local hook_output=""
+    hook_output=$(timeout "${hook_timeout}" "${hook_path}" 2>&1)
+    local hook_status=$?
+
+    if [[ -n "${hook_output}" ]]; then
+        write "${nchan}" "${hook_output}"
+    fi
+
+    if [[ ${hook_status} -eq 0 ]]; then
+        logger "${label} script '${hook_path}' finished successfully" -t"${plugin}"
+    else
+        logger "${label} script '${hook_path}' failed with exit code ${hook_status}" -t"${plugin}"
+    fi
+
+    return "${hook_status}"
+}
+
+# Runs the post-snapshot hook exactly once, even when the backup aborts, fails,
+# or exits early. Registered as part of the EXIT trap once a snapshot exists so
+# a hook that freezes a VM/DB is always given the chance to thaw it.
+run_post_hook_once() {
+    if [[ -n "${POST_HOOK_DONE:-}" ]]; then
+        return 0
+    fi
+    POST_HOOK_DONE=1
+
+    if [[ -z "${POST_HOOK_SCRIPT:-}" ]]; then
+        return 0
+    fi
+
+    run_hook "${POST_HOOK_SCRIPT}" "${POST_HOOK_TIMEOUT:-30}" "post-snapshot" "send"
+    local post_status=$?
+    if [[ ${post_status} -ne 0 ]]; then
+        local msg="Post-snapshot hook '${POST_HOOK_SCRIPT}' failed with exit code ${post_status}. The backup result is unchanged."
+        write "send" "Warning: ${msg}"
+        unraid_notify "${msg}" "warning"
+    fi
+}
+
 setup_buddy_user() {
     # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
@@ -939,6 +1007,10 @@ create_snapshot_and_send() {
     local remote_user="${7:-}"
     local remote_port="${8:-}"
     local skip_parent="${9:-no}"
+    local pre_hook="${10:-}"
+    local post_hook="${11:-}"
+    local hook_timeout="${12:-30}"
+    local hook_failure_mode="${13:-abort}"
     local nchan="send"
     local snapshot_name=""
     local snapshot_output=""
@@ -954,6 +1026,24 @@ create_snapshot_and_send() {
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
         return
+    fi
+
+    # Pre-snapshot hook: gives the user a chance to quiesce/flush the workload
+    # (freeze a VM, pause a container, flush a database) before we snapshot.
+    if [[ -n "${pre_hook}" ]]; then
+        run_hook "${pre_hook}" "${hook_timeout}" "pre-snapshot" "${nchan}"
+        local pre_hook_status=$?
+        if [[ ${pre_hook_status} -ne 0 ]]; then
+            if [[ "${hook_failure_mode}" == "abort" ]]; then
+                error="Pre-snapshot hook '${pre_hook}' failed with exit code ${pre_hook_status}. Aborting backup."
+                mark_failed_backup "${uid}" "${pre_hook_status}" "${error}"
+                write "${nchan}" "${error}"
+                unraid_notify "${error}" "alert"
+                return
+            fi
+            write "${nchan}" "Warning: pre-snapshot hook '${pre_hook}' failed with exit code ${pre_hook_status}. Continuing because hook_failure_mode=warn."
+            logger "Pre-snapshot hook failed (${pre_hook_status}); continuing (warn mode)" -t"${plugin}"
+        fi
     fi
 
     snapshot_name=$(manual_snapshot_name "${source_dataset}")
@@ -973,6 +1063,17 @@ create_snapshot_and_send() {
     fi
 
     write "${nchan}" "Created snapshot '${snapshot_name}'."
+
+    # The snapshot now exists, so a workload may be frozen/paused. Register the
+    # post-snapshot hook so it runs once on ANY exit path (success, replication
+    # failure, or signal), guaranteeing e.g. a VM thaw.
+    if [[ -n "${post_hook}" ]]; then
+        POST_HOOK_SCRIPT="${post_hook}"
+        POST_HOOK_TIMEOUT="${hook_timeout}"
+        POST_HOOK_DONE=""
+        trap 'run_post_hook_once; cleanup' EXIT
+        write "${nchan}" "Registered post-snapshot hook '${post_hook}' (timeout ${hook_timeout}s)."
+    fi
 
     if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]]; then
         send_backup "${type}" "${source_dataset}" "${recursive}" "${destination_host}" "${destination_dataset}" "${uid}" "${remote_user}" "${remote_port}" "${skip_parent}"
@@ -1672,7 +1773,7 @@ case "$1" in
 		send_local_backup "${2}" "${3}" "${4}" "${5}" "${6}"
 	;;
     ('create_snapshot_and_send')
-        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
+        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}"

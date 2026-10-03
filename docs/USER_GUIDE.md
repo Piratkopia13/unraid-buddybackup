@@ -66,6 +66,86 @@ Each configured backup task displays:
 - **Skip parent dataset**: Replicate only child datasets, skipping the root parent dataset (useful when replicating container datasets or pools without duplicating the parent).
 - **Cron schedule**: Cron expression defining when the backup runs (default: `0 0 * * *` for midnight).
 
+#### Snapshot Hooks (Advanced)
+
+Optional scripts that run **locally on this Unraid host** around the snapshot and replication step of a task. They let you quiesce a workload so its on-disk state is consistent when the snapshot is taken — for example freezing a VM, pausing a container, or flushing a database.
+
+Hooks never run on the remote host and never pass through the restricted remote shell.
+
+**Execution order** for *Create fresh snapshot and send now* (and the equivalent scheduled run):
+
+1. **Pre-snapshot hook** — runs *before* `zfs snapshot` is taken.
+2. **Snapshot** — ZFS creates the snapshot.
+3. **Replication** — `zfs send`/`receive` (syncoid) runs to the destination.
+4. **Post-snapshot hook** — runs *after* replication completes, **on both success and failure**. It is registered as soon as the snapshot exists and is guaranteed to run exactly once, so a hook that freezes/thaws a workload is always given the chance to thaw it.
+
+**Fields**
+
+- **Pre-snapshot script**: absolute path to an executable script (e.g. `/boot/config/plugins/buddybackup/hooks/pre.sh`). Leave empty to disable.
+- **Post-snapshot script**: absolute path to an executable script (e.g. `/boot/config/plugins/buddybackup/hooks/post.sh`). Leave empty to disable.
+- **Hook timeout (seconds)**: maximum time each hook may run before it is killed (default `30`).
+- **Hook failure mode**: applies to the **pre-snapshot** hook only.
+  - `Abort backup` (default): if the pre-snapshot hook exits non-zero, the backup is aborted and the snapshot is not taken.
+  - `Warn and continue`: a failing pre-snapshot hook logs a warning but the backup proceeds.
+
+  A failing **post-snapshot** hook always only warns; it never marks the backup as failed.
+
+**Requirements**: hooks must be absolute paths, exist as regular files, be executable, and must not be group- or world-writable. Invalid paths cause the task to be rejected before it starts.
+
+##### Example recipes
+
+> [!NOTE]
+> Replace `/path/to/...` placeholders with paths valid on your server. Keep hook scripts on persistent storage (e.g. under `/boot/config/plugins/buddybackup/hooks/`) and mark them executable (`chmod 755`).
+
+**Freeze a VM around the snapshot** (write the VM name in the script, or pass it via a wrapper):
+
+`pre.sh`:
+```bash
+#!/bin/bash
+# Flush the VM's filesystems and freeze them for a consistent snapshot.
+virsh domfsfreeze my-vm || exit 1
+```
+
+`post.sh`:
+```bash
+#!/bin/bash
+# Always thaw, even if the backup failed mid-way.
+virsh domfsthaw my-vm || true
+```
+
+**Pause a Docker container** (use the same container name in both scripts):
+
+`pre.sh`:
+```bash
+#!/bin/bash
+docker pause my-container
+```
+
+`post.sh`:
+```bash
+#!/bin/bash
+docker unpause my-container
+```
+
+**Flush a database before snapshotting** (example with a generic SQL client; adapt to your engine and credentials):
+
+`pre.sh`:
+```bash
+#!/bin/bash
+# Force a checkpoint / flush so on-disk data is consistent.
+mysql -e 'FLUSH TABLES WITH READ LOCK; SYSTEM sleep 1;' || exit 1
+```
+
+`post.sh`:
+```bash
+#!/bin/bash
+# Release the flush/lock established by the pre-snapshot hook.
+mysql -e 'UNLOCK TABLES;' || true
+```
+
+> [!TIP]
+> Always make the *post* hook idempotent and tolerant of failure (use `|| true`), so that a workload is never left frozen. The pre and post hooks should be a matched pair: whatever the pre hook does, the post hook must undo.
+
 #### Destination Settings
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):

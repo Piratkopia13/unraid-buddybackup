@@ -726,9 +726,57 @@ Title="Backup and restore"
                     </div>
                 </div>
 
+                <div class="buddybackup-hooks-section" style="margin-top: 14px;">
+                    <div style="background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px; padding: 10px 12px;">
+                        <div style="font-weight: 600; font-size: 11px; margin-bottom: 4px; display: flex; align-items: center;">
+                            <span><i class="fa fa-terminal"></i> <?=_('Advanced: snapshot hooks')?></span>
+                        </div>
+                        <div class="buddybackup-field-note" style="margin-top: 0; margin-bottom: 8px;">
+                            <?=_('Optional scripts run locally on this Unraid host around the snapshot and replication step. Use them to quiesce workloads (freeze VMs, pause containers, flush databases). Scripts must be absolute paths, executable, and not group- or world-writable.')?>
+                        </div>
+                        <div class="buddybackup-grid">
+                            <div>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Pre-snapshot script')?>:</dt>
+                                    <dd>
+                                        <input type="text" name="pre_snapshot_script" class="align" value="<?=htmlspecialchars($data['pre_snapshot_script'] ?? '')?>" placeholder="/boot/config/plugins/buddybackup/hooks/pre.sh" <?=$disabled?>>
+                                        <div class="buddybackup-field-note"><?=_('Runs before the snapshot is created. Leave empty to disable.')?></div>
+                                    </dd>
+                                </dl>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Post-snapshot script')?>:</dt>
+                                    <dd>
+                                        <input type="text" name="post_snapshot_script" class="align" value="<?=htmlspecialchars($data['post_snapshot_script'] ?? '')?>" placeholder="/boot/config/plugins/buddybackup/hooks/post.sh" <?=$disabled?>>
+                                        <div class="buddybackup-field-note"><?=_('Runs after replication completes, on both success and failure. Leave empty to disable.')?></div>
+                                    </dd>
+                                </dl>
+                            </div>
+                            <div>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Hook timeout (seconds)')?>:</dt>
+                                    <dd>
+                                        <input type="number" min="1" name="hook_timeout" class="align" value="<?=htmlspecialchars($data['hook_timeout'] ?? '30')?>" placeholder="30" <?=$disabled?>>
+                                        <div class="buddybackup-field-note"><?=_('Maximum time each hook may run before it is killed. Default 30.')?></div>
+                                    </dd>
+                                </dl>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Hook failure mode')?>:</dt>
+                                    <dd>
+                                        <select name="hook_failure_mode" class="align" <?=$disabled?>>
+                                            <?=mk_option($data['hook_failure_mode'] ?? 'abort', "abort", "_(Abort backup)_");?>
+                                            <?=mk_option($data['hook_failure_mode'] ?? 'abort', "warn", "_(Warn and continue)_");?>
+                                        </select>
+                                        <div class="buddybackup-field-note"><?=_('Applies to the pre-snapshot hook only; a failing post-snapshot hook always just warns.')?></div>
+                                    </dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="buddybackup-card-actions">
                     <div class="buddybackup-card-actions-left">
-                        <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
+                        <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>
                         <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
                         <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
                         <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">

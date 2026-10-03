@@ -131,6 +131,51 @@ function resolve_remote_identity_from_cfg($cfg, $prefix, &$error_message = null)
     return normalize_remote_identity($cfg[$prefix.'_user'] ?? '', $cfg[$prefix.'_port'] ?? '', $error_message);
 }
 
+function validate_hook_script($path, &$error_message = null) {
+    $path = trim((string)$path);
+
+    // An empty value simply means "no hook configured".
+    if ($path === '') {
+        return true;
+    }
+
+    if (substr($path, 0, 1) !== '/') {
+        $error_message = "Hook script '$path' must be an absolute path.";
+        return false;
+    }
+
+    $resolved = realpath($path);
+    if ($resolved === false || !is_file($resolved)) {
+        $error_message = "Hook script '$path' does not exist or is not a regular file.";
+        return false;
+    }
+
+    if (!is_executable($resolved)) {
+        $error_message = "Hook script '$path' is not executable.";
+        return false;
+    }
+
+    $perms = fileperms($resolved);
+    if ($perms !== false && ($perms & 0022) !== 0) {
+        $error_message = "Hook script '$path' must not be group- or world-writable.";
+        return false;
+    }
+
+    return true;
+}
+
+function normalize_hook_timeout($value) {
+    $value = trim((string)$value);
+    if ($value === '' || !ctype_digit($value) || (int)$value < 1) {
+        return '30';
+    }
+    return (string)(int)$value;
+}
+
+function normalize_hook_failure_mode($value) {
+    return ((string)$value === 'warn') ? 'warn' : 'abort';
+}
+
 function read_receive_destination_dataset(&$error_message = null) {
     global $tmp_recv_dataset_path, $incoming_config_path;
 
@@ -324,6 +369,17 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
         $remote_port = $identity['port'];
     }
 
+    $pre_hook = trim((string)($cfg['pre_snapshot_script'] ?? ''));
+    $post_hook = trim((string)($cfg['post_snapshot_script'] ?? ''));
+    if ($pre_hook !== '' && !validate_hook_script($pre_hook, $error_message)) {
+        return null;
+    }
+    if ($post_hook !== '' && !validate_hook_script($post_hook, $error_message)) {
+        return null;
+    }
+    $hook_timeout = normalize_hook_timeout($cfg['hook_timeout'] ?? '');
+    $hook_failure_mode = normalize_hook_failure_mode($cfg['hook_failure_mode'] ?? '');
+
     $parts = array(
         $rc,
         'create_snapshot_and_send',
@@ -336,6 +392,10 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
         $remote_user,
         $remote_port,
         $skip_parent,
+        $pre_hook,
+        $post_hook,
+        $hook_timeout,
+        $hook_failure_mode,
     );
 
     return build_shell_command($parts);
