@@ -397,6 +397,14 @@ allow_buddy_dataset() {
                 return 1
             fi
         fi
+    else
+        # Bare pool/disk root: children created here inherit a real mountpoint,
+        # which the restricted receiver user may not be able to mount during
+        # `zfs receive`. Recommend a destination sub-dataset instead.
+        local root_warn="BuddyBackup: Destination '${dataset}' is a pool/disk root; received child datasets inherit a real mountpoint and may fail to mount during receive. Use a destination sub-dataset created with mountpoint=none instead."
+        logger -t "${plugin}" "${root_warn}"
+        append_to_buddybackup_log "${root_warn}"
+        unraid_notify "${root_warn}" "warning"
     fi
 }
 
@@ -572,6 +580,12 @@ ssh_has_host_key_error() {
     local ssh_output="$1"
 
     [[ "${ssh_output}" == *"Host key verification failed"* ]] || [[ "${ssh_output}" == *"REMOTE HOST IDENTIFICATION HAS CHANGED"* ]]
+}
+
+has_mount_privilege_error() {
+    local command_output="$1"
+
+    printf '%s' "${command_output}" | grep -q 'cannot mount' && printf '%s' "${command_output}" | grep -q 'Insufficient privileges'
 }
 
 run_remote_ssh() {
@@ -849,6 +863,9 @@ send_backup() {
         error_code=$?
         mark_failed_backup "${uid}" "${error_code}" "${result}"
         printf -v result "%s" "Sending backup failed. Error code ${error_code}. Full output: ${result}"
+        if has_mount_privilege_error "${result}"; then
+            printf -v result "%s\nHint: the received dataset could not be mounted on the target. Run \`zfs mount <dataset>\` on the target, or use a destination sub-dataset created with \`mountpoint=none\` so received backups inherit it." "${result}"
+        fi
         unraid_notify "${result}" "alert"
     fi
     write "${nchan}" "${result}"
