@@ -498,7 +498,7 @@ Title="Backup and restore"
         $triggering_snapshots = [];
         if (!empty($snapshot_cfg) && is_array($snapshot_cfg)) {
             foreach ($snapshot_cfg as $snap_uid => $snap) {
-                if (($snap['trigger'] ?? '') === $uid) {
+                if ((string)($snap['trigger'] ?? '') === (string)$uid) {
                     $triggering_snapshots[] = $snap['dataset'] ?? _('snapshot');
                 }
             }
