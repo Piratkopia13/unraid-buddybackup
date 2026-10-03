@@ -726,11 +726,23 @@ Title="Backup and restore"
                     </div>
                 </div>
 
-                <div class="buddybackup-hooks-section" style="margin-top: 14px;">
-                    <div style="background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px; padding: 10px 12px;">
-                        <div style="font-weight: 600; font-size: 11px; margin-bottom: 4px; display: flex; align-items: center;">
-                            <span><i class="fa fa-terminal"></i> <?=_('Advanced: snapshot hooks')?></span>
-                        </div>
+                <? $has_hooks = !empty($data['pre_snapshot_script']) || !empty($data['post_snapshot_script']); ?>
+                <details class="buddybackup-hooks-section" style="margin-top: 14px; background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px;">
+                    <summary style="padding: 9px 12px; font-weight: 600; font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="display: flex; align-items: center; gap: 6px;">
+                            <i class="fa fa-terminal"></i>
+                            <span><?=_('Advanced: snapshot hooks')?></span>
+                            <? if ($has_hooks): ?>
+                            <span class="buddybackup-hooks-badge" style="font-size: 10px; font-weight: normal; background: rgba(39, 174, 96, 0.18); color: #27ae60; border: 1px solid rgba(39, 174, 96, 0.35); padding: 1px 6px; border-radius: 3px; margin-left: 6px;">
+                                <i class="fa fa-check"></i> <?=_('Configured')?>
+                            </span>
+                            <? endif; ?>
+                        </span>
+                        <span class="buddybackup-hooks-chevron" style="color: gray; font-size: 11px;">
+                            <i class="fa fa-chevron-right"></i>
+                        </span>
+                    </summary>
+                    <div style="padding: 10px 12px 12px 12px; border-top: 1px solid rgba(128,128,128,0.15);">
                         <div class="buddybackup-field-note" style="margin-top: 0; margin-bottom: 8px;">
                             <?=_('Optional scripts run locally on this Unraid host around the snapshot and replication step. Use them to quiesce workloads (freeze VMs, pause containers, flush databases). Scripts must be absolute paths, executable, and not group- or world-writable.')?>
                         </div>
@@ -772,11 +784,11 @@ Title="Backup and restore"
                             </div>
                         </div>
                     </div>
-                </div>
+                </details>
 
                 <div class="buddybackup-card-actions">
                     <div class="buddybackup-card-actions-left">
-                        <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>
+                        <input type="button" onclick="verify_and_submit_backup(this)" name="#apply" value="<?=_('Apply')?>" <?=$disabled?>>
                         <input class="disable-on-unsaved" type="button" value="_(Send backup now)_" onclick="send_backup(this)" <?=$disabled?>>
                         <input class="disable-on-unsaved-simple" type="button" value="_(Create fresh snapshot and send now)_" onclick="create_snapshot_and_send(this)" <?=$disabled?>>
                         <input type="button" name="#restore" value="<?=_('Restore data from destination')?>" onclick="restore_from_destination(this)">

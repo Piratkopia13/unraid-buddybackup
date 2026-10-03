@@ -161,6 +161,9 @@ subtest 'Backups.page exposes the snapshot hook fields' => sub {
     }
 
     like($page, qr/Advanced: snapshot hooks/, 'form has an advanced hooks section');
+    like($page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"/, 'hooks section is wrapped in collapsible details element');
+    like($page, qr/<summary/, 'hooks section provides a summary element');
+    unlike($page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"\s+open/, 'hooks section defaults to collapsed (no open attribute)');
     like($page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "abort"/, 'failure mode defaults to abort');
     like($page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "warn"/, 'failure mode offers warn');
 };

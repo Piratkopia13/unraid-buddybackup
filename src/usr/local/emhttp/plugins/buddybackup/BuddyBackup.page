@@ -390,6 +390,25 @@ Tag="buddybackup"
         vertical-align: middle;
         margin-right: 5px;
     }
+    details.buddybackup-hooks-section summary {
+        list-style: none;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.1s ease;
+    }
+    details.buddybackup-hooks-section summary::-webkit-details-marker {
+        display: none;
+    }
+    details.buddybackup-hooks-section summary:hover {
+        background-color: rgba(128, 128, 128, 0.08);
+    }
+    details.buddybackup-hooks-section .buddybackup-hooks-chevron i {
+        display: inline-block;
+        transition: transform 0.2s ease;
+    }
+    details.buddybackup-hooks-section[open] .buddybackup-hooks-chevron i {
+        transform: rotate(90deg);
+    }
 </style>
 <script>
     var api_url = "/plugins/<?=$plugin?>/api.php";
