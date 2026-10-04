@@ -409,6 +409,76 @@ Tag="buddybackup"
     details.buddybackup-hooks-section[open] .buddybackup-hooks-chevron i {
         transform: rotate(90deg);
     }
+    /* Header Toolbar & Metadata Links */
+    .buddybackup-header-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 6px 0 14px 0;
+        padding: 0 4px;
+    }
+    .buddybackup-header-desc {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        font-size: 12px;
+        max-width: 650px;
+        line-height: 1.4;
+    }
+    .buddybackup-header-subdesc {
+        font-size: 11px;
+        color: var(--alt-text-color, #808080);
+    }
+    .buddybackup-header-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-left: auto;
+    }
+    @media (max-width: 768px) {
+        .buddybackup-header-actions {
+            margin-left: 0;
+        }
+    }
+    .buddybackup-meta-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--text-color, inherit) !important;
+        opacity: 0.75;
+        text-decoration: none;
+        transition: opacity 0.15s ease, color 0.15s ease;
+    }
+    .buddybackup-meta-link:hover {
+        opacity: 1;
+        color: var(--text-color, inherit) !important;
+        text-decoration: none;
+    }
+    .buddybackup-kofi-link {
+        color: #d9441e !important;
+        opacity: 0.95;
+        font-weight: 500;
+    }
+    .buddybackup-kofi-link:hover {
+        opacity: 1;
+        text-decoration: underline;
+    }
+    /* Dark theme support: Unraid Theme--black, Theme--gray, or prefers-color-scheme */
+    html.Theme--black .buddybackup-kofi-link,
+    html.Theme--gray .buddybackup-kofi-link,
+    html.black .buddybackup-kofi-link,
+    html.gray .buddybackup-kofi-link {
+        color: #ff6e4a !important;
+    }
+    @media (prefers-color-scheme: dark) {
+        html:not(.Theme--white):not(.Theme--azure):not(.white):not(.azure) .buddybackup-kofi-link {
+            color: #ff6e4a !important;
+        }
+    }
 </style>
 <script>
     var api_url = "/plugins/<?=$plugin?>/api.php";
@@ -808,11 +878,25 @@ Tag="buddybackup"
     <?endforeach;?>
 </div>
 <?endif;?>
-<span class="pad-left">
-BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.<br>
-This plugin sets up authentication and syncs raw encrypted ZFS snapshots. Your backup buddy will not have access to read any of your backed-up data, and can not access your server for anything other than sending and receiving their backups.<br>
-This plugin is fully open source, and I encourage you to review the source to ensure you understand how it operates and verify its security: <a href="https://github.com/Piratkopia13/unraid-buddybackup">github.com/Piratkopia13/unraid-buddybackup</a>
-<br><hr>
+<div class="pad-left">
+<div class="buddybackup-header-toolbar">
+    <div class="buddybackup-header-desc">
+        <span>BuddyBackup simplifies encrypted ZFS snapshot replication between buddies and OpenZFS systems.</span>
+        <span class="buddybackup-header-subdesc">Raw encrypted transfers keep your data private and unreadable to backup targets.</span>
+    </div>
+    <div class="buddybackup-header-actions">
+        <a href="https://github.com/Piratkopia13/unraid-buddybackup" target="_blank" rel="noopener noreferrer" class="buddybackup-meta-link" title="View Source on GitHub">
+            <i class="fa fa-github fa-fw"></i> GitHub
+        </a>
+        <a href="https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/" target="_blank" rel="noopener noreferrer" class="buddybackup-meta-link" title="Official Unraid Forum Guide">
+            <i class="fa fa-book fa-fw"></i> Guide
+        </a>
+        <a href="https://ko-fi.com/alexanderwester" target="_blank" rel="noopener noreferrer" class="buddybackup-meta-link buddybackup-kofi-link" title="Support BuddyBackup Development">
+            <i class="fa fa-coffee fa-fw"></i> Buy me a coffee
+        </a>
+    </div>
+</div>
+<hr style="margin: 0 0 12px 0;">
 <span id="buddybackup-not-running">No backups or restores are currently running.</span>
 <div id="buddybackup-restore-running" style="display:none;">
     <h3>A restore is (or recently was) in progress! </h3><input style="margin-left: 20px;" type="button" value="Show restore log" onclick="show_in_progress_log('Restore log', '#buddybackup-restore-log', 'active-textarea')">
@@ -832,7 +916,7 @@ This plugin is fully open source, and I encourage you to review the source to en
         <button onclick="abort_backups()" style="margin-left:50px"><i class='fa fa-bomb fa-fw'></i> Abort all running backups</button>
     </span>
 </div>
-</span>
+</div>
 <datalist id="cron">
     <option value="0 * * * *">_(Every hour on the hour)_</option>
     <option value="0 0 * * *">_(Every day at midnight)_</option>

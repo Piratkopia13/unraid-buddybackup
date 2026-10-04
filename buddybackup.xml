@@ -9,8 +9,8 @@
 <Description>BuddyBackup aims to simplify backing up to a buddy that is also running Unraid and using ZFS.</Description>
 <ExtraSearchTerms>truenas truenas scale proxmox zfs replication offsite backup snapshot encrypted</ExtraSearchTerms>
 <Project>https://github.com/Piratkopia13/unraid-buddybackup</Project>
-<DonateText>Be like open-source — freely give... to me!</DonateText>
-<DonateLink>https://www.paypal.com/paypalme/piratdev</DonateLink>
+<DonateText>If BuddyBackup keeps your backups safe, consider buying me a coffee!</DonateText>
+<DonateLink>https://ko-fi.com/alexanderwester</DonateLink>
 <Support>https://forums.unraid.net/topic/186256-zfs-buddybackup-plugin-guide/</Support>
 <Icon>https://raw.githubusercontent.com/Piratkopia13/unraid-buddybackup/refs/heads/main/src/usr/local/emhttp/plugins/buddybackup/images/buddybackup.png</Icon>
 </Containers>
