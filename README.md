@@ -14,6 +14,8 @@ This plugin is fully open source, and I encourage you to review the source to en
 - [Local User Guide (Markdown)](docs/USER_GUIDE.md)
 - [Pre-Release & Merge-to-Main Checklist](RELEASE_CHECKLIST.md)
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/alexanderwester)
+
 ### Compatibility
 
 - **Unraid → Unraid**: the classic buddy setup (push backups to a buddy, restore back).

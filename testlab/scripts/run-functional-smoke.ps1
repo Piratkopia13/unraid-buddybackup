@@ -1012,14 +1012,31 @@ try {
         @{ Connection = $senderConnection; NodeName = "nodeA" },
         @{ Connection = $receiverConnection; NodeName = "nodeB" }
     )) {
-        $clearKnownHostsResult = Invoke-BuddyBackupShellCommand -NodeConnection $refresh.Connection -Action "clear_known_hosts" -Label "$($refresh.NodeName)-clear-known-hosts" -DoExecute:$Execute
-        Add-ReportAction -Report $report -Result $clearKnownHostsResult
-        Assert-CommandSucceeded -Result $clearKnownHostsResult -FailureMessage "Failed to clear BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+        $probeManagedCmd = "grep -q 'ssh_known_hosts_path' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'managed' || echo 'legacy'"
+        $probeManagedResult = Invoke-NodeSshCommand -NodeConnection $refresh.Connection -Command $probeManagedCmd -Label "$($refresh.NodeName)-probe-managed-known-hosts" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $probeManagedResult
 
-        $refreshUpdateResult = Invoke-BuddyBackupPhpCommand -NodeConnection $refresh.Connection -Action "update" -Label "$($refresh.NodeName)-refresh-config" -DoExecute:$Execute
-        Add-ReportAction -Report $report -Result $refreshUpdateResult
-        Assert-CommandSucceeded -Result $refreshUpdateResult -FailureMessage "Failed to rebuild BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+        $isManaged = $true
+        if ($Execute -and $probeManagedResult.success) {
+            $outputStr = ($probeManagedResult.output -join "`n").Trim()
+            if ($outputStr -eq "legacy") {
+                $isManaged = $false
+            }
+        }
+
+        if ($isManaged) {
+            $clearKnownHostsResult = Invoke-BuddyBackupShellCommand -NodeConnection $refresh.Connection -Action "clear_known_hosts" -Label "$($refresh.NodeName)-clear-known-hosts" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $clearKnownHostsResult
+            Assert-CommandSucceeded -Result $clearKnownHostsResult -FailureMessage "Failed to clear BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+
+            $refreshUpdateResult = Invoke-BuddyBackupPhpCommand -NodeConnection $refresh.Connection -Action "update" -Label "$($refresh.NodeName)-refresh-config" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $refreshUpdateResult
+            Assert-CommandSucceeded -Result $refreshUpdateResult -FailureMessage "Failed to rebuild BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
+        } else {
+            Write-Host "[testlab] $($refresh.NodeName) is running a legacy release without managed known_hosts; skipping clear_known_hosts."
+        }
     }
+
 
     Write-Host "[testlab] Functional smoke: validating BuddyBackup connectivity"
     foreach ($pair in @(
@@ -1105,7 +1122,7 @@ try {
         @{ Connection = $receiverConnection; Uid = $receiverPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Key = "nodeB-local-snapshots" }
     )) {
         $snapshotArgs = if ($query.Type -eq "remote") { @($query.Type, $query.DestinationHost, $query.DestinationDataset) } else { @($query.Type, $query.DestinationDataset) }
-        $snapshotResult = Invoke-BuddyBackupShellCommand -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -DoExecute:$Execute
+        $snapshotResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -RetryTransientSshFailure:($query.Type -eq "remote") -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $snapshotResult
         Assert-CommandSucceeded -Result $snapshotResult -FailureMessage "Snapshot query failed for uid '$($query.Uid)' on node '$($query.Connection.NodeName)'."
         if ($Execute) {
@@ -1140,6 +1157,123 @@ try {
         $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $datasetCheck
         Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected restore dataset '$($check.Dataset)' was not found on node '$($check.Connection.NodeName)'."
+    }
+
+    # Check if sender or receiver supports backup hooks
+    $hookTargetConnection = $null
+    $hookTargetPlan = $null
+    $hookTargetNode = ""
+
+    foreach ($candidate in @(
+        @{ Connection = $senderConnection; Plan = $senderPlan; NodeName = "nodeA" },
+        @{ Connection = $receiverConnection; Plan = $receiverPlan; NodeName = "nodeB" }
+    )) {
+        $probeHooksCmd = "grep -q 'run_hook' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'supported' || echo 'legacy'"
+        $probeHooksResult = Invoke-NodeSshCommand -NodeConnection $candidate.Connection -Command $probeHooksCmd -Label "$($candidate.NodeName)-probe-hooks-support" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $probeHooksResult
+
+        $supportsHooks = $true
+        if ($Execute -and $probeHooksResult.success) {
+            $outputStr = ($probeHooksResult.output -join "`n").Trim()
+            if ($outputStr -eq "legacy") {
+                $supportsHooks = $false
+            }
+        }
+
+        if ($supportsHooks) {
+            $hookTargetConnection = $candidate.Connection
+            $hookTargetPlan = $candidate.Plan
+            $hookTargetNode = $candidate.NodeName
+            break
+        }
+    }
+
+    if ($null -ne $hookTargetConnection) {
+        Write-Host "[testlab] Functional smoke: verifying backup hooks lifecycle and failure modes on $hookTargetNode"
+        $hooksDir = "/boot/config/plugins/buddybackup/hooks"
+        $hookLog = "/tmp/buddybackup-hooks-test.log"
+        $testPreHook = "$hooksDir/test-pre.sh"
+        $testPostHook = "$hooksDir/test-post.sh"
+        $testAbortHook = "$hooksDir/test-abort.sh"
+
+        $setupHooksCmd = @"
+mkdir -p '$hooksDir'
+cat > '$testPreHook' <<'EOF'
+#!/bin/bash
+echo "pre_ran uid=`${BB_TASK_UID:-}" >> '$hookLog'
+exit 0
+EOF
+cat > '$testPostHook' <<'EOF'
+#!/bin/bash
+echo "post_ran status=`${BB_STATUS:-} exit=`${BB_EXIT_CODE:-} uid=`${BB_TASK_UID:-} type=`${BB_TASK_TYPE:-}" >> '$hookLog'
+exit 0
+EOF
+cat > '$testAbortHook' <<'EOF'
+#!/bin/bash
+echo "abort_pre_ran" >> '$hookLog'
+exit 42
+EOF
+chmod 755 '$testPreHook' '$testPostHook' '$testAbortHook'
+rm -f '$hookLog'
+"@
+
+        $setupHooksResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command $setupHooksCmd -Label "$hookTargetNode-setup-test-hooks" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $setupHooksResult
+        Assert-CommandSucceeded -Result $setupHooksResult -FailureMessage "Failed to stage test hooks on $hookTargetNode."
+
+        try {
+            # 1. Success lifecycle: pre-hook runs, syncoid runs, post-hook receives success context
+            $hookSuccessArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testPreHook, $testPostHook, "30", "abort")
+            $hookSuccessResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookSuccessArgs -Label "$hookTargetNode-hook-success-test" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $hookSuccessResult
+            Assert-CommandSucceeded -Result $hookSuccessResult -FailureMessage "BuddyBackup send_local_backup with hooks failed on $hookTargetNode."
+
+            if ($Execute) {
+                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-success-log" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $readLogResult
+                $logText = Get-ResultOutputText -Result $readLogResult
+                if ($logText -notmatch 'pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
+                    throw "Hook success test failed: unexpected hook log contents on $hookTargetNode.`n$logText"
+                }
+            }
+
+            # 2. Abort failure mode: failing pre-hook aborts syncoid, post-hook receives failed status and pre-hook exit code
+            $hookAbortArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "abort")
+            $hookAbortResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookAbortArgs -Label "$hookTargetNode-hook-abort-test" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $hookAbortResult
+
+            if ($Execute) {
+                if ($hookAbortResult.exitCode -eq 0) {
+                    throw "Hook abort test failed: send_local_backup unexpectedly succeeded when pre-hook exited 42 with abort mode."
+                }
+                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-abort-log" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $readLogResult
+                $logText = Get-ResultOutputText -Result $readLogResult
+                if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=failed exit=42') {
+                    throw "Hook abort test failed: unexpected hook log contents on $hookTargetNode.`n$logText"
+                }
+            }
+
+            # 3. Warn failure mode: failing pre-hook logs warning, syncoid proceeds, post-hook receives success context
+            $hookWarnArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "warn")
+            $hookWarnResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookWarnArgs -Label "$hookTargetNode-hook-warn-test" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $hookWarnResult
+            Assert-CommandSucceeded -Result $hookWarnResult -FailureMessage "BuddyBackup send_local_backup in warn mode failed on $hookTargetNode."
+
+            if ($Execute) {
+                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-warn-log" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $readLogResult
+                $logText = Get-ResultOutputText -Result $readLogResult
+                if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
+                    throw "Hook warn test failed: unexpected hook log contents on $hookTargetNode.`n$logText"
+                }
+            }
+        } finally {
+            $cleanupHooksResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "rm -f '$testPreHook' '$testPostHook' '$testAbortHook' '$hookLog'" -Label "$hookTargetNode-cleanup-test-hooks" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $cleanupHooksResult
+        }
+    } else {
+        Write-Host "[testlab] Skipping backup hooks test: neither node supports hooks in this cell."
     }
 
     $report.success = $true

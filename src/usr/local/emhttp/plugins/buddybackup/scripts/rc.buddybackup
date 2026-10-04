@@ -16,7 +16,7 @@ cleanup() {
     # Kill child processes
     kill $(list_descendants $$) >/dev/null 2>&1
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 unraid_notify() {
     # Call the Unraid notification script
@@ -247,6 +247,284 @@ run_and_write_output() {
     return "${error_code}"
 }
 
+# Runs a user-configured hook script or command locally (never on the remote host).
+# Supports direct script paths (e.g. /boot/config/.../hook.sh) as well as inline
+# shell commands or chained commands (e.g. docker pause nextcloud && sync).
+# If an absolute path without shell operators is provided, verifies the file exists
+# and is executable. Executes under a hard timeout; output is streamed through
+# write()/logger channels and the exit status is returned.
+run_hook() {
+    local hook_cmd="${1:-}"
+    local hook_timeout="${2:-30}"
+    local label="${3:-hook}"
+    local nchan="${4:-send}"
+
+    if [[ -z "${hook_cmd}" ]]; then
+        return 0
+    fi
+
+    # Defend against a malformed timeout value; fall back to the documented default.
+    if ! [[ "${hook_timeout}" =~ ^[0-9]+$ ]] || (( 10#${hook_timeout} < 1 )); then
+        hook_timeout=30
+    fi
+
+    # If the hook specifies a standalone file path, ensure the file exists and is executable.
+    local standalone_path_pattern='^/[^[:space:];&|]+$'
+    local exec_cmd="${hook_cmd}"
+    if [[ "${hook_cmd}" =~ ${standalone_path_pattern} ]]; then
+        if [[ ! -e "${hook_cmd}" ]]; then
+            write "${nchan}" "${label} script '${hook_cmd}' is missing or does not exist."
+            logger "${label} script '${hook_cmd}' is missing or does not exist" -t"${plugin}"
+            return 127
+        fi
+
+        local resolved_hook
+        resolved_hook=$(realpath "${hook_cmd}" 2>/dev/null || echo "${hook_cmd}")
+        if [[ "${resolved_hook}" =~ ^/boot/ ]] || [[ -n "${BUDDYBACKUP_TEST_BOOT_PREFIX:-}" && "${resolved_hook}" == "${BUDDYBACKUP_TEST_BOOT_PREFIX}"* ]]; then
+            # Unraid's /boot is a FAT32 filesystem mounted with fmask=0177, preventing
+            # POSIX execute permissions (+x) on all files. Ensure the file is readable
+            # and invoke it via an appropriate interpreter (or bash).
+            if [[ ! -r "${hook_cmd}" ]]; then
+                write "${nchan}" "${label} script '${hook_cmd}' is missing or not readable."
+                logger "${label} script '${hook_cmd}' is missing or not readable" -t"${plugin}"
+                return 127
+            fi
+            local shebang=""
+            read -r shebang < "${hook_cmd}" 2>/dev/null || true
+            shebang=$(echo "${shebang}" | tr -d '\r')
+            if [[ "${shebang}" =~ ^#![[:space:]]*(/.+) ]]; then
+                local interpreter="${BASH_REMATCH[1]}"
+                exec_cmd="${interpreter} $(printf '%q' "${hook_cmd}")"
+            else
+                exec_cmd="bash $(printf '%q' "${hook_cmd}")"
+            fi
+        elif [[ ! -x "${hook_cmd}" ]]; then
+            write "${nchan}" "${label} script '${hook_cmd}' is missing or not executable."
+            logger "${label} script '${hook_cmd}' is missing or not executable" -t"${plugin}"
+            return 127
+        fi
+    fi
+
+    logger "Running ${label} hook '${hook_cmd}' (timeout ${hook_timeout}s)" -t"${plugin}"
+    write "${nchan}" "Running ${label} hook (timeout ${hook_timeout}s).."
+
+    local hook_output=""
+    hook_output=$(timeout "${hook_timeout}" bash -c "${exec_cmd}" 2>&1)
+    local hook_status=$?
+
+    if [[ -n "${hook_output}" ]]; then
+        write "${nchan}" "${hook_output}"
+    fi
+
+    if [[ ${hook_status} -eq 0 ]]; then
+        logger "${label} hook '${hook_cmd}' finished successfully" -t"${plugin}"
+    else
+        logger "${label} hook '${hook_cmd}' failed with exit code ${hook_status}" -t"${plugin}"
+    fi
+
+    return "${hook_status}"
+}
+
+# Runs the post-snapshot thaw hook exactly once, even when snapshotting fails
+# or aborts early, so a workload that was frozen is always given the chance to thaw.
+run_snapshot_post_hook_once() {
+    if [[ -n "${SNAP_POST_HOOK_DONE:-}${POST_HOOK_DONE:-}" ]]; then
+        return 0
+    fi
+    SNAP_POST_HOOK_DONE=1
+    POST_HOOK_DONE=1
+
+    local hook="${SNAP_POST_HOOK_SCRIPT:-${POST_HOOK_SCRIPT:-}}"
+    local timeout="${SNAP_POST_HOOK_TIMEOUT:-${POST_HOOK_TIMEOUT:-30}}"
+    if [[ -z "${hook}" ]]; then
+        return 0
+    fi
+
+    run_hook "${hook}" "${timeout}" "post-snapshot" "send"
+    local post_status=$?
+    if [[ ${post_status} -ne 0 ]]; then
+        local msg="Post-snapshot hook '${hook}' failed with exit code ${post_status}. The backup result is unchanged."
+        write "send" "Warning: ${msg}"
+        logger "${msg}" -t"${plugin}"
+    fi
+}
+
+run_post_hook_once() {
+    run_snapshot_post_hook_once "$@"
+}
+
+# Runs the post-backup lifecycle hook exactly once when a backup task exits.
+# Exports BB_* context variables to the hook script environment.
+run_post_backup_hook_once() {
+    if [[ -n "${POST_BACKUP_HOOK_DONE:-}" ]]; then
+        return 0
+    fi
+    POST_BACKUP_HOOK_DONE=1
+
+    if [[ -z "${POST_BACKUP_SCRIPT:-}" ]]; then
+        return 0
+    fi
+
+    local safe_error
+    safe_error=$(printf '%s' "${POST_BACKUP_ERROR_MESSAGE:-}" | head -c 4096)
+
+    export BB_TASK_UID="${POST_BACKUP_UID:-}"
+    export BB_TASK_TYPE="${POST_BACKUP_TYPE:-}"
+    export BB_SOURCE_DATASET="${POST_BACKUP_SOURCE:-}"
+    export BB_DEST_DATASET="${POST_BACKUP_DEST:-}"
+    export BB_STATUS="${POST_BACKUP_STATUS:-failed}"
+    export BB_EXIT_CODE="${POST_BACKUP_EXIT_CODE:-1}"
+    export BB_ERROR_MESSAGE="${safe_error}"
+
+    run_hook "${POST_BACKUP_SCRIPT}" "${POST_BACKUP_TIMEOUT:-30}" "post-backup" "send"
+    local post_status=$?
+    if [[ ${post_status} -ne 0 ]]; then
+        local msg="Post-backup hook '${POST_BACKUP_SCRIPT}' failed with exit code ${post_status}. The backup result is unchanged."
+        write "send" "Warning: ${msg}"
+        unraid_notify "${msg}" "warning"
+    fi
+}
+
+# Chained runner for Sanoid when both post_snapshot_script and trigger are configured
+run_snapshot_post_hook_and_trigger() {
+    local dataset="${1:-}"
+    local post_hook="${2:-}"
+    local hook_timeout="${3:-30}"
+    local trigger_uid="${4:-}"
+    local nchan="snapshot"
+
+    # If post_hook wasn't supplied or is empty, load it from snapshots.cfg for this dataset
+    if [[ -z "${post_hook}" && -n "${dataset}" ]]; then
+        load_dataset_snapshot_hooks "${dataset}"
+        post_hook="${SNAP_POST_HOOK}"
+        hook_timeout="${SNAP_TIMEOUT:-30}"
+    fi
+
+    logger "Running snapshot post-hook and trigger for dataset '${dataset}'" -t"${plugin}"
+
+    # a. Run <post_hook_script> under <timeout> (thaws workload immediately).
+    if [[ -n "${post_hook}" ]]; then
+        run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
+        local post_status=$?
+        if [[ ${post_status} -ne 0 ]]; then
+            logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+        fi
+    fi
+
+    # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>".
+    if [[ -n "${trigger_uid}" && "${trigger_uid}" != "no" ]]; then
+        logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
+        "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh"
+    fi
+}
+
+load_dataset_snapshot_hooks() {
+    local target_dataset="$1"
+    SNAP_PRE_HOOK=""
+    SNAP_POST_HOOK=""
+    SNAP_TIMEOUT="30"
+    SNAP_MODE="abort"
+
+    local cfg_file="${plugin_path}/snapshots.cfg"
+    if [[ ! -f "${cfg_file}" ]]; then
+        return 0
+    fi
+
+    local current_dataset=""
+    local cur_pre=""
+    local cur_post=""
+    local cur_timeout="30"
+    local cur_mode="abort"
+
+    local save_section=0
+    while IFS='=' read -r key val || [[ -n "$key" ]]; do
+        key=$(echo "${key}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        val=$(echo "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
+        if [[ "${key}" =~ ^\[.*\]$ ]]; then
+            if [[ "${current_dataset}" == "${target_dataset}" ]]; then
+                SNAP_PRE_HOOK="${cur_pre}"
+                SNAP_POST_HOOK="${cur_post}"
+                SNAP_TIMEOUT="${cur_timeout}"
+                SNAP_MODE="${cur_mode}"
+            fi
+            current_dataset=""
+            cur_pre=""
+            cur_post=""
+            cur_timeout="30"
+            cur_mode="abort"
+            continue
+        fi
+
+        case "${key}" in
+            dataset)
+                current_dataset="${val}"
+                ;;
+            pre_snapshot_script)
+                cur_pre="${val}"
+                ;;
+            post_snapshot_script)
+                cur_post="${val}"
+                ;;
+            hook_timeout)
+                cur_timeout="${val}"
+                ;;
+            hook_failure_mode)
+                cur_mode="${val}"
+                ;;
+        esac
+    done < "${cfg_file}"
+
+    if [[ "${current_dataset}" == "${target_dataset}" ]]; then
+        SNAP_PRE_HOOK="${cur_pre}"
+        SNAP_POST_HOOK="${cur_post}"
+        SNAP_TIMEOUT="${cur_timeout}"
+        SNAP_MODE="${cur_mode}"
+    fi
+}
+
+load_backup_hooks() {
+    local target_uid="$1"
+    BACKUP_PRE_HOOK=""
+    BACKUP_POST_HOOK=""
+    BACKUP_HOOK_TIMEOUT="30"
+    BACKUP_HOOK_MODE="abort"
+
+    local cfg_file="${plugin_path}/backups.cfg"
+    if [[ ! -f "${cfg_file}" ]]; then
+        return 0
+    fi
+
+    local in_section=0
+    while IFS='=' read -r key val || [[ -n "$key" ]]; do
+        key=$(echo "${key}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        val=$(echo "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//')
+        if [[ "${key}" == "[$target_uid]" ]]; then
+            in_section=1
+            continue
+        elif [[ "${key}" =~ ^\[.*\]$ ]]; then
+            in_section=0
+            continue
+        fi
+
+        if [[ ${in_section} -eq 1 ]]; then
+            case "${key}" in
+                pre_backup_script|pre_snapshot_script)
+                    [[ -z "${BACKUP_PRE_HOOK}" ]] && BACKUP_PRE_HOOK="${val}"
+                    ;;
+                post_backup_script|post_snapshot_script)
+                    [[ -z "${BACKUP_POST_HOOK}" ]] && BACKUP_POST_HOOK="${val}"
+                    ;;
+                hook_timeout)
+                    BACKUP_HOOK_TIMEOUT="${val}"
+                    ;;
+                hook_failure_mode)
+                    BACKUP_HOOK_MODE="${val}"
+                    ;;
+            esac
+        fi
+    done < "${cfg_file}"
+}
+
 setup_buddy_user() {
     # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
@@ -397,6 +675,14 @@ allow_buddy_dataset() {
                 return 1
             fi
         fi
+    else
+        # Bare pool/disk root: children created here inherit a real mountpoint,
+        # which the restricted receiver user may not be able to mount during
+        # `zfs receive`. Recommend a destination sub-dataset instead.
+        local root_warn="BuddyBackup: Destination '${dataset}' is a pool/disk root; received child datasets inherit a real mountpoint and may fail to mount during receive. Use a destination sub-dataset created with mountpoint=none instead."
+        logger -t "${plugin}" "${root_warn}"
+        append_to_buddybackup_log "${root_warn}"
+        unraid_notify "${root_warn}" "warning"
     fi
 }
 
@@ -572,6 +858,12 @@ ssh_has_host_key_error() {
     local ssh_output="$1"
 
     [[ "${ssh_output}" == *"Host key verification failed"* ]] || [[ "${ssh_output}" == *"REMOTE HOST IDENTIFICATION HAS CHANGED"* ]]
+}
+
+has_mount_privilege_error() {
+    local command_output="$1"
+
+    printf '%s' "${command_output}" | grep -q 'cannot mount' && printf '%s' "${command_output}" | grep -q 'Insufficient privileges'
 }
 
 run_remote_ssh() {
@@ -790,6 +1082,30 @@ send_backup() {
     local remote_user="${7:-}"
     local remote_port="${8:-}"
     local skip_parent="${9:-no}"
+    local pre_hook="${10:-}"
+    local post_hook="${11:-}"
+    local hook_timeout="${12:-30}"
+    local hook_failure_mode="${13:-abort}"
+
+    if [[ -z "${pre_hook}" && -z "${post_hook}" ]]; then
+        load_backup_hooks "${uid}"
+        pre_hook="${BACKUP_PRE_HOOK}"
+        post_hook="${BACKUP_POST_HOOK}"
+        hook_timeout="${BACKUP_HOOK_TIMEOUT:-30}"
+        hook_failure_mode="${BACKUP_HOOK_MODE:-abort}"
+    fi
+
+    POST_BACKUP_SCRIPT="${post_hook}"
+    POST_BACKUP_TIMEOUT="${hook_timeout}"
+    POST_BACKUP_UID="${uid}"
+    POST_BACKUP_TYPE="${type}"
+    POST_BACKUP_SOURCE="${source_dataset}"
+    POST_BACKUP_DEST="${destination_dataset}"
+    POST_BACKUP_STATUS="failed"
+    POST_BACKUP_EXIT_CODE=1
+    POST_BACKUP_ERROR_MESSAGE=""
+    POST_BACKUP_HOOK_DONE=""
+    trap 'run_post_backup_hook_once; cleanup' EXIT INT TERM HUP
 
     logger "Sending backup to ${type} destination" -t"${plugin}"
 
@@ -797,12 +1113,37 @@ send_backup() {
     local encrypted_dataset=0
     local error=""
 
+    # 1. Pre-backup hook: runs before preflight and Syncoid
+    if [[ -n "${pre_hook}" ]]; then
+        run_hook "${pre_hook}" "${hook_timeout}" "pre-backup" "${nchan}"
+        local pre_hook_status=$?
+        if [[ ${pre_hook_status} -ne 0 ]]; then
+            if [[ "${hook_failure_mode}" == "abort" ]]; then
+                error="Pre-backup hook '${pre_hook}' failed with exit code ${pre_hook_status}. Aborting backup."
+                mark_failed_backup "${uid}" "${pre_hook_status}" "${error}"
+                write "${nchan}" "${error}"
+                unraid_notify "${error}" "alert"
+                POST_BACKUP_STATUS="failed"
+                POST_BACKUP_EXIT_CODE="${pre_hook_status}"
+                POST_BACKUP_ERROR_MESSAGE="${error}"
+                run_post_backup_hook_once
+                exit "${pre_hook_status}"
+            fi
+            write "${nchan}" "Warning: pre-backup hook '${pre_hook}' failed with exit code ${pre_hook_status}. Continuing because hook_failure_mode=warn."
+            logger "Pre-backup hook failed (${pre_hook_status}); continuing (warn mode)" -t"${plugin}"
+        fi
+    fi
+
     if ! normalize_remote_target remote_user remote_port "${destination_host}"; then
         error="Invalid destination host, user or port. Aborting backup."
         mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
-        return
+        POST_BACKUP_STATUS="failed"
+        POST_BACKUP_EXIT_CODE=1
+        POST_BACKUP_ERROR_MESSAGE="${error}"
+        run_post_backup_hook_once
+        exit 1
     fi
 
     preflight_send_state "${type}" "${source_dataset}" "yes"
@@ -815,7 +1156,11 @@ send_backup() {
         mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
-        return
+        POST_BACKUP_STATUS="failed"
+        POST_BACKUP_EXIT_CODE=1
+        POST_BACKUP_ERROR_MESSAGE="${error}"
+        run_post_backup_hook_once
+        exit 1
     fi
 
     if is_encrypted "${source_dataset}"; then
@@ -845,17 +1190,27 @@ send_backup() {
         if [[ "${type}" == "remote" ]]; then
             send_mark_received_backup "${destination_host}" "${destination_dataset}" "${remote_user}" "${remote_port}"
         fi
+        POST_BACKUP_STATUS="success"
+        POST_BACKUP_EXIT_CODE=0
+        POST_BACKUP_ERROR_MESSAGE=""
     else
         error_code=$?
         mark_failed_backup "${uid}" "${error_code}" "${result}"
         printf -v result "%s" "Sending backup failed. Error code ${error_code}. Full output: ${result}"
+        if has_mount_privilege_error "${result}"; then
+            printf -v result "%s\nHint: the received dataset could not be mounted on the target. Run \`zfs mount <dataset>\` on the target, or use a destination sub-dataset created with \`mountpoint=none\` so received backups inherit it." "${result}"
+        fi
         unraid_notify "${result}" "alert"
+        POST_BACKUP_STATUS="failed"
+        POST_BACKUP_EXIT_CODE="${error_code}"
+        POST_BACKUP_ERROR_MESSAGE="${result}"
     fi
     write "${nchan}" "${result}"
 
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"
     fi
+    run_post_backup_hook_once
     exit $error_code
 }
 
@@ -867,9 +1222,54 @@ send_local_backup() {
     local destination_dataset="${3}"
     local uid="${4}"
     local skip_parent="${5:-no}"
+    local pre_hook="${6:-}"
+    local post_hook="${7:-}"
+    local hook_timeout="${8:-30}"
+    local hook_failure_mode="${9:-abort}"
+
+    if [[ -z "${pre_hook}" && -z "${post_hook}" ]]; then
+        load_backup_hooks "${uid}"
+        pre_hook="${BACKUP_PRE_HOOK}"
+        post_hook="${BACKUP_POST_HOOK}"
+        hook_timeout="${BACKUP_HOOK_TIMEOUT:-30}"
+        hook_failure_mode="${BACKUP_HOOK_MODE:-abort}"
+    fi
+
+    POST_BACKUP_SCRIPT="${post_hook}"
+    POST_BACKUP_TIMEOUT="${hook_timeout}"
+    POST_BACKUP_UID="${uid}"
+    POST_BACKUP_TYPE="local"
+    POST_BACKUP_SOURCE="${source_dataset}"
+    POST_BACKUP_DEST="${destination_dataset}"
+    POST_BACKUP_STATUS="failed"
+    POST_BACKUP_EXIT_CODE=1
+    POST_BACKUP_ERROR_MESSAGE=""
+    POST_BACKUP_HOOK_DONE=""
+    trap 'run_post_backup_hook_once; cleanup' EXIT INT TERM HUP
 
     local nchan="send"
     local error=""
+
+    # 1. Pre-backup hook: runs before preflight and Syncoid
+    if [[ -n "${pre_hook}" ]]; then
+        run_hook "${pre_hook}" "${hook_timeout}" "pre-backup" "${nchan}"
+        local pre_hook_status=$?
+        if [[ ${pre_hook_status} -ne 0 ]]; then
+            if [[ "${hook_failure_mode}" == "abort" ]]; then
+                error="Pre-backup hook '${pre_hook}' failed with exit code ${pre_hook_status}. Aborting backup."
+                mark_failed_backup "${uid}" "${pre_hook_status}" "${error}"
+                write "${nchan}" "${error}"
+                unraid_notify "${error}" "alert"
+                POST_BACKUP_STATUS="failed"
+                POST_BACKUP_EXIT_CODE="${pre_hook_status}"
+                POST_BACKUP_ERROR_MESSAGE="${error}"
+                run_post_backup_hook_once
+                exit "${pre_hook_status}"
+            fi
+            write "${nchan}" "Warning: pre-backup hook '${pre_hook}' failed with exit code ${pre_hook_status}. Continuing because hook_failure_mode=warn."
+            logger "Pre-backup hook failed (${pre_hook_status}); continuing (warn mode)" -t"${plugin}"
+        fi
+    fi
 
     preflight_send_state "local" "${source_dataset}" "yes"
     if [[ "${PREFLIGHT_STATUS}" != "ok" ]]; then
@@ -881,7 +1281,11 @@ send_local_backup() {
         mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
-        return
+        POST_BACKUP_STATUS="failed"
+        POST_BACKUP_EXIT_CODE=1
+        POST_BACKUP_ERROR_MESSAGE="${error}"
+        run_post_backup_hook_once
+        exit 1
     fi
 
     local my_syncoid_flags="${syncoid_flags_local}"
@@ -898,17 +1302,24 @@ send_local_backup() {
         fi
         printf -v result "\n%s" "Successfully synced local backup!"
         mark_sent_backup "local" "" "${destination_dataset}" "${uid}"
+        POST_BACKUP_STATUS="success"
+        POST_BACKUP_EXIT_CODE=0
+        POST_BACKUP_ERROR_MESSAGE=""
     else 
         error_code=$?
         mark_failed_backup "${uid}" "${error_code}" "${result}"
         printf -v result "%s" "Local backup failed. Error code ${error_code}. Full output: ${result}"
         unraid_notify "${result}" "alert"
+        POST_BACKUP_STATUS="failed"
+        POST_BACKUP_EXIT_CODE="${error_code}"
+        POST_BACKUP_ERROR_MESSAGE="${result}"
     fi
     write "${nchan}" "${result}"
 
     if [[ "${nchan}" ]]; then
         write "${nchan}" "[[rc.buddybackup finished]]"
     fi
+    run_post_backup_hook_once
     exit $error_code
 }
 
@@ -922,6 +1333,10 @@ create_snapshot_and_send() {
     local remote_user="${7:-}"
     local remote_port="${8:-}"
     local skip_parent="${9:-no}"
+    local pre_hook="${10:-}"
+    local post_hook="${11:-}"
+    local hook_timeout="${12:-30}"
+    local hook_failure_mode="${13:-abort}"
     local nchan="send"
     local snapshot_name=""
     local snapshot_output=""
@@ -939,6 +1354,41 @@ create_snapshot_and_send() {
         return
     fi
 
+    # Check if source dataset has snapshot hooks configured
+    if [[ -z "${pre_hook}" && -z "${post_hook}" ]]; then
+        load_dataset_snapshot_hooks "${source_dataset}"
+        pre_hook="${SNAP_PRE_HOOK}"
+        post_hook="${SNAP_POST_HOOK}"
+        hook_timeout="${SNAP_TIMEOUT:-30}"
+        hook_failure_mode="${SNAP_MODE:-abort}"
+    fi
+
+    # Set up trap so thaw runs even if process is killed or pre-hook aborts
+    SNAP_POST_HOOK_SCRIPT="${post_hook}"
+    SNAP_POST_HOOK_TIMEOUT="${hook_timeout}"
+    SNAP_POST_HOOK_DONE=""
+    trap 'run_snapshot_post_hook_once; cleanup' EXIT INT TERM HUP
+
+    # Pre-snapshot hook: gives the user a chance to pause/flush the workload
+    # (freeze a VM, pause a container, flush a database) before we snapshot.
+    if [[ -n "${pre_hook}" ]]; then
+        run_hook "${pre_hook}" "${hook_timeout}" "pre-snapshot" "${nchan}"
+        local pre_hook_status=$?
+        if [[ ${pre_hook_status} -ne 0 ]]; then
+            if [[ "${hook_failure_mode}" == "abort" ]]; then
+                error="Pre-snapshot hook '${pre_hook}' failed with exit code ${pre_hook_status}. Aborting backup."
+                mark_failed_backup "${uid}" "${pre_hook_status}" "${error}"
+                write "${nchan}" "${error}"
+                unraid_notify "${error}" "alert"
+                run_snapshot_post_hook_once
+                trap cleanup EXIT INT TERM HUP
+                return
+            fi
+            write "${nchan}" "Warning: pre-snapshot hook '${pre_hook}' failed with exit code ${pre_hook_status}. Continuing because hook_failure_mode=warn."
+            logger "Pre-snapshot hook failed (${pre_hook_status}); continuing (warn mode)" -t"${plugin}"
+        fi
+    fi
+
     snapshot_name=$(manual_snapshot_name "${source_dataset}")
     write "${nchan}" "Creating fresh snapshot '${snapshot_name}'.."
 
@@ -947,15 +1397,25 @@ create_snapshot_and_send() {
     fi
     snapshot_cmd+=("${snapshot_name}")
 
+    local snap_err=0
     if ! snapshot_output=$("${snapshot_cmd[@]}" 2>&1); then
+        snap_err=1
         error="Failed to create snapshot '${snapshot_name}'. ${snapshot_output}"
         mark_failed_backup "${uid}" 1 "${error}"
         write "${nchan}" "${error}"
         unraid_notify "${error}" "alert"
-        return
+    else
+        write "${nchan}" "Created snapshot '${snapshot_name}'."
     fi
 
-    write "${nchan}" "Created snapshot '${snapshot_name}'."
+    # IMMEDIATE THAW: post-snapshot hook runs right now, NEVER deferred until after replication!
+    # GUARANTEED THAW: runs even if zfs snapshot failed!
+    run_snapshot_post_hook_once
+    trap cleanup EXIT INT TERM HUP
+
+    if [[ ${snap_err} -ne 0 ]]; then
+        return
+    fi
 
     if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]]; then
         send_backup "${type}" "${source_dataset}" "${recursive}" "${destination_host}" "${destination_dataset}" "${uid}" "${remote_user}" "${remote_port}" "${skip_parent}"
@@ -1649,14 +2109,17 @@ case "$1" in
         emit_send_preflight_status "${2}" "${3}" "${4}"
     ;;
     ('send_backup')
-		send_backup "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
+		send_backup "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
     ('send_local_backup')
-		send_local_backup "${2}" "${3}" "${4}" "${5}" "${6}"
+		send_local_backup "${2}" "${3}" "${4}" "${5}" "${6}" "${7:-}" "${8:-}" "${9:-30}" "${10:-abort}"
 	;;
     ('create_snapshot_and_send')
-        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}"
+        create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
+    ('run_snapshot_post_hook_and_trigger')
+        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}"
+    ;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}"
 	;;
@@ -1692,5 +2155,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|setup_buddy_user|allow_buddy_dataset|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|run_snapshot_post_hook_and_trigger|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|setup_buddy_user|allow_buddy_dataset|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac

@@ -7,6 +7,7 @@ Coverage columns record the version pairs assigned to the two fixed lab slots fo
 
 | Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Pair Coverage | Unraid Pair Coverage | Detail |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 20261004-174140-55b97f0 | 2026.10.04 | 55b97f0 | release-default | pass | pass | 2026.05.02 (release-tag) -> 2026.10.04 (workspace-build); 2026.10.04 (workspace-build) -> 2026.05.02 (release-tag); 2026.10.04 (workspace-build) -> 2026.10.04 (workspace-build) | 7.2.6 -> 7.3.0 | [detail](runs/20261004-174140-55b97f0.json) |
 | 20260927-122114-1adc975 | 2026.09.27 | 1adc975 | release-default | pass | pass | 2026.05.02 (release-tag) -> 2026.09.27 (workspace-build); 2026.09.27 (workspace-build) -> 2026.05.02 (release-tag); 2026.09.27 (workspace-build) -> 2026.09.27 (workspace-build) | 7.2.6 -> 7.3.0 | [detail](runs/20260927-122114-1adc975.json) |
 | 20260920-101804-c39017d | 2026.09.23 | c39017d | release-default | pass | pass | 2026.05.02 (release-tag) -> 2026.09.23 (workspace-build); 2026.09.23 (workspace-build) -> 2026.05.02 (release-tag); 2026.09.23 (workspace-build) -> 2026.09.23 (workspace-build) | 7.2.6 -> 7.3.0 | [detail](runs/20260920-101804-c39017d.json) |
 | 20260528-202529-28b6c9a | 2026.05.29 | 28b6c9a | release-default | pass | pass | 2026.05.02 (release-tag) -> 2026.05.29 (workspace-build); 2026.05.29 (workspace-build) -> 2026.05.02 (release-tag); 2026.05.29 (workspace-build) -> 2026.05.29 (workspace-build) | 7.2.6 -> 7.3.0 | [detail](runs/20260528-202529-28b6c9a.json) |

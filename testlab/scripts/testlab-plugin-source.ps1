@@ -125,7 +125,11 @@ function New-TestLabWorkspacePackage {
     }
 
     if (Test-Path -LiteralPath $PackagePath) {
-        Remove-Item -LiteralPath $PackagePath -Force
+        try {
+            Remove-Item -LiteralPath $PackagePath -Force -ErrorAction Stop
+        } catch {
+            [System.IO.File]::Delete($PackagePath)
+        }
     }
 
     if ($env:OS -ne 'Windows_NT') {

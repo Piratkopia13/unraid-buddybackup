@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.09.27a">
+  <!ENTITY version      "2026.10.04">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "0c2fe31494c30e2441b005ce5d09146c">
+  <!ENTITY pkgMD5        "871274730611e1aa7fcd204ce0440eb1">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,13 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.10.04
+- Add pre/post snapshot hooks to safely pause and resume VMs, containers, or databases around snapshot creation [#33](https://github.com/Piratkopia13/unraid-buddybackup/issues/33)
+- Add pre/post backup hooks to run commands or scripts before and after replication (e.g. Wake-on-LAN, webhooks, or monitoring pings) [#33](https://github.com/Piratkopia13/unraid-buddybackup/issues/33)
+- Add troubleshooting hint when remote backup fails due to missing ZFS mount permissions [#32](https://github.com/Piratkopia13/unraid-buddybackup/issues/32)
+- Add warning when backup destination is configured as the pool root instead of a child dataset [#32](https://github.com/Piratkopia13/unraid-buddybackup/issues/32)
+- Fix bug where backup tasks with all-digit IDs incorrectly showed as Disabled [#34](https://github.com/Piratkopia13/unraid-buddybackup/issues/34)
 
 ###2026.09.27a
 - Fix destination dataset immutability and property inheritance to ensure readonly=on is preserved for TrueNAS replication tasks and child datasets

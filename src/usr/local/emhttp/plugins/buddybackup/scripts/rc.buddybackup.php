@@ -131,6 +131,69 @@ function resolve_remote_identity_from_cfg($cfg, $prefix, &$error_message = null)
     return normalize_remote_identity($cfg[$prefix.'_user'] ?? '', $cfg[$prefix.'_port'] ?? '', $error_message);
 }
 
+function validate_hook_script($path, &$error_message = null) {
+    $path = trim((string)$path);
+
+    // An empty value simply means "no hook configured".
+    if ($path === '') {
+        return true;
+    }
+
+    if (strpos($path, "\0") !== false) {
+        $error_message = "Hook command cannot contain null characters.";
+        return false;
+    }
+
+    // Guard against relative script file paths (e.g. "my_hook.sh" or "./my_hook.sh")
+    if (preg_match('/^\.?[a-zA-Z0-9_\-]+\.sh$/', $path)) {
+        $error_message = "Script files must be specified with an absolute path starting with / (e.g. /boot/config/plugins/buddybackup/hooks/$path).";
+        return false;
+    }
+
+    // If it looks like a single absolute file path (starts with / and has no whitespace or shell operators)
+    if (substr($path, 0, 1) === '/' && !preg_match('/[\s;&|]/', $path)) {
+        $resolved = realpath($path);
+        if ($resolved === false || !is_file($resolved)) {
+            $error_message = "Hook script '$path' does not exist or is not a regular file.";
+            return false;
+        }
+
+        $test_prefix = getenv('BUDDYBACKUP_TEST_BOOT_PREFIX');
+        $is_boot = (substr($resolved, 0, 6) === '/boot/' || ($test_prefix !== false && $test_prefix !== '' && substr($resolved, 0, strlen($test_prefix)) === $test_prefix));
+        if ($is_boot) {
+            if (!is_readable($resolved)) {
+                $error_message = "Hook script '$path' is not readable.";
+                return false;
+            }
+        } else {
+            if (!is_executable($resolved)) {
+                $error_message = "Hook script '$path' is not executable.";
+                return false;
+            }
+
+            $perms = fileperms($resolved);
+            if ($perms !== false && ($perms & 0022) !== 0) {
+                $error_message = "Hook script '$path' must not be group- or world-writable.";
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+function normalize_hook_timeout($value) {
+    $value = trim((string)$value);
+    if ($value === '' || !ctype_digit($value) || (int)$value < 1) {
+        return '30';
+    }
+    return (string)(int)$value;
+}
+
+function normalize_hook_failure_mode($value) {
+    return ((string)$value === 'warn') ? 'warn' : 'abort';
+}
+
 function read_receive_destination_dataset(&$error_message = null) {
     global $tmp_recv_dataset_path, $incoming_config_path;
 
@@ -228,6 +291,28 @@ function build_shell_command($parts) {
     }, $parts));
 }
 
+function get_snapshot_hooks_for_dataset($dataset) {
+    global $extra_sanoid_config_path;
+    if (!file_exists($extra_sanoid_config_path)) {
+        return array('pre' => '', 'post' => '', 'timeout' => '30', 'mode' => 'abort');
+    }
+    $cfg = parse_ini_file($extra_sanoid_config_path, true);
+    if (!is_array($cfg)) {
+        return array('pre' => '', 'post' => '', 'timeout' => '30', 'mode' => 'abort');
+    }
+    foreach ($cfg as $sec => $data) {
+        if (($data['dataset'] ?? '') === $dataset) {
+            return array(
+                'pre' => trim((string)($data['pre_snapshot_script'] ?? '')),
+                'post' => trim((string)($data['post_snapshot_script'] ?? '')),
+                'timeout' => normalize_hook_timeout($data['hook_timeout'] ?? ''),
+                'mode' => normalize_hook_failure_mode($data['hook_failure_mode'] ?? ''),
+            );
+        }
+    }
+    return array('pre' => '', 'post' => '', 'timeout' => '30', 'mode' => 'abort');
+}
+
 function load_backup_config_entry($uid, &$error_message = null) {
     global $backups_config_path;
 
@@ -237,7 +322,14 @@ function load_backup_config_entry($uid, &$error_message = null) {
         return null;
     }
 
-    return $backup_cfg[$uid];
+    $entry = $backup_cfg[$uid];
+    if (!isset($entry['pre_backup_script']) && isset($entry['pre_snapshot_script'])) {
+        $entry['pre_backup_script'] = $entry['pre_snapshot_script'];
+    }
+    if (!isset($entry['post_backup_script']) && isset($entry['post_snapshot_script'])) {
+        $entry['post_backup_script'] = $entry['post_snapshot_script'];
+    }
+    return $entry;
 }
 
 function run_task_command($cmd, $echo_pid) {
@@ -257,6 +349,17 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
 
     $skip_parent = (($cfg['skip_parent'] ?? 'no') === 'yes' && ($cfg['recursive'] ?? '') === 'yes') ? 'yes' : 'no';
 
+    $pre_hook = trim((string)($cfg['pre_backup_script'] ?? $cfg['pre_snapshot_script'] ?? ''));
+    $post_hook = trim((string)($cfg['post_backup_script'] ?? $cfg['post_snapshot_script'] ?? ''));
+    if ($pre_hook !== '' && !validate_hook_script($pre_hook, $error_message)) {
+        return null;
+    }
+    if ($post_hook !== '' && !validate_hook_script($post_hook, $error_message)) {
+        return null;
+    }
+    $hook_timeout = normalize_hook_timeout($cfg['hook_timeout'] ?? '');
+    $hook_failure_mode = normalize_hook_failure_mode($cfg['hook_failure_mode'] ?? '');
+
     if ($cfg['type'] == 'local') {
         return build_shell_command(array(
             $rc,
@@ -266,6 +369,10 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $cfg['destination_dataset'],
             $uid,
             $skip_parent,
+            $pre_hook,
+            $post_hook,
+            $hook_timeout,
+            $hook_failure_mode,
         ));
     }
 
@@ -282,6 +389,10 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             '',
             '',
             $skip_parent,
+            $pre_hook,
+            $post_hook,
+            $hook_timeout,
+            $hook_failure_mode,
         ));
     }
 
@@ -302,6 +413,10 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $identity['user'],
             $identity['port'],
             $skip_parent,
+            $pre_hook,
+            $post_hook,
+            $hook_timeout,
+            $hook_failure_mode,
         ));
     }
 
@@ -324,6 +439,34 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
         $remote_port = $identity['port'];
     }
 
+    // Check snapshots.cfg for the source dataset's snapshot hooks
+    $snap_hooks = get_snapshot_hooks_for_dataset($cfg['source_dataset'] ?? '');
+    $pre_hook = $snap_hooks['pre'];
+    $post_hook = $snap_hooks['post'];
+    $hook_timeout = $snap_hooks['timeout'];
+    $hook_failure_mode = $snap_hooks['mode'];
+
+    // Fall back to legacy keys on the backup task if not configured in snapshots.cfg
+    if ($pre_hook === '' && !empty($cfg['pre_snapshot_script'])) {
+        $pre_hook = trim((string)$cfg['pre_snapshot_script']);
+    }
+    if ($post_hook === '' && !empty($cfg['post_snapshot_script'])) {
+        $post_hook = trim((string)$cfg['post_snapshot_script']);
+    }
+    if (!empty($cfg['hook_timeout'])) {
+        $hook_timeout = normalize_hook_timeout($cfg['hook_timeout']);
+    }
+    if (!empty($cfg['hook_failure_mode'])) {
+        $hook_failure_mode = normalize_hook_failure_mode($cfg['hook_failure_mode']);
+    }
+
+    if ($pre_hook !== '' && !validate_hook_script($pre_hook, $error_message)) {
+        return null;
+    }
+    if ($post_hook !== '' && !validate_hook_script($post_hook, $error_message)) {
+        return null;
+    }
+
     $parts = array(
         $rc,
         'create_snapshot_and_send',
@@ -336,6 +479,10 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
         $remote_user,
         $remote_port,
         $skip_parent,
+        $pre_hook,
+        $post_hook,
+        $hook_timeout,
+        $hook_failure_mode,
     );
 
     return build_shell_command($parts);
@@ -571,6 +718,7 @@ function update_sanoid_conf() {
     global $incoming_config_path;
     global $empath;
     global $log_script;
+    global $rc;
 
     ensure_incoming_config_migrated();
 
@@ -632,16 +780,45 @@ function update_sanoid_conf() {
                 continue;
             }
             $sanoid_conf_content .= "[$dataset]\n";
+
+            $pre_hook = str_replace(array("\r", "\n"), '', trim((string)($section['pre_snapshot_script'] ?? '')));
+            $post_hook = str_replace(array("\r", "\n"), '', trim((string)($section['post_snapshot_script'] ?? '')));
+            $hook_timeout = normalize_hook_timeout($section['hook_timeout'] ?? '');
+            $hook_failure_mode = normalize_hook_failure_mode($section['hook_failure_mode'] ?? '');
+            $trigger = trim((string)($section['trigger'] ?? ''));
+            if ($trigger === 'no') {
+                $trigger = '';
+            }
+
             foreach ($section as $key => $value) {
-                if ($key == "dataset") continue;
-                if ($key == "trigger") {
-                    if (empty($value) || $value == "no") continue;
-                    $cmd = "$empath/scripts/rc.buddybackup.php send_backup \"$value\" 2>&1 | $log_script";
-                    $sanoid_conf_content .= "    post_snapshot_script = $cmd\n";
+                if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode'), true)) {
                     continue;
                 }
-
                 $sanoid_conf_content .= "    $key = $value\n";
+            }
+
+            if ($pre_hook !== '') {
+                $sanoid_conf_content .= "    pre_snapshot_script = $pre_hook\n";
+                if ($hook_failure_mode === 'abort') {
+                    $sanoid_conf_content .= "    no_inconsistent_snapshot = 1\n";
+                }
+            }
+
+            if ($pre_hook !== '' || $post_hook !== '') {
+                $sanoid_conf_content .= "    script_timeout = $hook_timeout\n";
+            }
+
+            if ($post_hook !== '' && $trigger !== '') {
+                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                $escaped_post_hook = addcslashes($post_hook, "\\\"$");
+                $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
+                $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
+            } else if ($post_hook !== '') {
+                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                $sanoid_conf_content .= "    post_snapshot_script = $post_hook\n";
+            } else if ($trigger !== '') {
+                $cmd = "$empath/scripts/rc.buddybackup.php send_backup \"$trigger\" 2>&1 | $log_script";
+                $sanoid_conf_content .= "    post_snapshot_script = $cmd\n";
             }
         }
     }
@@ -687,6 +864,35 @@ function update_backups_from_config() {
     global $backups_config_path;
     global $rc;
     $backup_cfg = parse_ini_file($backups_config_path, true);
+
+    if (is_array($backup_cfg)) {
+        $migrated = false;
+        foreach ($backup_cfg as $u => &$c) {
+            if (isset($c['pre_snapshot_script']) || isset($c['post_snapshot_script'])) {
+                if (!isset($c['pre_backup_script']) && isset($c['pre_snapshot_script'])) {
+                    $c['pre_backup_script'] = $c['pre_snapshot_script'];
+                }
+                if (!isset($c['post_backup_script']) && isset($c['post_snapshot_script'])) {
+                    $c['post_backup_script'] = $c['post_snapshot_script'];
+                }
+                unset($c['pre_snapshot_script']);
+                unset($c['post_snapshot_script']);
+                $migrated = true;
+            }
+        }
+        unset($c);
+        if ($migrated) {
+            $content = "";
+            foreach ($backup_cfg as $sec => $vals) {
+                $content .= "[$sec]\n";
+                foreach ($vals as $k => $v) {
+                    $escaped_v = str_replace('"', '\"', (string)$v);
+                    $content .= "$k=\"$escaped_v\"\n";
+                }
+            }
+            ENSURE_SUCCESS(file_put_contents($backups_config_path, $content) !== false);
+        }
+    }
 
     // Remove all backup cron files from $plugin_path
     $files = scandir($plugin_path);
@@ -1038,7 +1244,7 @@ function create_snapshot_and_send($uid, $echo_pid_arg) {
     }
 }
 
-switch ($argv[1]) {
+switch ($argv[1] ?? '') {
     case 'update':
         update();
         break;

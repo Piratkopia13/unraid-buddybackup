@@ -66,6 +66,125 @@ Each configured backup task displays:
 - **Skip parent dataset**: Replicate only child datasets, skipping the root parent dataset (useful when replicating container datasets or pools without duplicating the parent).
 - **Cron schedule**: Cron expression defining when the backup runs (default: `0 0 * * *` for midnight).
 
+#### Backup Hooks (Advanced)
+
+Optional scripts or commands that run **locally on this Unraid host** around the replication lifecycle of a backup task. Use them for pre-sync infrastructure preparation (e.g. Wake-on-LAN, pinging the buddy host, establishing a VPN tunnel) and post-sync notifications (e.g. custom webhooks, monitoring heartbeats, email or chat alerts).
+
+> [!NOTE]
+> Backup hooks run strictly on the local Unraid server, never on the remote buddy host. To pause or flush workloads (VM freeze, container pause, database flush) during snapshot creation, configure **Snapshot Hooks** under [Snapshot creation and pruning](#2-snapshot-creation-and-pruning).
+
+**Execution Lifecycle**:
+
+1. **Pre-backup hook**: Runs immediately before preflight checks and Syncoid replication start.
+   - If the pre-backup hook exits non-zero and **Hook failure mode** is set to `Abort backup`, replication is aborted and the backup task is marked as failed.
+   - If **Hook failure mode** is set to `Warn and continue`, a warning is logged and replication proceeds.
+2. **Replication**: Syncoid syncs datasets to the local or remote destination.
+3. **Post-backup hook**: Guaranteed to run when replication concludes, **on both success and failure**.
+   - Contextual environment variables are exported to the command environment:
+     - `BB_TASK_UID`: Unique identifier of the backup task (e.g. `aa4ed6a1`).
+     - `BB_TASK_TYPE`: Destination type (`local`, `remote`, or `remote_generic`).
+     - `BB_SOURCE_DATASET`: Source dataset path (e.g. `tank/data/appdata`).
+     - `BB_DEST_DATASET`: Destination dataset path (e.g. `tank/backups/appdata`).
+     - `BB_STATUS`: Result status (`success` or `failed`).
+     - `BB_EXIT_CODE`: Integer exit status of the replication command (`0` on success).
+     - `BB_ERROR_MESSAGE`: Clean error summary if replication failed (empty on success).
+   - A failing post-backup hook logs a warning but never alters the recorded backup outcome.
+
+**Fields**:
+
+- **Pre-backup hook**: Absolute path to an executable script (e.g. `/boot/config/plugins/buddybackup/hooks/pre-backup.sh`), or a direct inline command (e.g. `wakeonlan 00:11:22:33:44:55`). Leave empty to disable.
+- **Post-backup hook**: Absolute path to an executable script or a direct inline command (e.g. `curl -fsS "https://status.example.com/ping?status=${BB_STATUS}"`). Leave empty to disable.
+- **Hook timeout (seconds)**: Maximum execution time before the script or command is forcibly terminated (default: `30`).
+- **Hook failure mode**: Applies to the **pre-backup** hook only:
+  - `Abort backup` (default): Aborts replication immediately if the pre-backup hook exits non-zero.
+  - `Warn and continue`: Logs a warning on non-zero exit and continues replication.
+
+**Requirements**: Hooks execute locally in Bash under the configured timeout. When referencing a standalone script file, it must be an absolute path starting with `/`. Scripts stored on persistent array or pool storage must be marked executable (`chmod 755`) and not group- or world-writable; scripts on the Unraid flash drive (`/boot/config/...`) are executed automatically via their shebang interpreter or Bash without requiring POSIX `+x` permissions. Commands and chained commands (`cmd1 && cmd2`) are executed directly.
+
+##### Example Recipes
+
+> [!TIP]
+> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`) so they persist across Unraid reboots. Scripts stored under `/boot` are executed automatically via their shebang interpreter or Bash. If storing scripts on an array or pool share, ensure they are executable (`chmod 755`).
+
+**1. Wake-on-LAN before backup** (`pre-backup.sh`):
+
+Wake the remote destination server before replication starts and wait for its SSH port to become responsive:
+
+```bash
+#!/bin/bash
+TARGET_MAC="AA:BB:CC:DD:EE:FF"
+TARGET_HOST="192.168.1.50"
+TARGET_PORT="22"
+
+echo "Sending Wake-on-LAN magic packet to ${TARGET_MAC}..."
+wakeonlan "${TARGET_MAC}" || etherwake "${TARGET_MAC}"
+
+# Wait up to 60 seconds for SSH port to respond
+for i in {1..30}; do
+    if nc -z -w 2 "${TARGET_HOST}" "${TARGET_PORT}" 2>/dev/null; then
+        echo "Target host is reachable on port ${TARGET_PORT}."
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "Target host failed to respond within 60 seconds."
+exit 1
+```
+
+**2. Webhook Notification** (`post-backup.sh`):
+
+Send rich status payloads to a webhook endpoint using the `BB_*` environment variables:
+
+```bash
+#!/bin/bash
+WEBHOOK_URL="https://example.com/api/webhooks/YOUR_WEBHOOK_URL"
+
+if [[ "${BB_STATUS}" == "success" ]]; then
+    COLOR=3066993 # Green
+    TITLE="BuddyBackup Succeeded"
+    DESC="Task **${BB_TASK_UID}** synced \`${BB_SOURCE_DATASET}\` → \`${BB_DEST_DATASET}\` successfully."
+else
+    COLOR=15158332 # Red
+    TITLE="BuddyBackup Failed"
+    DESC="Task **${BB_TASK_UID}** failed (exit code ${BB_EXIT_CODE}):\n\`${BB_ERROR_MESSAGE}\`"
+fi
+
+PAYLOAD=$(cat <<EOF
+{
+  "embeds": [{
+    "title": "${TITLE}",
+    "description": "${DESC}",
+    "color": ${COLOR},
+    "fields": [
+      { "name": "Source", "value": "${BB_SOURCE_DATASET}", "inline": true },
+      { "name": "Destination", "value": "${BB_DEST_DATASET}", "inline": true },
+      { "name": "Type", "value": "${BB_TASK_TYPE}", "inline": true }
+    ],
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }]
+}
+EOF
+)
+
+curl -s -H "Content-Type: application/json" -X POST -d "${PAYLOAD}" "${WEBHOOK_URL}" >/dev/null 2>&1 || true
+```
+
+**3. Monitoring Heartbeat Ping** (`post-backup.sh`):
+
+Ping your uptime/health monitoring service on completion, notifying on both success and failure:
+
+```bash
+#!/bin/bash
+PING_URL="https://status.example.com/ping/your-check-uuid"
+
+if [[ "${BB_STATUS}" == "success" ]]; then
+    curl -fsS -m 10 --retry 3 "${PING_URL}" >/dev/null 2>&1 || true
+else
+    curl -fsS -m 10 --retry 3 --data-raw "${BB_ERROR_MESSAGE}" "${PING_URL}/fail" >/dev/null 2>&1 || true
+fi
+```
+
 #### Destination Settings
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
@@ -116,6 +235,79 @@ Automated snapshot creation and retention policies powered by **Sanoid**.
 - **Create snapshots automatically** (`autosnap`) & **Prune snapshots automatically** (`autoprune`): Toggle automated snapshot creation and retention pruning.
 - **Snapshot retention**: Number of snapshots to retain for Hourly, Daily, Weekly, Monthly, and Yearly intervals.
 - **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset.
+
+#### Snapshot Hooks (Advanced)
+
+Configure pre- and post-snapshot scripts or direct commands per dataset under the collapsible **Advanced: snapshot hooks** card settings. These run locally to ensure point-in-time consistency for active workloads (e.g. freezing VMs, pausing containers, or flushing databases).
+
+> [!IMPORTANT]
+> **Immediate Resume Guarantee**:
+> In BuddyBackup, workload pausing is tightly coupled to the snapshot lifecycle—**never** the network replication transfer. The pre-snapshot hook pauses the workload milliseconds before `zfs snapshot` executes, and the post-snapshot hook resumes it **immediately** (~50ms) afterwards.
+> Even if snapshot creation fails or exits with an error, the post-snapshot resume hook is **guaranteed to run via an EXIT trap**. Your VMs and containers will never remain frozen during network replication or after an error.
+
+**Chaining with Backup Triggers**:
+When both a post-snapshot resume hook and a **Trigger backup after snapshot** task are configured on the same dataset, BuddyBackup automatically sequences execution:
+1. Workload is paused or flushed via `pre_snapshot_script`.
+2. `zfs snapshot` creates the point-in-time snapshot.
+3. Workload is **resumed immediately** via `post_snapshot_script`.
+4. BuddyBackup dispatches the triggered backup task (`send_backup`) for network replication while your application continues running with zero downtime.
+
+**Fields**:
+- **Pre-snapshot hook**: Executable script path or inline shell command (e.g. `docker pause nextcloud`) run milliseconds before `zfs snapshot`. Leave empty to disable.
+- **Post-snapshot hook**: Executable script path or inline shell command (e.g. `docker unpause nextcloud`) run milliseconds after `zfs snapshot` finishes to resume the workload. Guaranteed to run on snapshot success or failure.
+- **Hook timeout (seconds)**: Timeout for each hook script or command (default: `30`).
+- **Hook failure mode**:
+  - `Abort on hook failure` (default): Aborts snapshot creation (`no_inconsistent_snapshot = 1` in Sanoid) if the pre-snapshot hook fails.
+  - `Warn and proceed anyway`: Logs a warning on failure and takes the snapshot anyway.
+
+##### Workload Pause & Resume Recipes
+
+> [!TIP]
+> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`). Scripts stored under `/boot` are executed automatically via their shebang interpreter or Bash; scripts on array or pool shares must be marked executable (`chmod 755`). Always make thaw scripts idempotent (using `|| true`) so they cleanly succeed even if the workload was already running.
+
+**1. Freeze a KVM / QEMU Virtual Machine** (`virsh domfsfreeze` / `domfsthaw`):
+
+`pre-freeze.sh`:
+```bash
+#!/bin/bash
+# Flush and freeze VM guest filesystems via QEMU guest agent
+virsh domfsfreeze my-vm || exit 1
+```
+
+`post-thaw.sh`:
+```bash
+#!/bin/bash
+# Always thaw, guaranteed to run immediately after zfs snapshot
+virsh domfsthaw my-vm || true
+```
+
+**2. Pause a Docker Container** (`docker pause` / `docker unpause`):
+
+`pre-pause.sh`:
+```bash
+#!/bin/bash
+docker pause my-database-container
+```
+
+`post-unpause.sh`:
+```bash
+#!/bin/bash
+docker unpause my-database-container
+```
+
+**3. Flush Database Tables** (MySQL / MariaDB):
+
+`pre-flush.sh`:
+```bash
+#!/bin/bash
+mysql -e 'FLUSH TABLES WITH READ LOCK; SYSTEM sleep 1;' || exit 1
+```
+
+`post-unlock.sh`:
+```bash
+#!/bin/bash
+mysql -e 'UNLOCK TABLES;' || true
+```
 
 > [!NOTE]
 > Sanoid runs automatically every 15 minutes (`*/15 * * * *`) via cron whenever snapshot or incoming buddy tasks are enabled.
