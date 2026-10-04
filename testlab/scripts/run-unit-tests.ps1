@@ -123,7 +123,12 @@ foreach ($file in $testFiles) {
         # Run test from workspace root so relative anchors in tests resolve cleanly
         Push-Location $workspaceRoot
         try {
-            $rawOutput = & $perlPath $file.FullName 2>&1
+            $gitBash = Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"
+            if (($perlPath -like "*Git*") -and (Test-Path -LiteralPath $gitBash)) {
+                $rawOutput = & $gitBash -c "perl '$relPath'" 2>&1
+            } else {
+                $rawOutput = & $perlPath $file.FullName 2>&1
+            }
             $exitCode = $LASTEXITCODE
         } finally {
             Pop-Location
