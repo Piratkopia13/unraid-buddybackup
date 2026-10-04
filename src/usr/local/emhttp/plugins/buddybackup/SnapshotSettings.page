@@ -51,6 +51,20 @@ Title="Snapshot creation and pruning"
             });
         }});
     }
+    function verify_and_submit_snapshot(btn) {
+        var form = $(btn).closest('form.buddybackup-snapshot-dataset');
+        var pre = (form.find("input[name='pre_snapshot_script']").val() || '').trim();
+        var post = (form.find("input[name='post_snapshot_script']").val() || '').trim();
+        if (pre && /^\.?[a-zA-Z0-9_\-]+\.sh$/.test(pre)) {
+            swal({title:"_(Invalid hook path)_", text:"Script files must be an absolute path starting with /", type:'warning'});
+            return;
+        }
+        if (post && /^\.?[a-zA-Z0-9_\-]+\.sh$/.test(post)) {
+            swal({title:"_(Invalid hook path)_", text:"Script files must be specified with an absolute path starting with /", type:'warning'});
+            return;
+        }
+        form.submit();
+    }
 </script>
 <p class="page-desc" style="margin-bottom: 12px;">
 _(Set up automatic snapshot creation and pruning on your datasets. Snapshots are what gets synced to your buddy.)_
@@ -127,6 +141,11 @@ _(Set up automatic snapshot creation and pruning on your datasets. Snapshots are
                         <?php if (!empty($trigger_label)): ?>
                         <span class="metric-item grey-text" title="<?=_('Triggers Backup')?>">
                             <i class="fa fa-bolt"></i> <?=_('Triggers:')?> <?=$trigger_label?>
+                        </span>
+                        <?php endif; ?>
+                        <?php if (!empty($data['pre_snapshot_script']) || !empty($data['post_snapshot_script'])): ?>
+                        <span class="metric-item grey-text" title="<?=_('Snapshot Hooks')?>">
+                            <i class="fa fa-terminal"></i> <?=_('Hooks')?>
                         </span>
                         <?php endif; ?>
                     </span>
@@ -222,9 +241,69 @@ _(Set up automatic snapshot creation and pruning on your datasets. Snapshots are
                     </dd>
                 </dl>
 
+                <? $has_hooks = !empty($data['pre_snapshot_script']) || !empty($data['post_snapshot_script']); ?>
+                <details class="buddybackup-hooks-section" style="margin-top: 14px; background: rgba(0,0,0,0.12); border: 1px solid rgba(128,128,128,0.2); border-radius: 4px;">
+                    <summary style="padding: 9px 12px; font-weight: 600; font-size: 11px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="display: flex; align-items: center; gap: 6px;">
+                            <i class="fa fa-terminal"></i>
+                            <span><?=_('Advanced: snapshot hooks')?></span>
+                            <? if ($has_hooks): ?>
+                            <span class="buddybackup-hooks-badge" style="font-size: 10px; font-weight: normal; background: rgba(39, 174, 96, 0.18); color: #27ae60; border: 1px solid rgba(39, 174, 96, 0.35); padding: 1px 6px; border-radius: 3px; margin-left: 6px;">
+                                <i class="fa fa-check"></i> <?=_('Configured')?>
+                            </span>
+                            <? endif; ?>
+                        </span>
+                        <span class="buddybackup-hooks-chevron" style="color: gray; font-size: 11px;">
+                            <i class="fa fa-chevron-right"></i>
+                        </span>
+                    </summary>
+                    <div style="padding: 10px 12px 12px 12px; border-top: 1px solid rgba(128,128,128,0.15);">
+                        <div class="buddybackup-field-note" style="margin-top: 0; margin-bottom: 8px;">
+                            <?=_('Optional scripts or commands run locally on this Unraid host immediately before and after snapshot creation. Use them to pause or flush active workloads (freeze VMs, pause containers, flush databases) for a clean snapshot. Post-snapshot hooks run immediately after to resume workloads.')?>
+                        </div>
+                        <div class="buddybackup-grid">
+                            <div>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Pre-snapshot hook')?>:</dt>
+                                    <dd>
+                                        <input type="text" name="pre_snapshot_script" class="align" value="<?=htmlspecialchars($data['pre_snapshot_script'] ?? '')?>" placeholder="/boot/config/plugins/buddybackup/hooks/pre-snapshot.sh">
+                                        <div class="buddybackup-field-note"><?=_('Runs immediately before snapshot creation. Script path or command. Leave empty to disable.')?></div>
+                                    </dd>
+                                </dl>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Post-snapshot hook')?>:</dt>
+                                    <dd>
+                                        <input type="text" name="post_snapshot_script" class="align" value="<?=htmlspecialchars($data['post_snapshot_script'] ?? '')?>" placeholder="/boot/config/plugins/buddybackup/hooks/post-snapshot.sh">
+                                        <div class="buddybackup-field-note"><?=_('Runs immediately after snapshot creation to resume workloads. Script path or command. Leave empty to disable.')?></div>
+                                    </dd>
+                                </dl>
+                            </div>
+                            <div>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Hook timeout (seconds)')?>:</dt>
+                                    <dd>
+                                        <input type="number" min="1" name="hook_timeout" class="align" value="<?=htmlspecialchars($data['hook_timeout'] ?? '30')?>" placeholder="30">
+                                        <div class="buddybackup-field-note"><?=_('Maximum time each hook may run before it is killed. Default 30.')?></div>
+                                    </dd>
+                                </dl>
+                                <dl class="buddybackup-form-dl">
+                                    <dt><?=_('Hook failure mode')?>:</dt>
+                                    <dd>
+                                        <select name="hook_failure_mode" class="align">
+                                            <?=mk_option($data['hook_failure_mode'] ?? 'abort', "abort", "_(Abort snapshot)_");?>
+                                            <?=mk_option($data['hook_failure_mode'] ?? 'abort', "warn", "_(Warn and continue)_");?>
+                                        </select>
+                                        <div class="buddybackup-field-note"><?=_('Applies to the pre-snapshot hook only; post-snapshot hook is always executed to resume workloads.')?></div>
+                                    </dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
                 <div class="buddybackup-card-actions">
                     <div class="buddybackup-card-actions-left">
-                        <input type="submit" name="#apply" value="<?=_('Apply')?>">
+                        <input type="button" onclick="verify_and_submit_snapshot(this)" name="#apply" value="<?=_('Apply')?>">
                     </div>
                     <div>
                         <input type="button" name="#remove" value="<?=_('Remove')?>" onclick="remove_dataset_from_snapshot_creation(this)">

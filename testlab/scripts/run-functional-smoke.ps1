@@ -1142,6 +1142,90 @@ try {
         Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected restore dataset '$($check.Dataset)' was not found on node '$($check.Connection.NodeName)'."
     }
 
+    Write-Host "[testlab] Functional smoke: verifying backup hooks lifecycle and failure modes"
+    $hooksDir = "/boot/config/plugins/buddybackup/hooks"
+    $hookLog = "/tmp/buddybackup-hooks-test.log"
+    $testPreHook = "$hooksDir/test-pre.sh"
+    $testPostHook = "$hooksDir/test-post.sh"
+    $testAbortHook = "$hooksDir/test-abort.sh"
+
+    $setupHooksCmd = @"
+mkdir -p '$hooksDir'
+cat > '$testPreHook' <<'EOF'
+#!/bin/bash
+echo "pre_ran uid=`${BB_TASK_UID:-}" >> '$hookLog'
+exit 0
+EOF
+cat > '$testPostHook' <<'EOF'
+#!/bin/bash
+echo "post_ran status=`${BB_STATUS:-} exit=`${BB_EXIT_CODE:-} uid=`${BB_TASK_UID:-} type=`${BB_TASK_TYPE:-}" >> '$hookLog'
+exit 0
+EOF
+cat > '$testAbortHook' <<'EOF'
+#!/bin/bash
+echo "abort_pre_ran" >> '$hookLog'
+exit 42
+EOF
+chmod 755 '$testPreHook' '$testPostHook' '$testAbortHook'
+rm -f '$hookLog'
+"@
+
+    $setupHooksResult = Invoke-NodeSshCommand -NodeConnection $senderConnection -Command $setupHooksCmd -Label "nodeA-setup-test-hooks" -DoExecute:$Execute
+    Add-ReportAction -Report $report -Result $setupHooksResult
+    Assert-CommandSucceeded -Result $setupHooksResult -FailureMessage "Failed to stage test hooks on nodeA."
+
+    try {
+        # 1. Success lifecycle: pre-hook runs, syncoid runs, post-hook receives success context
+        $hookSuccessArgs = @($senderPlan.sourceDataset, "no", $senderPlan.localBackupDataset, $senderPlan.localBackupUid, "no", $testPreHook, $testPostHook, "30", "abort")
+        $hookSuccessResult = Invoke-BuddyBackupShellCommand -NodeConnection $senderConnection -Action "send_local_backup" -Arguments $hookSuccessArgs -Label "nodeA-hook-success-test" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $hookSuccessResult
+        Assert-CommandSucceeded -Result $hookSuccessResult -FailureMessage "BuddyBackup send_local_backup with hooks failed on nodeA."
+
+        if ($Execute) {
+            $readLogResult = Invoke-NodeSshCommand -NodeConnection $senderConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "nodeA-check-hook-success-log" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $readLogResult
+            $logText = Get-ResultOutputText -Result $readLogResult
+            if ($logText -notmatch 'pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
+                throw "Hook success test failed: unexpected hook log contents on nodeA.`n$logText"
+            }
+        }
+
+        # 2. Abort failure mode: failing pre-hook aborts syncoid, post-hook receives failed status and pre-hook exit code
+        $hookAbortArgs = @($senderPlan.sourceDataset, "no", $senderPlan.localBackupDataset, $senderPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "abort")
+        $hookAbortResult = Invoke-BuddyBackupShellCommand -NodeConnection $senderConnection -Action "send_local_backup" -Arguments $hookAbortArgs -Label "nodeA-hook-abort-test" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $hookAbortResult
+
+        if ($Execute) {
+            if ($hookAbortResult.exitCode -eq 0) {
+                throw "Hook abort test failed: send_local_backup unexpectedly succeeded when pre-hook exited 42 with abort mode."
+            }
+            $readLogResult = Invoke-NodeSshCommand -NodeConnection $senderConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "nodeA-check-hook-abort-log" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $readLogResult
+            $logText = Get-ResultOutputText -Result $readLogResult
+            if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=failed exit=42') {
+                throw "Hook abort test failed: unexpected hook log contents on nodeA.`n$logText"
+            }
+        }
+
+        # 3. Warn failure mode: failing pre-hook logs warning, syncoid proceeds, post-hook receives success context
+        $hookWarnArgs = @($senderPlan.sourceDataset, "no", $senderPlan.localBackupDataset, $senderPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "warn")
+        $hookWarnResult = Invoke-BuddyBackupShellCommand -NodeConnection $senderConnection -Action "send_local_backup" -Arguments $hookWarnArgs -Label "nodeA-hook-warn-test" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $hookWarnResult
+        Assert-CommandSucceeded -Result $hookWarnResult -FailureMessage "BuddyBackup send_local_backup in warn mode failed on nodeA."
+
+        if ($Execute) {
+            $readLogResult = Invoke-NodeSshCommand -NodeConnection $senderConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "nodeA-check-hook-warn-log" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $readLogResult
+            $logText = Get-ResultOutputText -Result $readLogResult
+            if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
+                throw "Hook warn test failed: unexpected hook log contents on nodeA.`n$logText"
+            }
+        }
+    } finally {
+        $cleanupHooksResult = Invoke-NodeSshCommand -NodeConnection $senderConnection -Command "rm -f '$testPreHook' '$testPostHook' '$testAbortHook' '$hookLog'" -Label "nodeA-cleanup-test-hooks" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $cleanupHooksResult
+    }
+
     $report.success = $true
     Write-Host "[testlab] Functional smoke completed successfully"
 } catch {

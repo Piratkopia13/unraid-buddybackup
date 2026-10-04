@@ -42,7 +42,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script    = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php       = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $backups_page = File::Spec->catfile($plugin_dir, 'Backups.page');
+my $snap_page_file = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;
@@ -54,7 +54,7 @@ sub slurp {
 
 my $rc   = slurp($rc_script);
 my $php  = slurp($rc_php);
-my $page = slurp($backups_page);
+my $snap_page = slurp($snap_page_file);
 
 # ---------------------------------------------------------------------------
 # Static assertions on the bash implementation.
@@ -64,8 +64,8 @@ subtest 'rc.buddybackup defines a safe run_hook helper' => sub {
 
     like(
         $rc,
-        qr/timeout\s+"\$\{hook_timeout\}"\s+"\$\{hook_path\}"/,
-        'runs the hook with an explicit timeout + argv (no eval)'
+        qr/timeout\s+"\$\{hook_timeout\}"\s+bash\s+-c\s+"\$\{hook_cmd\}"/,
+        'runs the hook with an explicit timeout via bash -c'
     );
 
     my ($run_hook_body) = $rc =~ /^run_hook\s*\(\)\s*\{(.*?)^\}/ms;
@@ -74,8 +74,8 @@ subtest 'rc.buddybackup defines a safe run_hook helper' => sub {
 
     like(
         $rc,
-        qr/\[\[ ! -x "\$\{hook_path\}" \]\]/,
-        'run_hook validates the hook is executable'
+        qr/\[\[ ! -x "\$\{hook_cmd\}" \]\]/,
+        'run_hook validates standalone scripts are executable'
     );
 };
 
@@ -96,25 +96,19 @@ subtest 'rc.buddybackup orders the pre hook before zfs snapshot' => sub {
     );
 };
 
-subtest 'rc.buddybackup registers a one-shot post hook trap' => sub {
-    like($rc, qr/^run_post_hook_once\s*\(\)/m, 'defines run_post_hook_once()');
-
-    like($rc, qr/POST_HOOK_DONE/, 'post hook uses a guard so it only runs once');
+subtest 'rc.buddybackup guarantees post-snapshot thaw' => sub {
+    like($rc, qr/run_snapshot_post_hook_once/, 'defines run_snapshot_post_hook_once');
 
     like(
         $rc,
-        qr/trap 'run_post_hook_once; cleanup' EXIT/,
-        'registers the post hook on the EXIT trap (preserving cleanup)'
+        qr/trap 'run_snapshot_post_hook_once; cleanup' EXIT/,
+        'registers the snapshot thaw hook on the EXIT trap during snapshotting'
     );
 
-    my ($post_body) = $rc =~ /^run_post_hook_once\s*\(\)\s*\{(.*?)^\}/ms;
-    ok(defined $post_body, 'run_post_hook_once body is discoverable');
-    like($post_body // '', qr/\[\[ -n "\$\{POST_HOOK_DONE:-\}" \]\]/, 'guards against repeat execution');
-
     like(
         $rc,
-        qr/run_hook "\$\{POST_HOOK_SCRIPT\}" "\$\{POST_HOOK_TIMEOUT:-30\}" "post-snapshot"/,
-        'post hook invokes run_hook with the stored timeout'
+        qr/run_snapshot_post_hook_once\s*\n\s*trap cleanup EXIT/,
+        'runs thaw immediately after zfs snapshot and restores cleanup trap before replication'
     );
 };
 
@@ -146,26 +140,26 @@ subtest 'rc.buddybackup dispatch forwards hook arguments' => sub {
 subtest 'rc.buddybackup.php validates and forwards hook settings' => sub {
     like($php, qr/function validate_hook_script\s*\(/, 'defines validate_hook_script()');
 
-    like($php, qr/is_executable\(\$resolved\)/, 'requires the hook to be executable');
-    like($php, qr/\$perms & 0022/, 'rejects group/world writable hooks');
-    like($php, qr/substr\(\$path, 0, 1\) !== '\/'/, 'requires an absolute path');
+    like($php, qr/is_executable\(\$resolved\)/, 'requires script files to be executable');
+    like($php, qr/\$perms & 0022/, 'rejects group/world writable script files');
+    like($php, qr/strpos\(\$path,\s*"\\0"\)/, 'guards against null characters');
 
     foreach my $key (qw(pre_snapshot_script post_snapshot_script hook_timeout hook_failure_mode)) {
-        like($php, qr/\$cfg\['$key'\]/, "PHP builder reads $key");
+        like($php, qr/\$section\['$key'\]|\$data\['$key'\]|\$cfg\['$key'\]/, "PHP reads $key");
     }
 };
 
-subtest 'Backups.page exposes the snapshot hook fields' => sub {
+subtest 'SnapshotSettings.page exposes the snapshot hook fields' => sub {
     foreach my $name (qw(pre_snapshot_script post_snapshot_script hook_timeout hook_failure_mode)) {
-        like($page, qr/name="$name"/, "Backups.page has a $name field");
+        like($snap_page, qr/name="$name"/, "SnapshotSettings.page has a $name field");
     }
 
-    like($page, qr/Advanced: snapshot hooks/, 'form has an advanced hooks section');
-    like($page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"/, 'hooks section is wrapped in collapsible details element');
-    like($page, qr/<summary/, 'hooks section provides a summary element');
-    unlike($page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"\s+open/, 'hooks section defaults to collapsed (no open attribute)');
-    like($page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "abort"/, 'failure mode defaults to abort');
-    like($page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "warn"/, 'failure mode offers warn');
+    like($snap_page, qr/Advanced:\s*snapshot hooks/, 'form has an advanced snapshot hooks section');
+    like($snap_page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"/, 'hooks section is wrapped in collapsible details element');
+    like($snap_page, qr/<summary/, 'hooks section provides a summary element');
+    unlike($snap_page, qr/<details\s+class="[^"]*buddybackup-hooks-section[^"]*"\s+open/, 'hooks section defaults to collapsed (no open attribute)');
+    like($snap_page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "abort"/, 'failure mode defaults to abort');
+    like($snap_page, qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "warn"/, 'failure mode offers warn');
 };
 
 # ---------------------------------------------------------------------------
@@ -197,7 +191,14 @@ SKIP: {
 
     # Mock zfs so the snapshot step is observable and never touches the host.
     my $mock_zfs = File::Spec->catfile($bin_dir, 'zfs');
-    write_script($mock_zfs, qq{#!/bin/bash\necho snapshot >> "\$SNAPSHOT_HOOK_TEST_LOG"\nexit 0\n});
+    write_script($mock_zfs, qq{#!/bin/bash
+if [[ "\$SIMULATED_SNAP_FAIL" == "1" ]]; then
+    echo "snapshot failed" >&2
+    exit 1
+fi
+echo snapshot >> "\$SNAPSHOT_HOOK_TEST_LOG"
+exit 0
+});
     chmod 0755, $mock_zfs;
 
     # Source the functions from a copy of rc.buddybackup with the trailing
@@ -226,8 +227,6 @@ preflight_send_state() { PREFLIGHT_STATUS="ok"; PREFLIGHT_MESSAGE=""; }
 manual_snapshot_name() { echo 'tank/data@manual-test'; }
 mark_sent_backup() { :; }
 
-# Simulate replication without calling exit so the EXIT trap still drives the
-# post hook; the send status is controlled by $SIMULATED_SEND_STATUS.
 send_local_backup() {
     echo replicate >> "$SNAPSHOT_HOOK_TEST_LOG"
     return "$SIMULATED_SEND_STATUS"
@@ -252,22 +251,26 @@ SH
         local $ENV{HOOK_TIMEOUT}          = $env{timeout} // '30';
         local $ENV{HOOK_MODE}             = $env{mode} // 'abort';
         local $ENV{SIMULATED_SEND_STATUS} = $env{send_status} // '0';
+        local $ENV{SIMULATED_SNAP_FAIL}   = $env{snap_fail} // '0';
         unlink $log_file if -e $log_file;
         my $out = `bash "$harness" 2>&1`;
         my $log = -e $log_file ? slurp($log_file) : '';
         return ($log, $out);
     }
 
-    subtest 'behavioral: pre -> snapshot -> replicate -> post on success' => sub {
+    subtest 'behavioral: pre -> snapshot -> post -> replicate on success' => sub {
         my ($log, $out) = _run_harness( pre => $pre_hook, post => $post_hook, mode => 'abort', send_status => '0' );
         my @lines = grep { length } split /\n/, $log;
-        is_deeply( \@lines, [qw(pre snapshot replicate post)], 'execution order is pre, snapshot, replicate, post' );
+        is_deeply( \@lines, [qw(pre snapshot post replicate)], 'execution order is pre, snapshot, post, replicate (immediate thaw)' );
     };
 
-    subtest 'behavioral: post hook still runs when replication fails' => sub {
-        my ($log, $out) = _run_harness( pre => $pre_hook, post => $post_hook, mode => 'abort', send_status => '1' );
+    subtest 'behavioral: post hook still runs when snapshot creation fails' => sub {
+        my ($log, $out) = _run_harness( pre => $pre_hook, post => $post_hook, mode => 'abort', snap_fail => '1' );
         my @lines = grep { length } split /\n/, $log;
-        is_deeply( \@lines, [qw(pre snapshot replicate post)], 'post hook runs after a failed replication' );
+        ok(grep({ $_ eq 'pre' } @lines), 'pre hook ran');
+        ok(grep({ $_ eq 'post' } @lines), 'post thaw hook ran immediately despite snapshot failure');
+        ok(!grep({ $_ eq 'replicate' } @lines), 'replication was skipped due to snapshot failure');
+        ok(scalar(grep { /^failed:/ } @lines), 'snapshot failure was recorded');
     };
 
     subtest 'behavioral: abort mode skips snapshot when pre hook fails' => sub {
@@ -281,7 +284,15 @@ SH
     subtest 'behavioral: warn mode continues past a failing pre hook' => sub {
         my ($log, $out) = _run_harness( pre => $fail_hook, post => $post_hook, mode => 'warn', send_status => '0' );
         my @lines = grep { length } split /\n/, $log;
-        is_deeply( \@lines, [qw(pre snapshot replicate post)], 'warn mode proceeds with snapshot and replication' );
+        is_deeply( \@lines, [qw(pre snapshot post replicate)], 'warn mode proceeds with snapshot, post thaw, and replication' );
+    };
+
+    subtest 'behavioral: direct command and chained commands run as hooks' => sub {
+        my $cmd_pre = 'echo cmd_pre >> "$SNAPSHOT_HOOK_TEST_LOG" && echo cmd_pre2 >> "$SNAPSHOT_HOOK_TEST_LOG"';
+        my $cmd_post = 'echo cmd_post >> "$SNAPSHOT_HOOK_TEST_LOG"';
+        my ($log, $out) = _run_harness( pre => $cmd_pre, post => $cmd_post, mode => 'abort', send_status => '0' );
+        my @lines = grep { length } split /\n/, $log;
+        is_deeply( \@lines, [qw(cmd_pre cmd_pre2 snapshot cmd_post replicate)], 'chained pre command and direct post command ran in order' );
     };
 };
 
