@@ -64,7 +64,7 @@ subtest 'rc.buddybackup defines a safe run_hook helper' => sub {
 
     like(
         $rc,
-        qr/timeout\s+"\$\{hook_timeout\}"\s+bash\s+-c\s+"\$\{hook_cmd\}"/,
+        qr/timeout\s+"\$\{hook_timeout\}"\s+bash\s+-c\s+"\$\{(?:hook_cmd|exec_cmd)\}"/,
         'runs the hook with an explicit timeout via bash -c'
     );
 
@@ -278,6 +278,7 @@ SH
         my @lines = grep { length } split /\n/, $log;
         ok(!grep({ $_ eq 'snapshot' } @lines),   'no snapshot is taken when the pre hook fails in abort mode');
         ok(!grep({ $_ eq 'replicate' } @lines),  'replication is skipped when the pre hook fails in abort mode');
+        ok(grep({ $_ eq 'post' } @lines),        'post thaw hook still ran to thaw workloads when pre hook aborted');
         ok(scalar(grep { /^failed:/ } @lines),    'the pre hook failure is recorded as a failed backup');
     };
 

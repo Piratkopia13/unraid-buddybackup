@@ -99,12 +99,12 @@ Optional scripts or commands that run **locally on this Unraid host** around the
   - `Abort backup` (default): Aborts replication immediately if the pre-backup hook exits non-zero.
   - `Warn and continue`: Logs a warning on non-zero exit and continues replication.
 
-**Requirements**: Hooks execute locally in Bash under the configured timeout. When referencing a standalone script file, it must be an absolute path starting with `/`, marked executable (`chmod 755`), and not group- or world-writable. Commands and chained commands (`cmd1 && cmd2`) are executed directly.
+**Requirements**: Hooks execute locally in Bash under the configured timeout. When referencing a standalone script file, it must be an absolute path starting with `/`. Scripts stored on persistent array or pool storage must be marked executable (`chmod 755`) and not group- or world-writable; scripts on the Unraid flash drive (`/boot/config/...`) are executed automatically via their shebang interpreter or Bash without requiring POSIX `+x` permissions. Commands and chained commands (`cmd1 && cmd2`) are executed directly.
 
 ##### Example Recipes
 
 > [!TIP]
-> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`) so they persist across Unraid reboots. Ensure they are executable (`chmod 755 /boot/config/plugins/buddybackup/hooks/*`).
+> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`) so they persist across Unraid reboots. Scripts stored under `/boot` are executed automatically via their shebang interpreter or Bash. If storing scripts on an array or pool share, ensure they are executable (`chmod 755`).
 
 **1. Wake-on-LAN before backup** (`pre-backup.sh`):
 
@@ -263,7 +263,7 @@ When both a post-snapshot resume hook and a **Trigger backup after snapshot** ta
 ##### Workload Pause & Resume Recipes
 
 > [!TIP]
-> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`) and ensure they are executable (`chmod 755`). Always make thaw scripts idempotent (using `|| true`) so they cleanly succeed even if the workload was already running.
+> Keep scripts on persistent storage (e.g. `/boot/config/plugins/buddybackup/hooks/`). Scripts stored under `/boot` are executed automatically via their shebang interpreter or Bash; scripts on array or pool shares must be marked executable (`chmod 755`). Always make thaw scripts idempotent (using `|| true`) so they cleanly succeed even if the workload was already running.
 
 **1. Freeze a KVM / QEMU Virtual Machine** (`virsh domfsfreeze` / `domfsthaw`):
 

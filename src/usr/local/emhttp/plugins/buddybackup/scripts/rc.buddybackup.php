@@ -158,15 +158,24 @@ function validate_hook_script($path, &$error_message = null) {
             return false;
         }
 
-        if (!is_executable($resolved)) {
-            $error_message = "Hook script '$path' is not executable.";
-            return false;
-        }
+        $test_prefix = getenv('BUDDYBACKUP_TEST_BOOT_PREFIX');
+        $is_boot = (substr($resolved, 0, 6) === '/boot/' || ($test_prefix !== false && $test_prefix !== '' && substr($resolved, 0, strlen($test_prefix)) === $test_prefix));
+        if ($is_boot) {
+            if (!is_readable($resolved)) {
+                $error_message = "Hook script '$path' is not readable.";
+                return false;
+            }
+        } else {
+            if (!is_executable($resolved)) {
+                $error_message = "Hook script '$path' is not executable.";
+                return false;
+            }
 
-        $perms = fileperms($resolved);
-        if ($perms !== false && ($perms & 0022) !== 0) {
-            $error_message = "Hook script '$path' must not be group- or world-writable.";
-            return false;
+            $perms = fileperms($resolved);
+            if ($perms !== false && ($perms & 0022) !== 0) {
+                $error_message = "Hook script '$path' must not be group- or world-writable.";
+                return false;
+            }
         }
     }
 
@@ -772,8 +781,8 @@ function update_sanoid_conf() {
             }
             $sanoid_conf_content .= "[$dataset]\n";
 
-            $pre_hook = trim((string)($section['pre_snapshot_script'] ?? ''));
-            $post_hook = trim((string)($section['post_snapshot_script'] ?? ''));
+            $pre_hook = str_replace(array("\r", "\n"), '', trim((string)($section['pre_snapshot_script'] ?? '')));
+            $post_hook = str_replace(array("\r", "\n"), '', trim((string)($section['post_snapshot_script'] ?? '')));
             $hook_timeout = normalize_hook_timeout($section['hook_timeout'] ?? '');
             $hook_failure_mode = normalize_hook_failure_mode($section['hook_failure_mode'] ?? '');
             $trigger = trim((string)($section['trigger'] ?? ''));
@@ -801,7 +810,7 @@ function update_sanoid_conf() {
 
             if ($post_hook !== '' && $trigger !== '') {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
-                $escaped_post_hook = str_replace('"', '\"', $post_hook);
+                $escaped_post_hook = addcslashes($post_hook, "\\\"$");
                 $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             } else if ($post_hook !== '') {
@@ -877,7 +886,8 @@ function update_backups_from_config() {
             foreach ($backup_cfg as $sec => $vals) {
                 $content .= "[$sec]\n";
                 foreach ($vals as $k => $v) {
-                    $content .= "$k=\"$v\"\n";
+                    $escaped_v = str_replace('"', '\"', (string)$v);
+                    $content .= "$k=\"$escaped_v\"\n";
                 }
             }
             ENSURE_SUCCESS(file_put_contents($backups_config_path, $content) !== false);
@@ -1234,7 +1244,7 @@ function create_snapshot_and_send($uid, $echo_pid_arg) {
     }
 }
 
-switch ($argv[1]) {
+switch ($argv[1] ?? '') {
     case 'update':
         update();
         break;

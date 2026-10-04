@@ -277,6 +277,16 @@ Title="Backup and restore"
     }
     function verify_and_submit_backup(btn) {
         var form = get_backup_form(btn);
+        var pre = (form.find("input[name='pre_backup_script']").val() || '').trim();
+        var post = (form.find("input[name='post_backup_script']").val() || '').trim();
+        if (pre && /^\.?[a-zA-Z0-9_\-]+\.sh$/.test(pre)) {
+            swal({title:"_(Invalid hook path)_", text:"Script files must be an absolute path starting with /", type:'warning'});
+            return;
+        }
+        if (post && /^\.?[a-zA-Z0-9_\-]+\.sh$/.test(post)) {
+            swal({title:"_(Invalid hook path)_", text:"Script files must be specified with an absolute path starting with /", type:'warning'});
+            return;
+        }
         var dest_type = form.find("select[name='type']").val();
         var saved = form.find("input[name='#saved']").val();
         var abort = false;

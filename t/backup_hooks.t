@@ -93,6 +93,11 @@ subtest 'Backups.page exposes backup hook fields' => sub {
         qr/mk_option\(\$data\['hook_failure_mode'\] \?\? 'abort', "warn"/,
         'hook failure mode offers warn'
     );
+    like(
+        $page,
+        qr/function\s+verify_and_submit_backup\b.*?pre_backup_script.*?post_backup_script/s,
+        'verify_and_submit_backup validates hook script paths'
+    );
 };
 
 # ---------------------------------------------------------------------------
@@ -121,6 +126,11 @@ subtest 'rc.buddybackup.php reads and migrates backup hooks' => sub {
         qr/unset\s*\(\s*\$[a-zA-Z0-9_]+\['post_snapshot_script'\]\s*\)/,
         'migrates legacy post_snapshot_script key on save'
     );
+    like(
+        $php,
+        qr/\$escaped_v\s*=\s*str_replace\('"',\s*'\\"'/s,
+        'escapes double quotes during backup config migration'
+    );
 
     like(
         $php,
@@ -134,6 +144,7 @@ subtest 'rc.buddybackup.php reads and migrates backup hooks' => sub {
 # ---------------------------------------------------------------------------
 subtest 'rc.buddybackup defines backup hook lifecycle' => sub {
     like($rc, qr/run_post_backup_hook_once\s*\(\)/, 'defines run_post_backup_hook_once');
+    like($rc, qr/head -c 4096/, 'bounds BB_ERROR_MESSAGE to 4096 bytes to avoid kernel E2BIG limit');
     like($rc, qr/export BB_TASK_UID=/, 'exports BB_TASK_UID');
     like($rc, qr/export BB_TASK_TYPE=/, 'exports BB_TASK_TYPE');
     like($rc, qr/export BB_SOURCE_DATASET=/, 'exports BB_SOURCE_DATASET');
@@ -144,8 +155,8 @@ subtest 'rc.buddybackup defines backup hook lifecycle' => sub {
 
     like(
         $rc,
-        qr/trap 'run_post_backup_hook_once; cleanup' EXIT/,
-        'registers run_post_backup_hook_once on EXIT trap'
+        qr/trap 'run_post_backup_hook_once; cleanup' EXIT INT TERM HUP/,
+        'registers run_post_backup_hook_once on EXIT INT TERM HUP traps'
     );
     like(
         $rc,
@@ -257,6 +268,68 @@ PHP
         like($json, qr/"pre_backup_script":"\\\/usr\\\/local\\\/bin\\\/modern-pre\.sh"/, 'modern pre_backup_script loaded directly');
         like($json, qr/"pre_backup_script":"\\\/usr\\\/local\\\/bin\\\/prefer-modern\.sh"/, 'modern key takes precedence over legacy key');
     };
+
+    subtest 'PHP validate_hook_script supports /boot without +x' => sub {
+        my $workdir = tempdir(CLEANUP => 1);
+        my $boot_mock = File::Spec->catdir($workdir, 'boot', 'config', 'plugins', 'buddybackup', 'hooks');
+        make_path($boot_mock);
+        my $regular_dir = File::Spec->catdir($workdir, 'regular');
+        make_path($regular_dir);
+
+        my $boot_script = File::Spec->catfile($boot_mock, 'test-boot.sh');
+        open my $bfh, '>', $boot_script or die "Cannot write $boot_script: $!";
+        print $bfh "#!/bin/bash\necho ok\n";
+        close $bfh;
+        chmod 0600, $boot_script;
+
+        my $reg_exec = File::Spec->catfile($regular_dir, 'exec.sh');
+        open my $efh, '>', $reg_exec or die "Cannot write $reg_exec: $!";
+        print $efh "#!/bin/bash\necho ok\n";
+        close $efh;
+        chmod 0755, $reg_exec;
+
+        my $reg_noexec = File::Spec->catfile($regular_dir, 'noexec.sh');
+        open my $nfh, '>', $reg_noexec or die "Cannot write $reg_noexec: $!";
+        print $nfh "#!/bin/bash\necho ok\n";
+        close $nfh;
+        chmod 0644, $reg_noexec;
+
+        my $test_php = File::Spec->catfile($workdir, 'test_validate.php');
+        my $boot_prefix = File::Spec->catdir($workdir, 'boot');
+        open my $pfh, '>', $test_php or die "Cannot write $test_php: $!";
+        print $pfh <<"PHP";
+<?php
+putenv('BUDDYBACKUP_TEST_BOOT_PREFIX=$boot_prefix');
+\$_ENV['BUDDYBACKUP_TEST_BOOT_PREFIX'] = '$boot_prefix';
+
+require_once '$rc_php';
+
+\$err = null;
+\$r_boot = validate_hook_script('$boot_script', \$err);
+\$e_boot = \$err;
+
+\$err = null;
+\$r_reg_ok = validate_hook_script('$reg_exec', \$err);
+\$e_reg_ok = \$err;
+
+\$err = null;
+\$r_reg_bad = validate_hook_script('$reg_noexec', \$err);
+\$e_reg_bad = \$err;
+
+echo json_encode(array(
+    'boot' => array('result' => \$r_boot, 'error' => \$e_boot),
+    'reg_ok' => array('result' => \$r_reg_ok, 'error' => \$e_reg_ok),
+    'reg_bad' => array('result' => \$r_reg_bad, 'error' => \$e_reg_bad),
+));
+PHP
+        close $pfh;
+
+        my $out = `php "$test_php"`;
+        ok($out, 'validation test produced json');
+        like($out, qr/"boot":\{"result":true,"error":null\}/, 'boot script without +x passes validation');
+        like($out, qr/"reg_ok":\{"result":true,"error":null\}/, 'regular script with 755 passes validation');
+        like($out, qr/"reg_bad":\{"result":false,"error":".*not executable.*"\}/, 'regular script with 644 fails validation');
+    };
 }
 
 # ---------------------------------------------------------------------------
@@ -367,6 +440,7 @@ SH
         local $ENV{SIMULATED_PRE_EXIT}       = $env{pre_exit} // '0';
         local $ENV{SIMULATED_SYNCOID_EXIT}   = $env{syncoid_exit} // '0';
         local $ENV{SIMULATED_POST_EXIT}      = $env{post_exit} // '0';
+        local $ENV{BUDDYBACKUP_TEST_BOOT_PREFIX} = $env{boot_prefix} // '';
         unlink $log_file if -e $log_file;
         my $out = `bash "$harness" 2>&1`;
         my $log = -e $log_file ? slurp($log_file) : '';
@@ -477,6 +551,48 @@ SH
             grep({ /inline_post status=success exit=0 uid=uid_inline_cmd/ } @lines),
             'inline post command accessed exported environment variables'
         );
+    };
+
+    subtest 'hook script on boot storage runs without +x via shebang or bash' => sub {
+        my $boot_dir = File::Spec->catdir($workdir, 'boot_hooks');
+        make_path($boot_dir);
+
+        # Script with shebang and mode 0600 (not executable, typical of Unraid FAT32)
+        my $boot_shebang_hook = File::Spec->catfile($boot_dir, 'boot_shebang.sh');
+        open my $bfh, '>', $boot_shebang_hook or die "Cannot write $boot_shebang_hook: $!";
+        print $bfh "#!/bin/bash\necho boot_shebang_ran >> \"\$HOOK_EVENT_LOG\"\nexit 0\n";
+        close $bfh;
+        chmod 0600, $boot_shebang_hook;
+
+        my ($log, $out) = $run_harness->(
+            type        => 'local',
+            pre         => $boot_shebang_hook,
+            post        => $post_hook,
+            uid         => 'uid_boot_shebang',
+            boot_prefix => $boot_dir,
+        );
+        my @lines = grep { length } split /\n/, $log;
+        ok(grep({ $_ eq 'boot_shebang_ran' } @lines), 'boot hook with shebang ran without +x');
+        ok(grep({ $_ eq 'syncoid_ran' } @lines), 'syncoid replication ran');
+        ok(grep({ /post_backup_ran status=success/ } @lines), 'post backup hook received success context');
+
+        # Script without shebang and mode 0600
+        my $boot_noshebang_hook = File::Spec->catfile($boot_dir, 'boot_noshebang.sh');
+        open my $nbh, '>', $boot_noshebang_hook or die "Cannot write $boot_noshebang_hook: $!";
+        print $nbh "echo boot_noshebang_ran >> \"\$HOOK_EVENT_LOG\"\nexit 0\n";
+        close $nbh;
+        chmod 0600, $boot_noshebang_hook;
+
+        ($log, $out) = $run_harness->(
+            type        => 'local',
+            pre         => $boot_noshebang_hook,
+            post        => $post_hook,
+            uid         => 'uid_boot_noshebang',
+            boot_prefix => $boot_dir,
+        );
+        @lines = grep { length } split /\n/, $log;
+        ok(grep({ $_ eq 'boot_noshebang_ran' } @lines), 'boot hook without shebang ran without +x');
+        ok(grep({ $_ eq 'syncoid_ran' } @lines), 'syncoid replication ran');
     };
 };
 

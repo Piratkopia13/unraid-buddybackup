@@ -16,7 +16,7 @@ cleanup() {
     # Kill child processes
     kill $(list_descendants $$) >/dev/null 2>&1
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 unraid_notify() {
     # Call the Unraid notification script
@@ -270,11 +270,34 @@ run_hook() {
 
     # If the hook specifies a standalone file path, ensure the file exists and is executable.
     local standalone_path_pattern='^/[^[:space:];&|]+$'
+    local exec_cmd="${hook_cmd}"
     if [[ "${hook_cmd}" =~ ${standalone_path_pattern} ]]; then
         if [[ ! -e "${hook_cmd}" ]]; then
             write "${nchan}" "${label} script '${hook_cmd}' is missing or does not exist."
             logger "${label} script '${hook_cmd}' is missing or does not exist" -t"${plugin}"
             return 127
+        fi
+
+        local resolved_hook
+        resolved_hook=$(realpath "${hook_cmd}" 2>/dev/null || echo "${hook_cmd}")
+        if [[ "${resolved_hook}" =~ ^/boot/ ]] || [[ -n "${BUDDYBACKUP_TEST_BOOT_PREFIX:-}" && "${resolved_hook}" == "${BUDDYBACKUP_TEST_BOOT_PREFIX}"* ]]; then
+            # Unraid's /boot is a FAT32 filesystem mounted with fmask=0177, preventing
+            # POSIX execute permissions (+x) on all files. Ensure the file is readable
+            # and invoke it via an appropriate interpreter (or bash).
+            if [[ ! -r "${hook_cmd}" ]]; then
+                write "${nchan}" "${label} script '${hook_cmd}' is missing or not readable."
+                logger "${label} script '${hook_cmd}' is missing or not readable" -t"${plugin}"
+                return 127
+            fi
+            local shebang=""
+            read -r shebang < "${hook_cmd}" 2>/dev/null || true
+            shebang=$(echo "${shebang}" | tr -d '\r')
+            if [[ "${shebang}" =~ ^#![[:space:]]*(/.+) ]]; then
+                local interpreter="${BASH_REMATCH[1]}"
+                exec_cmd="${interpreter} $(printf '%q' "${hook_cmd}")"
+            else
+                exec_cmd="bash $(printf '%q' "${hook_cmd}")"
+            fi
         elif [[ ! -x "${hook_cmd}" ]]; then
             write "${nchan}" "${label} script '${hook_cmd}' is missing or not executable."
             logger "${label} script '${hook_cmd}' is missing or not executable" -t"${plugin}"
@@ -286,7 +309,7 @@ run_hook() {
     write "${nchan}" "Running ${label} hook (timeout ${hook_timeout}s).."
 
     local hook_output=""
-    hook_output=$(timeout "${hook_timeout}" bash -c "${hook_cmd}" 2>&1)
+    hook_output=$(timeout "${hook_timeout}" bash -c "${exec_cmd}" 2>&1)
     local hook_status=$?
 
     if [[ -n "${hook_output}" ]]; then
@@ -342,13 +365,16 @@ run_post_backup_hook_once() {
         return 0
     fi
 
+    local safe_error
+    safe_error=$(printf '%s' "${POST_BACKUP_ERROR_MESSAGE:-}" | head -c 4096)
+
     export BB_TASK_UID="${POST_BACKUP_UID:-}"
     export BB_TASK_TYPE="${POST_BACKUP_TYPE:-}"
     export BB_SOURCE_DATASET="${POST_BACKUP_SOURCE:-}"
     export BB_DEST_DATASET="${POST_BACKUP_DEST:-}"
     export BB_STATUS="${POST_BACKUP_STATUS:-failed}"
     export BB_EXIT_CODE="${POST_BACKUP_EXIT_CODE:-1}"
-    export BB_ERROR_MESSAGE="${POST_BACKUP_ERROR_MESSAGE:-}"
+    export BB_ERROR_MESSAGE="${safe_error}"
 
     run_hook "${POST_BACKUP_SCRIPT}" "${POST_BACKUP_TIMEOUT:-30}" "post-backup" "send"
     local post_status=$?
@@ -366,6 +392,13 @@ run_snapshot_post_hook_and_trigger() {
     local hook_timeout="${3:-30}"
     local trigger_uid="${4:-}"
     local nchan="snapshot"
+
+    # If post_hook wasn't supplied or is empty, load it from snapshots.cfg for this dataset
+    if [[ -z "${post_hook}" && -n "${dataset}" ]]; then
+        load_dataset_snapshot_hooks "${dataset}"
+        post_hook="${SNAP_POST_HOOK}"
+        hook_timeout="${SNAP_TIMEOUT:-30}"
+    fi
 
     logger "Running snapshot post-hook and trigger for dataset '${dataset}'" -t"${plugin}"
 
@@ -1072,7 +1105,7 @@ send_backup() {
     POST_BACKUP_EXIT_CODE=1
     POST_BACKUP_ERROR_MESSAGE=""
     POST_BACKUP_HOOK_DONE=""
-    trap 'run_post_backup_hook_once; cleanup' EXIT
+    trap 'run_post_backup_hook_once; cleanup' EXIT INT TERM HUP
 
     logger "Sending backup to ${type} destination" -t"${plugin}"
 
@@ -1212,7 +1245,7 @@ send_local_backup() {
     POST_BACKUP_EXIT_CODE=1
     POST_BACKUP_ERROR_MESSAGE=""
     POST_BACKUP_HOOK_DONE=""
-    trap 'run_post_backup_hook_once; cleanup' EXIT
+    trap 'run_post_backup_hook_once; cleanup' EXIT INT TERM HUP
 
     local nchan="send"
     local error=""
@@ -1330,6 +1363,12 @@ create_snapshot_and_send() {
         hook_failure_mode="${SNAP_MODE:-abort}"
     fi
 
+    # Set up trap so thaw runs even if process is killed or pre-hook aborts
+    SNAP_POST_HOOK_SCRIPT="${post_hook}"
+    SNAP_POST_HOOK_TIMEOUT="${hook_timeout}"
+    SNAP_POST_HOOK_DONE=""
+    trap 'run_snapshot_post_hook_once; cleanup' EXIT INT TERM HUP
+
     # Pre-snapshot hook: gives the user a chance to pause/flush the workload
     # (freeze a VM, pause a container, flush a database) before we snapshot.
     if [[ -n "${pre_hook}" ]]; then
@@ -1341,6 +1380,8 @@ create_snapshot_and_send() {
                 mark_failed_backup "${uid}" "${pre_hook_status}" "${error}"
                 write "${nchan}" "${error}"
                 unraid_notify "${error}" "alert"
+                run_snapshot_post_hook_once
+                trap cleanup EXIT INT TERM HUP
                 return
             fi
             write "${nchan}" "Warning: pre-snapshot hook '${pre_hook}' failed with exit code ${pre_hook_status}. Continuing because hook_failure_mode=warn."
@@ -1356,12 +1397,6 @@ create_snapshot_and_send() {
     fi
     snapshot_cmd+=("${snapshot_name}")
 
-    # Set up trap so thaw runs even if process is killed during zfs snapshot
-    SNAP_POST_HOOK_SCRIPT="${post_hook}"
-    SNAP_POST_HOOK_TIMEOUT="${hook_timeout}"
-    SNAP_POST_HOOK_DONE=""
-    trap 'run_snapshot_post_hook_once; cleanup' EXIT
-
     local snap_err=0
     if ! snapshot_output=$("${snapshot_cmd[@]}" 2>&1); then
         snap_err=1
@@ -1376,7 +1411,7 @@ create_snapshot_and_send() {
     # IMMEDIATE THAW: post-snapshot hook runs right now, NEVER deferred until after replication!
     # GUARANTEED THAW: runs even if zfs snapshot failed!
     run_snapshot_post_hook_once
-    trap cleanup EXIT
+    trap cleanup EXIT INT TERM HUP
 
     if [[ ${snap_err} -ne 0 ]]; then
         return
