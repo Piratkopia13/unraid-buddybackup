@@ -307,4 +307,101 @@ BASH_POST
     like($out, qr/ALL_BASH_TESTS_PASSED/, 'all fallback test scenarios passed');
 };
 
+# ---------------------------------------------------------------------------
+# Backward compatibility: legacy snapshots.cfg without time directives
+# ---------------------------------------------------------------------------
+subtest 'legacy snapshots.cfg and 15-minute cron upgrade compatibility' => sub {
+    my $rc_php = File::Spec->catfile(
+        $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'scripts', 'rc.buddybackup.php'
+    );
+    plan skip_all => 'rc.buddybackup.php not found' if !-f $rc_php;
+
+    my $workdir = tempdir(CLEANUP => 1);
+    my $plugin_cfg = File::Spec->catfile($workdir, 'plugin.cfg');
+    my $extra_cfg  = File::Spec->catfile($workdir, 'extra_sanoid.cfg');
+    my $incoming_cfg = File::Spec->catfile($workdir, 'buddys.cfg');
+    my $sanoid_cfg = File::Spec->catfile($workdir, 'sanoid.conf');
+    my $cron_file  = File::Spec->catfile($workdir, 'sanoid.cron');
+    my $test_php   = File::Spec->catfile($workdir, 'test_compat.php');
+
+    # 1. Plugin cfg
+    open my $pfh, '>', $plugin_cfg or die "Cannot write $plugin_cfg: $!";
+    print $pfh "ReceiveBackups=\"disable\"\nUtcTimezone=\"no\"\n";
+    close $pfh;
+
+    # 2. Legacy extra_sanoid.cfg (snapshots.cfg) without any time or scope keys
+    open my $efh, '>', $extra_cfg or die "Cannot write $extra_cfg: $!";
+    print $efh <<'CFG';
+[legacy_snap_task]
+dataset="tank/legacy_appdata"
+autosnap="yes"
+autoprune="yes"
+hourly="24"
+daily="7"
+weekly="4"
+monthly="3"
+yearly="0"
+recursive="yes"
+trigger="no"
+CFG
+    close $efh;
+
+    # 3. Simulate existing legacy 15-minute sanoid.cron file from previous version
+    open my $cfh, '>', $cron_file or die "Cannot write $cron_file: $!";
+    print $cfh "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"PATH=/usr/local/emhttp/plugins/buddybackup /usr/local/emhttp/plugins/buddybackup/deps/sanoid --configdir=/boot/config/plugins/buddybackup --cron\" 2>&1 | /usr/local/emhttp/plugins/buddybackup/scripts/log.sh\n";
+    close $cfh;
+
+    # 4. PHP test script executing update_sanoid_conf() and enable_sanoid_cron()
+    open my $tfh, '>', $test_php or die "Cannot write $test_php: $!";
+    print $tfh <<"PHP";
+<?php
+\$argv = array('test_compat.php', 'noop');
+require_once '$rc_php';
+
+\$plugin_config_path = '$plugin_cfg';
+\$extra_sanoid_config_path = '$extra_cfg';
+\$incoming_config_path = '$incoming_cfg';
+\$sanoid_config_path = '$sanoid_cfg';
+\$sanoid_cron_path = '$cron_file';
+\$sanoid_bin = '/usr/local/emhttp/plugins/buddybackup/deps/sanoid';
+\$buddybackup_path = '/usr/local/emhttp/plugins/buddybackup';
+\$plugin_path = '$workdir';
+\$log_script = '/usr/local/emhttp/plugins/buddybackup/scripts/log.sh';
+\$rc = '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup';
+
+update_sanoid_conf();
+
+ob_start();
+enable_sanoid_cron();
+ob_end_clean();
+
+echo "SANOID_CONF_START\\n";
+echo file_get_contents('$sanoid_cfg');
+echo "SANOID_CONF_END\\n";
+echo "SANOID_CRON_START\\n";
+echo file_get_contents('$cron_file');
+echo "SANOID_CRON_END\\n";
+PHP
+    close $tfh;
+
+    my $out = `php "$test_php" 2>&1`;
+    is($? >> 8, 0, 'php compat runner exited cleanly');
+
+    my ($conf) = $out =~ /SANOID_CONF_START\n(.*?)\nSANOID_CONF_END/s;
+    ok(defined $conf, 'sanoid.conf generated from legacy config');
+    like($conf, qr/\[tank\/legacy_appdata\]/, 'legacy section generated');
+    like($conf, qr/hourly = 24/, 'hourly retention preserved');
+    like($conf, qr/daily = 7/, 'daily retention preserved');
+    like($conf, qr/recursive = zfs/, 'recursive mode normalized to zfs');
+    unlike($conf, qr/daily_hour/, 'daily_hour cleanly omitted for default fallback');
+    unlike($conf, qr/daily_min/, 'daily_min cleanly omitted for default fallback');
+    unlike($conf, qr/hook_scope/, 'hook_scope not present');
+
+    my ($cron) = $out =~ /SANOID_CRON_START\n(.*?)\nSANOID_CRON_END/s;
+    ok(defined $cron, 'sanoid.cron upgraded successfully');
+    like($cron, qr/^\* \* \* \* \* flock -n \/var\/lock\/buddybackup-sanoid-cron/m, 'upgraded to 1-minute ticker');
+    like($cron, qr/--cache-ttl=60/, 'includes --cache-ttl=60 in upgraded cron');
+    unlike($cron, qr/\*\/15/, 'legacy */15 ticker was removed');
+};
+
 done_testing();

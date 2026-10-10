@@ -391,31 +391,43 @@ run_snapshot_post_hook_and_trigger() {
     local post_hook="${2:-}"
     local hook_timeout="${3:-30}"
     local trigger_uid="${4:-}"
+    local hook_scope="${5:-}"
     local nchan="snapshot"
 
-    # If post_hook wasn't supplied or is empty, load it from snapshots.cfg for this dataset
-    if [[ -z "${post_hook}" && -n "${dataset}" ]]; then
+    # If post_hook or hook_scope wasn't supplied, load from snapshots.cfg for this dataset
+    if [[ -z "${post_hook}" && -n "${dataset}" ]] || [[ -z "${hook_scope}" && -n "${dataset}" ]]; then
         load_dataset_snapshot_hooks "${dataset}"
-        post_hook="${SNAP_POST_HOOK}"
-        hook_timeout="${SNAP_TIMEOUT:-30}"
+        if [[ -z "${post_hook}" ]]; then
+            post_hook="${SNAP_POST_HOOK}"
+            hook_timeout="${SNAP_TIMEOUT:-30}"
+        fi
+        if [[ -z "${hook_scope}" ]]; then
+            hook_scope="${SNAP_HOOK_SCOPE:-}"
+        fi
     fi
 
     logger "Running snapshot post-hook and trigger for dataset '${dataset}'" -t"${plugin}"
 
     # a. Run <post_hook_script> under <timeout> (thaws workload immediately).
     if [[ -n "${post_hook}" ]]; then
-        run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
-        local post_status=$?
-        if [[ ${post_status} -ne 0 ]]; then
-            logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+        if [[ "${hook_scope}" == "daily" && -n "${SANOID_TYPES:-}" && "${SANOID_TYPES}" != *"daily"* ]]; then
+            logger "Skipping post-snapshot hook '${post_hook}' for dataset '${dataset}': hook_scope is daily and SANOID_TYPES='${SANOID_TYPES}'" -t"${plugin}"
+        else
+            run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
+            local post_status=$?
+            if [[ ${post_status} -ne 0 ]]; then
+                logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+            fi
         fi
     fi
 
-    # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>".
+    # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>" in the background.
     if [[ -n "${trigger_uid}" && "${trigger_uid}" != "no" ]]; then
         logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
-        "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh"
+        ( "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh" ) >/dev/null 2>&1 &
     fi
+
+    return 0
 }
 
 load_dataset_snapshot_hooks() {
@@ -424,6 +436,7 @@ load_dataset_snapshot_hooks() {
     SNAP_POST_HOOK=""
     SNAP_TIMEOUT="30"
     SNAP_MODE="abort"
+    SNAP_HOOK_SCOPE=""
 
     local cfg_file="${plugin_path}/snapshots.cfg"
     if [[ ! -f "${cfg_file}" ]]; then
@@ -435,6 +448,7 @@ load_dataset_snapshot_hooks() {
     local cur_post=""
     local cur_timeout="30"
     local cur_mode="abort"
+    local cur_scope=""
 
     local save_section=0
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
@@ -446,12 +460,14 @@ load_dataset_snapshot_hooks() {
                 SNAP_POST_HOOK="${cur_post}"
                 SNAP_TIMEOUT="${cur_timeout}"
                 SNAP_MODE="${cur_mode}"
+                SNAP_HOOK_SCOPE="${cur_scope}"
             fi
             current_dataset=""
             cur_pre=""
             cur_post=""
             cur_timeout="30"
             cur_mode="abort"
+            cur_scope=""
             continue
         fi
 
@@ -471,6 +487,9 @@ load_dataset_snapshot_hooks() {
             hook_failure_mode)
                 cur_mode="${val}"
                 ;;
+            hook_scope)
+                cur_scope="${val}"
+                ;;
         esac
     done < "${cfg_file}"
 
@@ -479,6 +498,7 @@ load_dataset_snapshot_hooks() {
         SNAP_POST_HOOK="${cur_post}"
         SNAP_TIMEOUT="${cur_timeout}"
         SNAP_MODE="${cur_mode}"
+        SNAP_HOOK_SCOPE="${cur_scope}"
     fi
 }
 
@@ -2176,7 +2196,7 @@ case "$1" in
         create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
     ('run_snapshot_post_hook_and_trigger')
-        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}"
+        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}" "${6:-}"
     ;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}"

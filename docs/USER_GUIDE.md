@@ -236,7 +236,8 @@ Automated snapshot creation and retention policies powered by **Sanoid**.
 - **Automatic Child Baseline Snapshots**: When replicating recursive dataset trees, BuddyBackup automatically detects newly created child datasets that have zero snapshots (e.g. newly deployed Docker containers or VM zvols) and creates an initial baseline snapshot before replication. This prevents Syncoid from aborting with missing snapshot errors under `--no-sync-snap`.
 - **Create snapshots automatically** (`autosnap`) & **Prune snapshots automatically** (`autoprune`): Toggle automated snapshot creation and retention pruning.
 - **Snapshot retention**: Number of snapshots to retain for Hourly, Daily, Weekly, Monthly, and Yearly intervals.
-- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset.
+- **Scheduled snapshot time**: Configurable hour and minute (e.g. `04:00 AM`) specifying when daily, weekly, monthly, and yearly snapshot cycles execute. Powered by a 1-minute precision cron heartbeat (`* * * * *`). Includes a live dynamic schedule preview that explains the exact snapshot intervals and hook behavior.
+- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset. Triggered replication executes asynchronously in the background so Sanoid exits in milliseconds and releases its lock immediately.
 
 #### Snapshot Hooks (Advanced)
 
@@ -252,7 +253,7 @@ When both a post-snapshot resume hook and a **Trigger backup after snapshot** ta
 1. Workload is paused or flushed via `pre_snapshot_script`.
 2. `zfs snapshot` creates the point-in-time snapshot.
 3. Workload is **resumed immediately** via `post_snapshot_script`.
-4. BuddyBackup dispatches the triggered backup task (`send_backup`) for network replication while your application continues running with zero downtime.
+4. BuddyBackup detaches the triggered backup task (`send_backup`) asynchronously in the background for network replication while your application continues running with zero downtime. Sanoid exits in < 1 second.
 
 **Fields**:
 - **Pre-snapshot hook**: Executable script path or inline shell command (e.g. `docker pause nextcloud`) run milliseconds before `zfs snapshot`. Leave empty to disable.
@@ -261,6 +262,9 @@ When both a post-snapshot resume hook and a **Trigger backup after snapshot** ta
 - **Hook failure mode**:
   - `Abort on hook failure` (default): Aborts snapshot creation (`no_inconsistent_snapshot = 1` in Sanoid) if the pre-snapshot hook fails.
   - `Warn and proceed anyway`: Logs a warning on failure and takes the snapshot anyway.
+- **Hook execution scope**:
+  - `Daily snapshot only (Recommended)` (default): Pre/post hooks only execute during the configured daily snapshot cycle (e.g. 04:00 AM). Hourly snapshots proceed silently without interrupting workloads.
+  - `All snapshot intervals`: Pre/post hooks execute across all snapshot intervals (Hourly, Daily, Weekly...).
 
 ##### Workload Pause & Resume Recipes
 

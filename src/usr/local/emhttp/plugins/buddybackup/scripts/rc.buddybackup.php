@@ -194,6 +194,23 @@ function normalize_hook_failure_mode($value) {
     return ((string)$value === 'warn') ? 'warn' : 'abort';
 }
 
+function normalize_snapshot_time($hour, $min) {
+    if ($hour === null || $hour === '' || $min === null || $min === '') {
+        return array('', '');
+    }
+    $hour_str = trim((string)$hour);
+    $min_str = trim((string)$min);
+    if (!ctype_digit($hour_str) || !ctype_digit($min_str)) {
+        return array('', '');
+    }
+    $h = (int)$hour_str;
+    $m = (int)$min_str;
+    if ($h < 0 || $h > 23 || $m < 0 || $m > 59) {
+        return array('', '');
+    }
+    return array((string)$h, (string)$m);
+}
+
 function read_receive_destination_dataset(&$error_message = null) {
     global $tmp_recv_dataset_path, $incoming_config_path;
 
@@ -785,13 +802,14 @@ function update_sanoid_conf() {
             $post_hook = str_replace(array("\r", "\n"), '', trim((string)($section['post_snapshot_script'] ?? '')));
             $hook_timeout = normalize_hook_timeout($section['hook_timeout'] ?? '');
             $hook_failure_mode = normalize_hook_failure_mode($section['hook_failure_mode'] ?? '');
+            $hook_scope = trim((string)($section['hook_scope'] ?? ''));
             $trigger = trim((string)($section['trigger'] ?? ''));
             if ($trigger === 'no') {
                 $trigger = '';
             }
 
             foreach ($section as $key => $value) {
-                if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode'), true)) {
+                if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode', 'hook_scope', 'daily_hour', 'daily_min', 'weekly_hour', 'weekly_min', 'monthly_hour', 'monthly_min', 'yearly_hour', 'yearly_min'), true)) {
                     continue;
                 }
                 if ($key === 'recursive') {
@@ -802,7 +820,22 @@ function update_sanoid_conf() {
                 $sanoid_conf_content .= "    $key = $value\n";
             }
 
+            list($daily_hour, $daily_min) = normalize_snapshot_time($section['daily_hour'] ?? '', $section['daily_min'] ?? '');
+            if ($daily_hour !== '' && $daily_min !== '') {
+                $sanoid_conf_content .= "    daily_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    daily_min = $daily_min\n";
+                $sanoid_conf_content .= "    weekly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    weekly_min = $daily_min\n";
+                $sanoid_conf_content .= "    monthly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    monthly_min = $daily_min\n";
+                $sanoid_conf_content .= "    yearly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    yearly_min = $daily_min\n";
+            }
+
             if ($pre_hook !== '') {
+                if ($hook_scope === 'daily') {
+                    $pre_hook = '[ -n "${SANOID_TYPES:-}" ] && [[ "${SANOID_TYPES}" != *"daily"* ]] && exit 0; ' . $pre_hook;
+                }
                 $sanoid_conf_content .= "    pre_snapshot_script = $pre_hook\n";
                 if ($hook_failure_mode === 'abort') {
                     $sanoid_conf_content .= "    no_inconsistent_snapshot = 1\n";
@@ -817,13 +850,19 @@ function update_sanoid_conf() {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
                 $escaped_post_hook = addcslashes($post_hook, "\\\"$");
                 $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
+                if ($hook_scope === 'daily') {
+                    $post_cmd .= " \"daily\"";
+                }
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             } else if ($post_hook !== '') {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                if ($hook_scope === 'daily') {
+                    $post_hook = '[ -n "${SANOID_TYPES:-}" ] && [[ "${SANOID_TYPES}" != *"daily"* ]] && exit 0; ' . $post_hook;
+                }
                 $sanoid_conf_content .= "    post_snapshot_script = $post_hook\n";
             } else if ($trigger !== '') {
-                $cmd = "$empath/scripts/rc.buddybackup.php send_backup \"$trigger\" 2>&1 | $log_script";
-                $sanoid_conf_content .= "    post_snapshot_script = $cmd\n";
+                $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"\" \"30\" \"$trigger\"";
+                $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             }
         }
     }
@@ -845,7 +884,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
