@@ -71,6 +71,13 @@ Title="Backup and restore"
     function buddybackup_sync_subdataset_suggestion(form) {
         var wrap = form.find('.buddybackup-auto-dest-wrap');
 
+        var is_recursive = form.find("select[name='recursive']").val() == "yes";
+        var is_skip_parent = is_recursive && form.find("select[name='skip_parent']").val() == "yes";
+        if (is_skip_parent) {
+            wrap.hide();
+            return;
+        }
+
         var source_select = form.find('select[name="source_dataset"]');
         var source_val = (source_select.val() || '').trim();
         if (!source_val || source_val === 'Select from list') {
@@ -294,7 +301,7 @@ Title="Backup and restore"
             scope.find('input.disable-on-unsaved').not('.lock').prop('disabled', true).addClass("lock").attr('title', '_(Apply changes to enable this)_');
         }
         var $ctx = $(ctx);
-        if ($ctx.is('select[name="source_dataset"]') || $ctx.is('input[name="destination_dataset"]') || $ctx.is('select[name="type"]')) {
+        if ($ctx.is('select[name="source_dataset"]') || $ctx.is('input[name="destination_dataset"]') || $ctx.is('select[name="type"]') || $ctx.is('select[name="recursive"]') || $ctx.is('select[name="skip_parent"]')) {
             buddybackup_sync_subdataset_suggestion(form);
         }
         var dest_type = form.find("select[name='type']").val();
