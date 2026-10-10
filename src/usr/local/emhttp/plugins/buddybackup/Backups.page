@@ -426,6 +426,9 @@ Title="Backup and restore"
             }
         });
 
+        var is_recursive = form.find("select[name='recursive']").val() == "yes";
+        var is_skip_parent = is_recursive && form.find("select[name='skip_parent']").val() == "yes";
+
         if (duplicate_found) {
             swal({
                 title:"_(Duplicate Destination)_",
@@ -437,7 +440,7 @@ Title="Backup and restore"
                 cancelButtonText:"_(Cancel)_"
             }, function(p){
                 if (p) {
-                    if (dest_type == "local" && saved != "true") {
+                    if (dest_type == "local" && saved != "true" && !is_skip_parent) {
                         var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
                         if (destination_dataset_exists) {
                             swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p2){
@@ -452,7 +455,7 @@ Title="Backup and restore"
             return;
         }
 
-        if (dest_type == "local" && saved != "true") {
+        if (dest_type == "local" && saved != "true" && !is_skip_parent) {
             var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
             if (destination_dataset_exists) {
                 swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
