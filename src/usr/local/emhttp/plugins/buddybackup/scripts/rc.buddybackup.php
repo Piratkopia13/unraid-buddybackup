@@ -794,6 +794,11 @@ function update_sanoid_conf() {
                 if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode'), true)) {
                     continue;
                 }
+                if ($key === 'recursive') {
+                    $recursive_mode = ($value === 'yes' || $value === 'zfs') ? 'zfs' : 'no';
+                    $sanoid_conf_content .= "    recursive = $recursive_mode\n";
+                    continue;
+                }
                 $sanoid_conf_content .= "    $key = $value\n";
             }
 

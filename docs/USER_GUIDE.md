@@ -231,7 +231,9 @@ Automated snapshot creation and retention policies powered by **Sanoid**.
 
 ![Snapshot Creation and Pruning](images/screenshot_05_snapshots_page.png)
 
-- **Dataset** & **Recursive**: Dataset to snapshot, with optional recursion.
+- **Dataset** & **Recursive**: Dataset to snapshot, with optional recursion (**Yes (All child datasets)** or **No**).
+  - **Atomic ZFS Recursion**: Uses native ZFS atomic recursion (`zfs snapshot -r`), taking snapshots across the parent and all child datasets simultaneously in milliseconds with identical timestamps. Eliminates staggered per-child cron cycles and ensures post-snapshot replication triggers execute once per scheduled interval.
+- **Automatic Child Baseline Snapshots**: When replicating recursive dataset trees, BuddyBackup automatically detects newly created child datasets that have zero snapshots (e.g. newly deployed Docker containers or VM zvols) and creates an initial baseline snapshot before replication. This prevents Syncoid from aborting with missing snapshot errors under `--no-sync-snap`.
 - **Create snapshots automatically** (`autosnap`) & **Prune snapshots automatically** (`autoprune`): Toggle automated snapshot creation and retention pruning.
 - **Snapshot retention**: Number of snapshots to retain for Hourly, Daily, Weekly, Monthly, and Yearly intervals.
 - **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset.

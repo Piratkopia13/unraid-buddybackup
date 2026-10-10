@@ -1010,6 +1010,45 @@ manual_snapshot_name() {
     printf '%s' "${snapshot_name}"
 }
 
+ensure_child_datasets_have_snapshots() {
+    local parent_dataset="${1:-}"
+    local nchan="${2:-send}"
+
+    [[ -z "${parent_dataset}" ]] && return 0
+
+    local all_datasets=""
+    all_datasets=$(zfs list -H -o name -t filesystem,volume -r "${parent_dataset}" 2>/dev/null) || return 0
+    [[ -z "${all_datasets}" ]] && return 0
+
+    local snap_datasets=""
+    snap_datasets=$(zfs list -H -o name -t snapshot -r "${parent_dataset}" 2>/dev/null | sed 's/@.*//' | sort -u)
+
+    local missing_datasets=""
+    if [[ -z "${snap_datasets}" ]]; then
+        missing_datasets="${all_datasets}"
+    else
+        missing_datasets=$(comm -23 <(printf '%s\n' "${all_datasets}" | sort -u) <(printf '%s\n' "${snap_datasets}" | sort -u))
+    fi
+
+    [[ -z "${missing_datasets}" ]] && return 0
+
+    local ds=""
+    while IFS= read -r ds; do
+        [[ -z "${ds}" ]] && continue
+        local snap_timestamp=""
+        snap_timestamp=$(manual_snapshot_timestamp)
+        local snap_name="${ds}@autosnap_${snap_timestamp}_daily"
+        local log_msg="Child dataset '${ds}' has no snapshots. Creating initial baseline snapshot '${snap_name}'.."
+        logger "${log_msg}" -t"${plugin}"
+        write "${nchan}" "${log_msg}"
+        local snap_err=""
+        if ! snap_err=$(zfs snapshot "${snap_name}" 2>&1); then
+            logger "Failed to create baseline snapshot '${snap_name}': ${snap_err}" -t"${plugin}"
+            write "${nchan}" "Warning: Failed to create baseline snapshot '${snap_name}': ${snap_err}"
+        fi
+    done <<< "${missing_datasets}"
+}
+
 send_mark_received_backup() {
     local destination_host="${1}"
     local destination_dataset="${2:-}"
@@ -1189,7 +1228,8 @@ send_backup() {
         write "${nchan}" "Warning: sending unencrypted dataset to remote destination!"
         my_syncoid_flags="${syncoid_flags_unencrypted}"
     fi
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
+        ensure_child_datasets_have_snapshots "${source_dataset}" "${nchan}"
         my_syncoid_flags+=" --recursive"
         if [[ "${skip_parent}" == "yes" ]]; then
             my_syncoid_flags+=" --skip-parent"
@@ -1306,7 +1346,8 @@ send_local_backup() {
     fi
 
     local my_syncoid_flags="${syncoid_flags_local}"
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
+        ensure_child_datasets_have_snapshots "${source_dataset}" "${nchan}"
         my_syncoid_flags+=" --recursive"
         if [[ "${skip_parent}" == "yes" ]]; then
             my_syncoid_flags+=" --skip-parent"
@@ -1409,7 +1450,7 @@ create_snapshot_and_send() {
     snapshot_name=$(manual_snapshot_name "${source_dataset}")
     write "${nchan}" "Creating fresh snapshot '${snapshot_name}'.."
 
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
         snapshot_cmd+=(-r)
     fi
     snapshot_cmd+=("${snapshot_name}")
