@@ -562,17 +562,33 @@ EOF
         fi
     fi
 
-    # Ensure user is setup correctly
+    # Ensure user exists; create if missing
     if ! id "${username}" >/dev/null 2>&1; then
         local pwd=$(openssl rand -base64 32)
         useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
     fi
 
+    # Repair user and group if user already existed (e.g. after Unraid reboot,
+    # /etc/rc.d/rc.S.cont recreates users from /boot/config/passwd with home=/ and shell=/bin/false,
+    # and does not restore custom groups in /etc/group).
+    if ! getent group "${username}" >/dev/null 2>&1; then
+        local user_gid
+        user_gid=$(id -g "${username}" 2>/dev/null || true)
+        if [[ -n "${user_gid}" ]] && ! getent group "${user_gid}" >/dev/null 2>&1; then
+            groupadd -g "${user_gid}" "${username}" >/dev/null 2>&1 || groupadd "${username}" >/dev/null 2>&1 || true
+        else
+            groupadd "${username}" >/dev/null 2>&1 || true
+        fi
+    fi
+    usermod -g "${username}" "${username}" >/dev/null 2>&1 || true
+    usermod -d "/home/${username}" -s /bin/bash "${username}" >/dev/null 2>&1 || true
+    usermod -U "${username}" >/dev/null 2>&1 || true
+
     mkdir -p "/home/${username}/.ssh" >/dev/null 2>&1
-    chmod 700 "/home/${username}/.ssh"
+    chmod 700 "/home/${username}" "/home/${username}/.ssh" >/dev/null 2>&1
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
-    chmod 644 "/home/${username}/.ssh/authorized_keys"
-    chown -R ${username}:${username} "/home/${username}/"
+    chmod 644 "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
+    chown -R "${username}:${username}" "/home/${username}/" >/dev/null 2>&1 || chown -R "${username}" "/home/${username}/" >/dev/null 2>&1
 }
 
 allow_buddy_dataset() {
@@ -759,6 +775,7 @@ disable_backups_from_buddy() {
     fi
 
     userdel "${username}" >/dev/null 2>&1
+    groupdel "${username}" >/dev/null 2>&1 || true
 }
 
 remove_cron_files() {

@@ -470,6 +470,16 @@ if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
     exit 1
 fi
 
+if ! getent passwd buddybackup 2>/dev/null | grep -q ':/home/buddybackup:/bin/bash'; then
+    echo "buddybackup home or shell is not ready" >&2
+    exit 1
+fi
+
+if ! getent group buddybackup >/dev/null 2>&1; then
+    echo "buddybackup group is missing" >&2
+    exit 1
+fi
+
 if ! grep -Eq '^[[:space:]]*AllowUsers[[:space:]].*buddybackup([[:space:]]|$)' "$sshd_config" 2>/dev/null; then
     echo "sshd AllowUsers is missing buddybackup" >&2
     exit 1
