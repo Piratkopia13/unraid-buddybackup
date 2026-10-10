@@ -20,6 +20,7 @@ Title="Backup and restore"
 <script>
     var bb_setup_script_url = <?=json_encode($setup_script_url)?>;
     var bb_public_ssh_key = <?=json_encode($public_ssh_key)?>;
+    var bb_subdataset_delimiter = <?=json_encode($cfg['DestinationSubdatasetDelimiter'] ?? '_')?>;
 
     function shell_single_quote(value) {
         return "'" + String(value).replace(/'/g, "'\\''") + "'";
@@ -54,6 +55,91 @@ Title="Backup and restore"
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+    function buddybackup_derive_subdataset(source, delimiter) {
+        if (!source || source === 'Select from list') return '';
+        delimiter = (typeof delimiter === 'string') ? delimiter : '_';
+        var clean = String(source).trim().replace(/^\/+|\/+$/g, '');
+        if (!clean) return '';
+        if (delimiter === '/') {
+            return clean.split('/').map(function(part) {
+                return part.replace(/[^a-zA-Z0-9_\-\.\:]/g, '_');
+            }).join('/');
+        }
+        return clean.replace(/[^a-zA-Z0-9_\-\.\:\/]/g, '_').replace(/\/+/g, delimiter);
+    }
+    function buddybackup_sync_subdataset_suggestion(form) {
+        var wrap = form.find('.buddybackup-auto-dest-wrap');
+
+        var source_select = form.find('select[name="source_dataset"]');
+        var source_val = (source_select.val() || '').trim();
+        if (!source_val || source_val === 'Select from list') {
+            wrap.hide();
+            return;
+        }
+
+        var sub = buddybackup_derive_subdataset(source_val, bb_subdataset_delimiter);
+        if (!sub) {
+            wrap.hide();
+            return;
+        }
+
+        var dest_input = form.find('input[name="destination_dataset"]');
+        var current_dest = (dest_input.val() || '').trim();
+        if (!current_dest) {
+            wrap.hide();
+            return;
+        }
+
+        // If destination already ends with this derived sub-dataset, suggestion is already satisfied!
+        if (current_dest.endsWith('/' + sub)) {
+            wrap.hide();
+            form.data('prev-sub', sub);
+            return;
+        }
+
+        var prev_sub = form.data('prev-sub');
+        var dest_type = form.find("select[name='type']").val();
+        var parent = '';
+
+        if (dest_type === 'local') {
+            var clean = current_dest.replace(/\/+$/, '');
+            var is_existing_dataset = $('datalist#local-datasets').find("option[value='" + clean + "']").length > 0;
+            if (is_existing_dataset) {
+                parent = clean;
+            } else if (prev_sub && current_dest.endsWith('/' + prev_sub)) {
+                // Source dataset was changed, destination still had previous source's sub-dataset
+                parent = current_dest.substring(0, current_dest.length - prev_sub.length - 1);
+            } else if (current_dest.endsWith('/')) {
+                // Explicit trailing slash after parent
+                parent = clean;
+            }
+        } else {
+            if (prev_sub && current_dest.endsWith('/' + prev_sub)) {
+                parent = current_dest.substring(0, current_dest.length - prev_sub.length - 1);
+            } else if (current_dest.endsWith('/')) {
+                parent = current_dest.replace(/\/+$/, '');
+            } else if (!current_dest.includes('/')) {
+                parent = current_dest;
+            }
+        }
+
+        form.data('prev-sub', sub);
+
+        if (!parent) {
+            wrap.hide();
+            return;
+        }
+
+        var suggested_path = parent + '/' + sub;
+        if (current_dest === suggested_path) {
+            wrap.hide();
+            return;
+        }
+
+        wrap.find('.buddybackup-suggested-path').text(suggested_path);
+        wrap.find('.buddybackup-btn-apply-suggestion').data('suggested-path', suggested_path);
+        wrap.show();
     }
     function start_backup_command(cmd, initial_message) {
         var output = $(".buddybackup-backup-output-log");
@@ -206,7 +292,10 @@ Title="Backup and restore"
         if (on_change) {
             form.find("input[name='#apply']").not('.lock').prop('disabled', false);
             scope.find('input.disable-on-unsaved').not('.lock').prop('disabled', true).addClass("lock").attr('title', '_(Apply changes to enable this)_');
-            scope.find('input.disable-on-unsaved-simple').not('.lock').prop('disabled', true).addClass("lock");
+        }
+        var $ctx = $(ctx);
+        if ($ctx.is('select[name="source_dataset"]') || $ctx.is('input[name="destination_dataset"]') || $ctx.is('select[name="type"]')) {
+            buddybackup_sync_subdataset_suggestion(form);
         }
         var dest_type = form.find("select[name='type']").val();
         var allow_unencrypted_remote_backups = "<?=$cfg["AllowUnencryptedRemoteBackups"]?>";
@@ -257,7 +346,20 @@ Title="Backup and restore"
         $('form.buddybackup-backup-entry')
             .find('select,input[type=text],input[type=number],input[type=password],input[type=checkbox],input[type=radio],input[type=file],textarea')
             .not('.lock').each(function(){backup_input_changed(this); $(this).on('input change', function(){backup_input_changed(this, true)})});
-    })
+    });
+
+    $(document).on('click', '.buddybackup-btn-apply-suggestion', function(e) {
+        e.preventDefault();
+        var btn = $(this);
+        var form = btn.closest('form');
+        var dest_input = form.find('input[name="destination_dataset"]');
+        var suggested = btn.data('suggested-path');
+        if (!suggested) return;
+
+        dest_input.val(suggested);
+        backup_input_changed(dest_input[0], true);
+        buddybackup_sync_subdataset_suggestion(form);
+    });
     function add_backup() {
         var template = $("#buddybackup-backup-entry-template");
         var list = $("#buddybackup-backup-list");
@@ -289,9 +391,61 @@ Title="Backup and restore"
         }
         var dest_type = form.find("select[name='type']").val();
         var saved = form.find("input[name='#saved']").val();
-        var abort = false;
+        var this_uid = form.find("input[name='#section']").val();
+        var destination_dataset = (form.find("input[name='destination_dataset']").val() || '').trim();
+        var destination_host = (form.find("input[name='destination_host']").val() || '').trim();
+
+        if (!destination_dataset) {
+            swal({title:"_(Missing Destination)_", text:"_(Please specify a destination dataset.)_", type:'warning'});
+            return;
+        }
+
+        var duplicate_found = false;
+        var duplicate_source = '';
+        $("form.buddybackup-backup-entry").each(function() {
+            var other_form = $(this);
+            var other_uid = other_form.find("input[name='#section']").val();
+            if (other_uid && other_uid !== this_uid) {
+                var other_type = other_form.find("select[name='type']").val();
+                var other_dest = (other_form.find("input[name='destination_dataset']").val() || '').trim();
+                var other_host = (other_form.find("input[name='destination_host']").val() || '').trim();
+                if (dest_type === other_type && destination_dataset && other_dest && destination_dataset.toLowerCase() === other_dest.toLowerCase()) {
+                    if (dest_type === 'local' || destination_host.toLowerCase() === other_host.toLowerCase()) {
+                        duplicate_found = true;
+                        duplicate_source = other_form.find("select[name='source_dataset']").val() || 'another backup';
+                        return false;
+                    }
+                }
+            }
+        });
+
+        if (duplicate_found) {
+            swal({
+                title:"_(Duplicate Destination)_",
+                text:"_(Another backup job ()_<strong>" + escape_html(duplicate_source) + "</strong>_( ) is already configured with destination dataset )_<strong>" + escape_html(destination_dataset) + "</strong>_(. Using the exact same destination dataset for multiple jobs may cause conflicts.)_",
+                type:'warning',
+                html:true,
+                showCancelButton:true,
+                confirmButtonText:"_(Proceed anyway)_",
+                cancelButtonText:"_(Cancel)_"
+            }, function(p){
+                if (p) {
+                    if (dest_type == "local" && saved != "true") {
+                        var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
+                        if (destination_dataset_exists) {
+                            swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p2){
+                                if (p2) { form.submit(); }
+                            });
+                            return;
+                        }
+                    }
+                    form.submit();
+                }
+            });
+            return;
+        }
+
         if (dest_type == "local" && saved != "true") {
-            var destination_dataset = form.find("input[name='destination_dataset']").val();
             var destination_dataset_exists = $("datalist#local-datasets").find("option[value='"+destination_dataset+"']").length > 0;
             if (destination_dataset_exists) {
                 swal({title:"_(Dataset exists)_", text:"Local destination dataset already exists. This may cause issues if this is a new backup.", type:'warning', html:true, showCancelButton:true, confirmButtonText:"_(Proceed)_", cancelButtonText:"_(Cancel)_"}, function(p){if (p) {
@@ -708,6 +862,13 @@ Title="Backup and restore"
                             <dt>_(Destination dataset)_:</dt>
                             <dd>
                                 <input type="text" name="destination_dataset" class="align" <?=($data['type']=='local')?'list="local-datasets"':''?> value="<?=$data['destination_dataset'];?>" <?=$disabled?>>
+                                <div class="buddybackup-auto-dest-wrap" style="margin-top: 5px; display: none;">
+                                    <span class="buddybackup-dest-suggestion" style="display: inline-flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 8px; border-radius: 3px; background: rgba(52, 152, 219, 0.12); border: 1px solid rgba(52, 152, 219, 0.3); color: inherit;">
+                                        <i class="fa fa-lightbulb-o" style="color: #f39c12;"></i>
+                                        <span><?=_('Suggestion')?>: <strong class="buddybackup-suggested-path" style="font-family: monospace;"></strong></span>
+                                        <button type="button" class="ur-btn buddybackup-btn-apply-suggestion" style="font-size: 10px; padding: 1px 6px; margin-left: 4px; cursor: pointer;" <?=$disabled?>><?=_('Use this')?></button>
+                                    </span>
+                                </div>
                                 <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with or match buddy's set destination parent dataset.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-local buddybackup-note-local" <?=($data['type']!='local')?'style="display:none;"':''?>>_(Note: local destination datasets are automatically set to read-only once synced to protect against accidental edits and ransomware.)_</div>

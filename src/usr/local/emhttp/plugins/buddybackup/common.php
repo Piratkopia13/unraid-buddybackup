@@ -11,6 +11,7 @@
     $_SERVER['PATH'] = $normalized_path;
 
     $cfg = parse_plugin_cfg($plugin, true);
+    $cfg['DestinationSubdatasetDelimiter'] = $cfg['DestinationSubdatasetDelimiter'] ?? '_';
     $rc_name = "rc.$plugin.php";
     $rc_script = "/plugins/$plugin/scripts/$rc_name";
 
