@@ -17,7 +17,7 @@
 
 ### 1.3 Key Constraints & Rules
 - [List project-specific rules, e.g., zero edits to upstream vendor dependencies per `AGENTS.md`]
-- [Backward compatibility constraints]
+- [Mandatory backward compatibility constraints per `RELEASE_CHECKLIST.md` (cross-version peer interop, safe config defaults, fallback mechanics)]
 - [Security, permission, or execution context constraints]
 
 ---
@@ -49,7 +49,8 @@ Break the work down into self-contained, verifiable phases ready for execution b
 ### Phase 1: Core Logic & Backend Infrastructure
 - [ ] Task 1.1: [Specific actionable task with exact file target]
 - [ ] Task 1.2: [Data validation, boundary guards, and error handling]
-- [ ] Task 1.3: [Configuration read/write handling with safe fallback defaults]
+- [ ] Task 1.3: [Configuration read/write handling with safe fallback defaults for missing keys]
+- [ ] Task 1.4: [Cross-version fallback handling for remote peers / older receivers]
 - **Verification**: [Command or automated check to verify Phase 1 in isolation]
 
 ### Phase 2: WebGUI / CLI / Interface Integration
@@ -61,7 +62,8 @@ Break the work down into self-contained, verifiable phases ready for execution b
 ### Phase 3: Automated Testing, Bug & Regression Prevention
 - [ ] Task 3.1: [Write reproduction/regression tests for any bugs or potential regressions identified]
 - [ ] Task 3.2: [Implement new unit / t/*.t / testlab / WebGUI tests covering core functionality]
-- [ ] Task 3.3: [Test edge cases: missing dependencies, invalid input, timeouts, or failure recovery]
+- [ ] Task 3.3: [Verify backward compatibility: test cross-version commands in `t/backwards_compat.t` and in-place upgrade in testlab]
+- [ ] Task 3.4: [Test edge cases: missing dependencies, invalid input, timeouts, or failure recovery]
 - **Verification**: [Execute the test suite, e.g. `prove -v t/...`, testlab runner, or DevTools MCP run]
 
 ### Phase 4: Documentation & Release Packaging
@@ -88,7 +90,25 @@ Break the work down into self-contained, verifiable phases ready for execution b
 
 ---
 
-## 5. Edge Cases, Error Handling & Recovery
+## 5. Backward Compatibility & Migration Strategy
+
+> [!IMPORTANT]
+> **Backward Compatibility Mandate**: Per [RELEASE_CHECKLIST.md](file:///y:/RELEASE_CHECKLIST.md) (Section 3.2), changes must never break existing installations or cross-version peer communication.
+
+### 5.1 Cross-Version Peer Interoperability
+*   **Older Sender → Newer Receiver**: [How does the new version guarantee that older BuddyBackup senders can still push backups without allowlist rejection or protocol errors? Does the receiver allowlist accept legacy commands?]
+*   **Newer Sender → Older Receiver**: [If new commands, options, or flags are sent to the receiver, what fallback logic is implemented so older receivers that don't recognize the new syntax do not fail (e.g., multi-step fallback in `send_mark_received_backup`)?]
+
+### 5.2 In-Place Configuration Upgrades & Schema Defaults
+*   **Legacy Configuration Handling**: [How do configuration loaders handle missing keys when upgrading an existing installation? Specify safe default fallbacks for all newly introduced settings.]
+*   **Data Preservation**: [Verify that updating the plugin in-place preserves 100% of existing backup jobs, buddy configs, SSH keys, receiver mode settings, and advanced options without migration loss or manual intervention.]
+
+### 5.3 CLI & Protocol Stability
+*   **CLI & Wrapper Stability**: [Confirm that command-line syntax, daemon arguments, and exit codes maintain backward compatibility for existing cron jobs and external scripts.]
+
+---
+
+## 6. Edge Cases, Error Handling & Recovery
 
 | Edge Case / Failure Mode | Expected Behavior | Handling / Fallback Mechanism |
 | :--- | :--- | :--- |
@@ -99,23 +119,23 @@ Break the work down into self-contained, verifiable phases ready for execution b
 
 ---
 
-## 6. Automated Verification & Regression Test Plan
+## 7. Automated Verification & Regression Test Plan
 
 > [!IMPORTANT]
-> **Bug & Regression Prevention Mandate**: Whenever modifying existing code, resolving a reported defect, or altering system behavior, the implementation plan **must** specify automated tests for each bug or regression risk identified. Tests must be created in whatever test harness best fits the issue (e.g. Unit tests, `t/*.t` TAP tests, testlab scripts, or browser DevTools tests) so we permanently reduce the chance of introducing new issues or repeating past failures.
+> **Bug & Regression Prevention Mandate**: Whenever modifying existing code, resolving a reported defect, or altering system behavior, the implementation plan **must** specify automated tests for each bug, regression risk, or backward compatibility requirement identified. Tests must be created in whatever test harness best fits the issue (e.g. Unit tests, `t/*.t` TAP tests, testlab scripts, or browser DevTools tests) so we permanently reduce the chance of introducing new issues or repeating past failures.
 
-### 6.1 Test Modalities & Placement
+### 7.1 Test Modalities & Placement
 Select the test modality that best fits the bug, regression risk, or new capability:
 
 | Test Modality | Scope / Best For | Target Location / Command |
 | :--- | :--- | :--- |
-| **TAP Tests (`t/*.t`)** | CLI wrappers, argument parsing, config handling, hooks | `t/[name].t` via `prove -v t/[name].t` |
+| **TAP Tests (`t/*.t`)** | CLI wrappers, argument parsing, config handling, hooks, backward compatibility (`t/backwards_compat.t`) | `t/[name].t` via `prove -v t/[name].t` |
 | **Unit / Syntax Tests** | Pure logic, PHP functions, syntax validation | `t/php_syntax_and_eval.t` or dedicated unit test |
-| **Testlab System Tests** | WSL/QEMU multi-node integration, ZFS datasets, SSH keys | `testlab/scripts/...` via PowerShell |
+| **Testlab System Tests** | WSL/QEMU multi-node integration, ZFS datasets, SSH keys, in-place upgrades (`upgrade-preserves-config`) | `testlab/scripts/...` via PowerShell |
 | **WebGUI Navigation Tests** | Browser forms, DOM states, button clicks, error banners | Chrome DevTools MCP via `testlab-web-navigation` skill |
 | **Custom / Diagnostic Scripts** | Edge cases, race condition simulation, mock services | `t/` or testlab helper scripts |
 
-### 6.2 Regression Test Cases & Bug Assertions
+### 7.2 Regression Test Cases & Bug Assertions
 Enumerate the specific regression cases to be locked in with tests:
 
 *   **Regression Case 1 ([Bug/Failure Description])**:
@@ -127,20 +147,25 @@ Enumerate the specific regression cases to be locked in with tests:
     *   *Test Harness*: [`t/*.t` / Unit / Testlab / Web Navigation]
     *   *Test File / Script*: `[path/to/test]`
     *   *Pass Assertion*: `[Assertion verifying existing functionality is preserved]`
+*   **Backward Compatibility Case ([Cross-Version Interoperability or In-Place Upgrade])**:
+    *   *Test Harness*: [`t/*.t` / Testlab]
+    *   *Test File / Script*: `[t/backwards_compat.t or testlab upgrade-preserves-config scenario]`
+    *   *Input / Trigger Condition*: `[Older sender sending legacy command syntax, or candidate release pushing to legacy allowlist]`
+    *   *Pass Assertion*: `[Command accepted without rejection; existing configuration loaded without missing keys]`
 
 ---
 
-## 7. Maintainer Manual Testing Walkthrough
+## 8. Maintainer Manual Testing Walkthrough
 
 > [!NOTE]
 > If the feature is manually testable (via WebGUI, CLI, config edits, or testlab instances), this section provides a step-by-step runbook for the maintainer to verify the changes personally. If the feature is strictly internal/programmatic with no manual test path, explicitly state why below and provide diagnostic commands to verify state.
 
-### 7.1 Test Environment & Prerequisites
+### 8.1 Test Environment & Prerequisites
 *   **Target Environment**: [e.g. Local testlab nodeA (`http://127.0.0.1:8080`), local dev host, or specific VM]
 *   **Initial Setup & Preconditions**: [e.g. Test ZFS pool/dataset created, specific plugin setting enabled, mock remote host online]
 *   **Required Tools / Context**: [e.g. Root shell access, active Unraid WebGUI admin session, browser developer tools]
 
-### 7.2 Step-by-Step Test Procedure (Happy Path)
+### 8.2 Step-by-Step Test Procedure (Happy Path)
 1.  **Preparation**:
     *   Command / Action: `[Command to set up state or verify clean starting baseline]`
 2.  **Trigger Action (WebGUI or CLI)**:
@@ -153,7 +178,7 @@ Enumerate the specific regression cases to be locked in with tests:
     *   Log Output: Inspect log entries via `tail -n 20 /var/log/syslog` or `[path/to/logfile]`
     *   System State: Verify underlying state (e.g. `zfs list -t snapshot`, cron schedule via `crontab -l`)
 
-### 7.3 Negative & Edge Case Manual Tests
+### 8.3 Negative & Edge Case Manual Tests
 1.  **Invalid Input Handling**:
     *   Action: [Supply empty string, special characters, or nonexistent path]
     *   Expected Behavior: [Inline UI warning displayed; no crashes or corrupted config files]
@@ -161,7 +186,7 @@ Enumerate the specific regression cases to be locked in with tests:
     *   Action: [Simulate unreachable peer, stopped daemon, or missing dependency]
     *   Expected Behavior: [Graceful error toast or informative message; safe fallback behavior]
 
-### 7.4 Environment Cleanup & Teardown
+### 8.4 Environment Cleanup & Teardown
 *   **Reset Steps**: [Exact commands or WebGUI actions to revert the test environment back to a clean baseline state]
     *   `[e.g. zfs destroy testpool/sample_dataset]`
     *   `[e.g. Revert config setting back to default]`
@@ -170,7 +195,7 @@ Enumerate the specific regression cases to be locked in with tests:
 
 ---
 
-## 8. Risk Assessment & Rollback Strategy
+## 9. Risk Assessment & Rollback Strategy
 
 *   **Risk Level**: Low / Medium / High
 *   **Potential Regressions**: [What existing workflows touch this area?]
@@ -178,14 +203,15 @@ Enumerate the specific regression cases to be locked in with tests:
 
 ---
 
-## 9. Handoff Checklist for Implementing Agent
+## 10. Handoff Checklist for Implementing Agent
 - [ ] Have all target files and line ranges been confirmed via codebase search?
 - [ ] Are all project architectural constraints (e.g. `AGENTS.md`) adhered to?
 - [ ] **Safety & Security First**: Are input sanitization, injection safeguards, least privilege, and data loss protections explicitly engineered?
+- [ ] **Backward Compatibility Enforced**: Are cross-version interoperability (older ↔ newer sender/receiver), in-place configuration upgrades, and `t/backwards_compat.t` / `upgrade-preserves-config` test coverage explicitly engineered per `RELEASE_CHECKLIST.md`?
 - [ ] Are acceptance criteria clearly defined for every task?
 - [ ] Can verification steps be executed without human intervention where possible?
 - [ ] Does the plan provide a complete manual testing walkthrough for the maintainer (or explicit justification if not applicable)?
-- [ ] Are automated regression tests mandated (unit, t/, testlab, or web navigation) for all identified bugs and regression risks?
+- [ ] Are automated regression tests mandated (unit, t/, testlab, or web navigation) for all identified bug, regression, and backward-compatibility risks?
 
 
 

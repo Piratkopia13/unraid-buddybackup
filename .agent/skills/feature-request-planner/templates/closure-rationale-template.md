@@ -26,14 +26,14 @@ A concise 2–3 sentence summary explaining what was requested, the core use cas
 Provide clear, objective, and technical justification based on the evaluation pillars:
 
 ### Reason Category
-<!-- Select all that apply: Safety & Security Hazard / Scope & Feature Creep / Duplication of Existing Feature / Architectural Mismatch / Disproportionate Complexity & Maintenance -->
+<!-- Select all that apply: Safety & Security Hazard / Breaking Backward Compatibility / Scope & Feature Creep / Duplication of Existing Feature / Architectural Mismatch / Disproportionate Complexity & Maintenance -->
 
-*   **[Primary Category, e.g., Safety & Security Hazard or Scope Creep]**:
-    [Detailed technical reasoning explaining why this introduces unacceptable risk, data loss potential, command injection vectors, or violates platform/domain boundaries.]
-*   **[Secondary Category, e.g., Duplication of Existing Capabilities]**:
-    [Explanation of existing mechanisms that already address this, or why adding another path creates conflicting/confusing UX.]
-*   **Safety, Architectural & Maintenance Impact**:
-    [Explanation of security exposures, data integrity risks, long-term technical debt, brittle dependencies, or vendor policy conflicts if implemented.]
+*   **[Primary Category, e.g., Safety & Security Hazard, Breaking Backward Compatibility, or Scope Creep]**:
+    [Detailed technical reasoning explaining why this introduces unacceptable risk, data loss potential, command injection vectors, breaking cross-version protocol changes per RELEASE_CHECKLIST.md, or violates platform/domain boundaries.]
+*   **[Secondary Category, e.g., Duplication of Existing Capabilities or Upgrade Hazard]**:
+    [Explanation of existing mechanisms that already address this, why adding another path creates conflicting/confusing UX, or why in-place upgrades cannot be safely executed.]
+*   **Safety, Compatibility & Architectural Impact**:
+    [Explanation of security exposures, data integrity risks, backward compatibility failures across older/newer peers, long-term technical debt, brittle dependencies, or vendor policy conflicts if implemented.]
 
 
 ---

@@ -4,7 +4,7 @@ This reference provides a rigorous evaluation framework to investigate feature r
 
 ---
 
-## The Four Core Pillars of Investigation
+## The Core Pillars of Investigation
 
 ### Pillar 1: Root Use Case Validation (The "Why")
 Separate the user's *proposed solution* from their *underlying problem*.
@@ -68,11 +68,29 @@ Safety and security are non-negotiable prerequisites. Convenience or feature ric
 
 ---
 
+### Pillar 6: Backward Compatibility & Upgrade Impact (Mandatory Requirement)
+Per [RELEASE_CHECKLIST.md](file:///y:/RELEASE_CHECKLIST.md) (Section 3.2), backward compatibility with older versions of this plugin is a non-negotiable requirement. Any proposed feature must preserve compatibility across versions:
+
+*   **Older Sender → Newer Receiver**:
+    *   Will an older BuddyBackup installation pushing to a node running this new version continue to succeed?
+    *   Does the new version's `restrict_zfs` allowlist accept all commands that older releases emit?
+*   **Newer Sender → Older Receiver**:
+    *   Can the newer version send backups to an older receiver without failing?
+    *   If new CLI syntax or commands are introduced, is there an explicit fallback path for older receivers (e.g., fallback logic in `send_mark_received_backup`)?
+*   **In-Place Configuration Upgrades**:
+    *   Does the change preserve existing configuration files, backup jobs, buddy definitions, SSH keys, and advanced options without corruption or missing data?
+    *   Are safe fallback defaults provided whenever existing configuration files omit newly added settings?
+*   **Protocol & Command Line Stability**:
+    *   Are external scripts, hooks, or CLI parameters changed in a way that breaks existing crons or automation?
+
+---
+
 ## Decision Matrix & Heuristics
 
 | Signal | Evaluation Result | Recommended Action |
 | :--- | :--- | :--- |
 | **Presents unmitigated safety or security hazard** | **Immediate No-Go** (Hazard) | Reject immediately; explain security/data integrity risk and why it cannot be built. |
+| **Breaks backward compatibility or cross-version interop without fallback** | **Immediate No-Go** (Breaking Change) | Reject or redesign with fallback/migration mechanism; backward compatibility across versions is a mandatory requirement per [RELEASE_CHECKLIST.md](file:///y:/RELEASE_CHECKLIST.md). |
 | **Existing mechanism already solves the use case** | No-Go (Duplication) | Close request; document how to use the existing feature; optionally plan UX/doc clarification. |
 | **Out-of-scope / Operating system responsibility** | No-Go (Feature Creep) | Close request; explain platform boundaries and point to appropriate external tools or OS settings. |
 | **Violates architectural boundaries or vendor policy** | Pivot or No-Go | If problem is valid, pivot to an architecturally compliant alternative; if impossible without violating boundaries, reject. |
