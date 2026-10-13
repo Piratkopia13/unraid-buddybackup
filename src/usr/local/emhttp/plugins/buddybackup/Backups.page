@@ -271,16 +271,14 @@ Title="Backup and restore"
     function test_connection(btn) {
         var form = get_backup_form(btn);
         var dest_type = form.find("select[name='type']").val();
+        var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
+        var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
+        var remote_port = shell_escape_arg(form.find('input[name="destination_port"]').val() || '22');
         if (dest_type == "remote_generic") {
-            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
-            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
             var remote_user = shell_escape_arg(form.find('input[name="destination_user"]').val() || 'buddybackup');
-            var remote_port = shell_escape_arg(form.find('input[name="destination_port"]').val() || '22');
             buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'" remote_generic "'+remote_user+'" "'+remote_port+'"', '_(Connection test)_', "Testing connection to "+ip+"..")
         } else {
-            var ip = shell_escape_arg(form.find('input[name="destination_host"]').val());
-            var destination_dataset = shell_escape_arg(form.find('input[name="destination_dataset"]').val());
-            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
+            buddybackup_show_popup('<?=$rc_name?> test_connection "'+ip+'" "'+destination_dataset+'" remote "buddybackup" "'+remote_port+'"', '_(Connection test)_', "Testing connection to buddy at "+ip+"..")
         }
     }
     function send_backup(btn) {
@@ -404,6 +402,12 @@ Title="Backup and restore"
 
         if (!destination_dataset) {
             swal({title:"_(Missing Destination)_", text:"_(Please specify a destination dataset.)_", type:'warning'});
+            return;
+        }
+
+        var port_val = (form.find("input[name='destination_port']").val() || '').trim();
+        if (dest_type !== 'local' && port_val !== '' && (!/^\d{1,5}$/.test(port_val) || parseInt(port_val, 10) < 1 || parseInt(port_val, 10) > 65535)) {
+            swal({title:"_(Invalid SSH Port)_", text:"_(SSH port must be a number between 1 and 65535.)_", type:'warning'});
             return;
         }
 
@@ -860,13 +864,13 @@ Title="Backup and restore"
                                 </div>
                             </dd>
                         </dl>
+                        <dl class="buddybackup-form-dl buddybackup-type-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>
+                            <dt>_(SSH port)_:</dt>
+                            <dd><input type="text" name="destination_port" class="align" value="<?=$data['destination_port'];?>" placeholder="22" <?=$disabled?>></dd>
+                        </dl>
                         <dl class="buddybackup-form-dl buddybackup-type-generic" style="display:none;">
                             <dt>_(Remote username)_:</dt>
                             <dd><input type="text" name="destination_user" class="align" value="<?=$data['destination_user'];?>" placeholder="buddybackup" <?=$disabled?>></dd>
-                        </dl>
-                        <dl class="buddybackup-form-dl buddybackup-type-generic" style="display:none;">
-                            <dt>_(SSH port)_:</dt>
-                            <dd><input type="text" name="destination_port" class="align" value="<?=$data['destination_port'];?>" placeholder="22" <?=$disabled?>></dd>
                         </dl>
                         <dl class="buddybackup-form-dl">
                             <dt>_(Destination dataset)_:</dt>

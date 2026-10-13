@@ -420,6 +420,10 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
     }
 
     if ($cfg['type'] == 'remote') {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            return null;
+        }
         return build_shell_command(array(
             $rc,
             'send_backup',
@@ -430,7 +434,7 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $cfg['destination_dataset'],
             $uid,
             '',
-            '',
+            $identity['port'],
             $skip_parent,
             $pre_hook,
             $post_hook,
@@ -473,7 +477,13 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
     $skip_parent = (($cfg['skip_parent'] ?? 'no') === 'yes' && ($cfg['recursive'] ?? '') === 'yes') ? 'yes' : 'no';
     $remote_user = '';
     $remote_port = '';
-    if ($cfg['type'] == 'remote_generic') {
+    if ($cfg['type'] == 'remote') {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        $remote_port = $identity['port'];
+    } else if ($cfg['type'] == 'remote_generic') {
         $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
         if ($identity === null) {
             return null;
@@ -1013,6 +1023,11 @@ function update_backups_from_config() {
                 if ($identity !== null) {
                     $port = $identity['port'];
                 }
+            } else if ($type == 'remote') {
+                $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '');
+                if ($identity !== null) {
+                    $port = $identity['port'];
+                }
             }
             $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
         }
@@ -1022,6 +1037,8 @@ function update_backups_from_config() {
             $allow_empty = array('destination_host');
         } else if ($type == 'remote_generic') {
             $allow_empty = array('destination_user', 'destination_port');
+        } else if ($type == 'remote') {
+            $allow_empty = array('destination_port');
         }
 
         $any_empty = false;
@@ -1089,6 +1106,11 @@ function restore_snapshot($argv) {
     BB_LOG("restore_snapshot ".$uid);
 
     if ($cfg["type"] == "remote") {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
         $cmd = build_shell_command(array(
             $GLOBALS['rc'],
             'restore_snapshot',
@@ -1099,6 +1121,8 @@ function restore_snapshot($argv) {
             $argv[5],
             $argv[6],
             $argv[7],
+            $identity['user'],
+            $identity['port'],
         ));
         BB_LOG("remote cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
@@ -1164,12 +1188,19 @@ function get_available_snapshots($uid) {
         return;
     }
     if ($cfg["type"] == "remote") {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
         passthru(build_shell_command(array(
             $rc,
             'get_available_snapshots',
             'remote',
             $cfg["destination_host"],
             $cfg["destination_dataset"],
+            $identity['user'],
+            $identity['port'],
         )));
     } else if ($cfg["type"] == "remote_generic") {
         $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
@@ -1400,9 +1431,18 @@ switch ($argv[1] ?? '') {
                 'push',
             )));
         } else {
-            $host = escapeshellarg($argv[2] ?? '');
-            $destination_dataset = escapeshellarg($argv[3] ?? '');
-            passthru($rc.' test_connection '.$host.' '.$destination_dataset);
+            $identity = normalize_remote_identity('buddybackup', $port, $error_message);
+            if ($identity === null) {
+                echo $error_message;
+                break;
+            }
+            passthru(build_shell_command(array(
+                $rc,
+                'test_connection',
+                $argv[2] ?? '',
+                $argv[3] ?? '',
+                $identity['port'],
+            )));
         }
         break;
     case 'get_available_snapshots':
