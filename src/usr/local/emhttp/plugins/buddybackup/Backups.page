@@ -827,7 +827,7 @@ Title="Backup and restore"
                                     <?=mk_option($data['skip_parent'] ?? 'no', "no", "_(No)_");?>
                                     <?=mk_option($data['skip_parent'] ?? 'no', "yes", "_(Yes)_");?>
                                 </select>
-                                <div class="buddybackup-field-note">_(Replicate child datasets only, skipping the root parent dataset.)_</div>
+                                <div class="buddybackup-field-note">_(Replicate child datasets only, skipping the root parent dataset. Useful when replicating multiple children (like VMs or app folders) into a matching parent container on the buddy.)_</div>
                             </dd>
                         </dl>
                         <dl class="buddybackup-form-dl">
@@ -879,7 +879,7 @@ Title="Backup and restore"
                                         <button type="button" class="ur-btn buddybackup-btn-apply-suggestion" style="font-size: 10px; padding: 1px 6px; margin-left: 4px; cursor: pointer;" <?=$disabled?>><?=_('Use this')?></button>
                                     </span>
                                 </div>
-                                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with or match buddy's set destination parent dataset.)_</div>
+                                <div class="buddybackup-field-note buddybackup-type-remote buddybackup-note-remote" <?=($data['type']=='local')?'style="display:none;"':''?>>_(Note: must begin with buddy's parent dataset (e.g. parent/my-dataset), or match it directly when replicating child datasets with 'Skip parent'.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-generic buddybackup-note-generic" style="display:none;">_(Note: specify the destination dataset path on the remote host, e.g. parent dataset followed by a child dataset name.)_</div>
                                 <div class="buddybackup-field-note buddybackup-type-local buddybackup-note-local" <?=($data['type']!='local')?'style="display:none;"':''?>>_(Note: local destination datasets are automatically set to read-only once synced to protect against accidental edits and ransomware.)_</div>
                             </dd>

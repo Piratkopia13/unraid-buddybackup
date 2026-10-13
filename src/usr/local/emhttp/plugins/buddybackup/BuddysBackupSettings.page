@@ -6,7 +6,7 @@ function update_buddy_example(el) {
   if (!el) return;
   var form = $(el).closest('form.buddybackup-incoming-entry');
   var val = form.find('select[name=destination_dataset]').val();
-  var example_text = val ? ("_(Example for what buddy can use as destination dataset:)_ " + val + "/my-stuff") : "";
+  var example_text = val ? ("_(Buddy can use:)_ " + val + "/my-child-dataset _(or match)_ " + val + " _(if replicating child datasets with 'Skip parent')_") : "";
   form.find('.buddybackup-destination-example').text(example_text);
 }
 
@@ -398,7 +398,7 @@ _(Configure incoming backups from your buddies. When enabled, each buddy can rep
                       <?=datasets($data["destination_dataset"] ?? '', false)?>
                     </select>
                     <div class="buddybackup-field-note">
-                      <?=_('Select a dedicated parent dataset (e.g. disk1/buddy_backups). Buddy should prefix their destination dataset with this parent dataset, ending with a child dataset.')?><br>
+                      <?=_('Select an existing parent container dataset (e.g. disk1/buddy_backups, pool/appdata, or pool/domains). BuddyBackup delegates permissions on this container so your buddy can create and replicate child datasets under it without manual setup.')?><br>
                       <span class="buddybackup-destination-example"></span>
                     </div>
                   </dd>

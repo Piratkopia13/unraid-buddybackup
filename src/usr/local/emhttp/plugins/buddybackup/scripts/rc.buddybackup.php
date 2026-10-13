@@ -211,15 +211,22 @@ function normalize_snapshot_time($hour, $min) {
     return array((string)$h, (string)$m);
 }
 
-function read_receive_destination_dataset(&$error_message = null) {
+function read_receive_destination_datasets(&$error_message = null) {
     global $tmp_recv_dataset_path, $incoming_config_path;
+
+    $datasets = array();
 
     // Check environment variable BUDDY_DATASET (set by restrict_zfs for current SSH connection)
     $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
     if ($env_dataset !== '') {
-        $first = trim(explode(',', $env_dataset)[0]);
-        if (is_valid_zfs_dataset_name($first)) {
-            return $first;
+        foreach (explode(',', $env_dataset) as $part) {
+            $ds = trim($part);
+            if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                $datasets[] = $ds;
+            }
+        }
+        if (!empty($datasets)) {
+            return $datasets;
         }
     }
 
@@ -230,38 +237,53 @@ function read_receive_destination_dataset(&$error_message = null) {
             $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
             if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
                 $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
-                if (is_valid_zfs_dataset_name($ds)) {
-                    return $ds;
+                if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                    $datasets[] = $ds;
                 }
             }
             foreach ($incoming_cfg as $uid => $buddy) {
                 if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
                     $ds = trim($buddy['destination_dataset']);
-                    if (is_valid_zfs_dataset_name($ds)) {
-                        return $ds;
+                    if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                        $datasets[] = $ds;
                     }
                 }
+            }
+            if (!empty($datasets)) {
+                return $datasets;
             }
         }
     }
 
-    if (!file_exists($tmp_recv_dataset_path)) {
-        $error_message = 'Buddy receive destination dataset is not configured.';
+    if (file_exists($tmp_recv_dataset_path)) {
+        $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
+        if ($dataset !== '' && is_valid_zfs_dataset_name($dataset)) {
+            return array($dataset);
+        }
+    }
+
+    $error_message = 'Buddy receive destination dataset is not configured.';
+    return array();
+}
+
+function read_receive_destination_dataset(&$error_message = null, $target_dataset = null) {
+    $all_datasets = read_receive_destination_datasets($error_message);
+    if (empty($all_datasets)) {
         return null;
     }
 
-    $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
-    if ($dataset === '') {
-        $error_message = 'Buddy receive destination dataset is not configured.';
+    if (!empty($target_dataset)) {
+        $target = trim($target_dataset);
+        foreach ($all_datasets as $ds) {
+            if ($target === $ds || str_starts_with($target, $ds . '/')) {
+                return $ds;
+            }
+        }
+        $error_message = "Target dataset '$target' is not in the allowed destination datasets.";
         return null;
     }
 
-    if (!is_valid_zfs_dataset_name($dataset)) {
-        $error_message = 'Buddy receive destination dataset is invalid.';
-        return null;
-    }
-
-    return $dataset;
+    return $all_datasets[0];
 }
 
 function read_zfs_property_value($dataset, $property, &$error_message = null) {
@@ -284,11 +306,15 @@ function read_zfs_property_value($dataset, $property, &$error_message = null) {
     return $value;
 }
 
-function write_probe_zfs_response($status, $dataset = null, $message = null) {
+function write_probe_zfs_response($status, $dataset = null, $message = null, $datasets = null) {
     $response = array('status' => $status);
 
     if ($dataset !== null) {
         $response['dataset'] = $dataset;
+    }
+
+    if ($datasets !== null && is_array($datasets)) {
+        $response['datasets'] = array_values($datasets);
     }
 
     if ($message !== null) {
@@ -601,8 +627,8 @@ function sync_incoming_buddies() {
 
     passthru($rc . ' setup_buddy_user');
 
-    $authorized_keys = "";
     $first_dataset = null;
+    $key_groups = array();
 
     foreach ($enabled_buddies as $uid => $buddy) {
         $dataset = trim($buddy['destination_dataset']);
@@ -637,7 +663,26 @@ function sync_incoming_buddies() {
         $trimmed_key = trim($first_line ?: '');
         if ($trimmed_key === '') continue;
 
-        $cmd_line = "$empath/deps/restrict_zfs --dataset " . escapeshellarg($dataset) . " --uid " . escapeshellarg($uid);
+        if (!isset($key_groups[$trimmed_key])) {
+            $key_groups[$trimmed_key] = array(
+                'uids' => array(),
+                'datasets' => array(),
+            );
+        }
+        $key_groups[$trimmed_key]['uids'][] = $uid;
+        if (!in_array($dataset, $key_groups[$trimmed_key]['datasets'], true)) {
+            $key_groups[$trimmed_key]['datasets'][] = $dataset;
+        }
+    }
+
+    $authorized_keys = "";
+    foreach ($key_groups as $trimmed_key => $group) {
+        $primary_uid = $group['uids'][0];
+        $dataset_flags = "";
+        foreach ($group['datasets'] as $ds) {
+            $dataset_flags .= " --dataset " . escapeshellarg($ds);
+        }
+        $cmd_line = "$empath/deps/restrict_zfs" . $dataset_flags . " --uid " . escapeshellarg($primary_uid);
         $authorized_keys .= 'restrict,command="' . str_replace('"', '\"', $cmd_line) . '" ' . $trimmed_key . "\n";
     }
 
@@ -1160,7 +1205,7 @@ function mark_received_backup($target_dataset = null) {
     $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
     $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
 
-    $matched_uid = !empty($env_uid) ? $env_uid : null;
+    $matched_uid = null;
     $dataset = !empty($target_dataset) ? trim($target_dataset) : null;
 
     if ($dataset === null && !empty($env_dataset)) {
@@ -1170,10 +1215,8 @@ function mark_received_backup($target_dataset = null) {
     if (file_exists($incoming_config_path)) {
         $incoming_cfg = parse_ini_file($incoming_config_path, true);
         if (is_array($incoming_cfg)) {
-            if ($matched_uid !== null && empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
-                $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
-            }
-            if ($matched_uid === null && !empty($dataset)) {
+            // Prioritize matching dataset against incoming.cfg entries
+            if (!empty($dataset)) {
                 foreach ($incoming_cfg as $uid => $buddy) {
                     $b_ds = trim($buddy['destination_dataset'] ?? '');
                     if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
@@ -1183,6 +1226,16 @@ function mark_received_backup($target_dataset = null) {
                     }
                 }
             }
+
+            // Fall back to environment UID if no dataset match
+            if ($matched_uid === null && !empty($env_uid) && isset($incoming_cfg[$env_uid])) {
+                $matched_uid = $env_uid;
+                if (empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
+                    $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
+                }
+            }
+
+            // Fallback for single enabled buddy
             if (empty($dataset) && $matched_uid === null) {
                 $enabled_buddies = array_filter($incoming_cfg, function($b) {
                     return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
@@ -1225,21 +1278,47 @@ function mark_received_backup($target_dataset = null) {
 
 function probe_zfs($target_dataset = null) {
     $error_message = null;
-    $dataset = $target_dataset;
-    if (empty($dataset)) {
-        $dataset = read_receive_destination_dataset($error_message);
-    }
-    if ($dataset === null) {
+    $all_datasets = read_receive_destination_datasets($error_message);
+    if (empty($all_datasets)) {
         write_probe_zfs_response('error', null, $error_message);
         exit(1);
     }
 
-    if (read_zfs_property_value($dataset, 'used', $error_message) !== null) {
-        write_probe_zfs_response('ok', $dataset, null);
+    if (!empty($target_dataset)) {
+        $target = trim($target_dataset);
+        $matched_ds = null;
+        foreach ($all_datasets as $ds) {
+            if ($target === $ds || str_starts_with($target, $ds . '/')) {
+                $matched_ds = $ds;
+                break;
+            }
+        }
+        if ($matched_ds === null) {
+            write_probe_zfs_response('error', null, "Target dataset '$target' is not within the receiver's configured datasets.", $all_datasets);
+            exit(1);
+        }
+
+        $probe_ds = $target;
+        if (read_zfs_property_value($probe_ds, 'used', $error_message) === null) {
+            if ($probe_ds !== $matched_ds && read_zfs_property_value($matched_ds, 'used', $error_message) !== null) {
+                $probe_ds = $matched_ds;
+            } else {
+                write_probe_zfs_response('error', null, $error_message, $all_datasets);
+                exit(1);
+            }
+        }
+
+        write_probe_zfs_response('ok', $target, null, $all_datasets);
         return;
     }
 
-    write_probe_zfs_response('error', null, $error_message);
+    $first_dataset = $all_datasets[0];
+    if (read_zfs_property_value($first_dataset, 'used', $error_message) !== null) {
+        write_probe_zfs_response('ok', $first_dataset, null, $all_datasets);
+        return;
+    }
+
+    write_probe_zfs_response('error', null, $error_message, $all_datasets);
     exit(1);
 }
 

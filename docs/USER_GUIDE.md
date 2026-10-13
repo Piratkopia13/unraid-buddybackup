@@ -189,8 +189,8 @@ fi
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
    - **Buddy's hostname or IP**: Remote Unraid VPN/LAN IP.
-   - **Test connection**: Verifies SSH connectivity and command restriction (`restrict_zfs`).
-   - **Destination dataset**: Must start with or match your buddy's configured parent dataset (e.g. `tank/backups/buddy/my-data`, or matching the parent dataset directly when replicating child datasets with **Skip parent dataset**).
+   - **Test connection**: Verifies SSH connectivity, command restriction (`restrict_zfs`), and destination dataset compatibility against the receiver's allowed datasets.
+   - **Destination dataset**: Must start with or match one of your buddy's configured receive datasets (e.g. `tank/backups/buddy/my-data`, or matching the destination dataset directly like `cache/appdata` when replicating like-for-like with **Skip parent dataset**).
 
 2. **Remote (generic ZFS host)** (Unraid → TrueNAS SCALE / Proxmox VE / Linux):
    - **Buddy's hostname or IP**: Remote host IP or hostname.
@@ -329,7 +329,8 @@ Configures your Unraid server to receive incoming backups from buddies or extern
 - **Buddy Name**: Friendly label to identify this buddy (e.g. `Alex (Offsite)`, `Bob (TrueNAS)`).
 - **Enable**: Allow incoming connections for this buddy.
 - **Buddy's SSH public key**: Paste buddy's public SSH key (restricted to `restrict_zfs` in `authorized_keys`).
-- **Destination parent dataset**: Dedicated sub-dataset where your buddy's backups live (e.g. `disk1/buddy_backups` or `cache/appdata`).
+- **Destination parent dataset**: Dedicated parent container dataset where your buddy's backups live (e.g. `disk1/buddy_backups`, `cache/appdata`, or `cache/domains`).
+  - **Parent Container Model**: Always select an existing parent container dataset. Do not manually create child datasets on the receiver before replication; BuddyBackup delegates OpenZFS permissions (`create,mount,receive`) on the parent container so that incoming child datasets (e.g. `cache/domains/MintCinnamon`) are created automatically during the initial replication. Pre-creating an empty child dataset will cause Syncoid to reject the initial send with *"Target exists but has no snapshots matching"*.
   - Must be a dedicated sub-dataset (contains a `/`), not a bare root disk or pool. Overlapping datasets across buddies are disallowed for isolation.
 - **Immutable dataset** (default: `Yes`):
   - When enabled (`Yes`), the dataset is configured with `readonly=on`, `mountpoint=none`, `setuid=off`, and `exec=off` to keep incoming backups immutable and isolated from Unraid's VFS tree. Restoring via the Restore Wizard creates writable datasets.
@@ -348,6 +349,14 @@ Configures your Unraid server to receive incoming backups from buddies or extern
 > [!NOTE]
 > **Receiving from TrueNAS SCALE or Proxmox VE?**  
 > Sudo mode is not supported on Unraid (`restrict_zfs` blocks `sudo`). In TrueNAS, keep **Use Sudo For ZFS Commands** unchecked and **Snapshot Retention Policy** set to **None** (destructive `zfs destroy` is rejected on Unraid; Unraid Sanoid manages retention locally).
+
+> [!TIP]
+> **Hot-Standby & Like-for-Like Multi-Dataset Replication**:  
+> If you are setting up a hot-standby secondary server replicating multiple distinct datasets like-for-like (e.g. `cache/appdata` and `cache/domains` without a common parent dataset), you can create multiple entries under **Buddy's Backups** using the **same sender SSH public key** with **Immutable dataset** set to `No`. BuddyBackup automatically consolidates authorization in `authorized_keys`, granting the sender restricted access across all configured destination datasets while tracking telemetry independently per buddy card.
+> 
+> **How to structure hot-standby jobs:**
+> - **Replicating individual child datasets (e.g. a specific VM)**: On the receiver, select the parent container `cache/domains`. On the sender, specify `source_dataset="cache/domains/MintCinnamon"` and `destination_dataset="cache/domains/MintCinnamon"`.
+> - **Replicating all child datasets under a parent (e.g. all VMs)**: On the receiver, select the parent container `cache/domains`. On the sender, set `source_dataset="cache/domains"`, **Backup child datasets: Yes**, **Skip parent dataset: Yes**, and `destination_dataset="cache/domains"`. Syncoid will skip the parent container and replicate each child VM directly under `cache/domains`.
 
 ---
 

@@ -1657,34 +1657,96 @@ test_connection_cmd() {
 
     if [[ $success -eq 1 ]]; then
         local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+        if [[ -n "${destination_dataset}" ]]; then
+            zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $(shell_single_quote "${destination_dataset}")"
+        fi
         local zfs_probe_result
         zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" 2>&1)
         local zfs_probe_status=$?
 
+        if [[ -n "${destination_dataset}" ]] && [[ $zfs_probe_status -ne 0 ]]; then
+            local fallback_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+            local fallback_probe_result
+            fallback_probe_result=$(run_remote_ssh "${host}" "${fallback_probe_cmd}" 2>&1)
+            local fallback_probe_status=$?
+            if [[ $fallback_probe_status -eq 0 ]] && [[ "${fallback_probe_result}" == \{* ]]; then
+                zfs_probe_cmd="${fallback_probe_cmd}"
+                zfs_probe_result="${fallback_probe_result}"
+                zfs_probe_status=0
+            fi
+        fi
+
         local remote_receive_dataset=""
         local remote_probe_message=""
         local remote_probe_status=""
+        local -a remote_receive_datasets=()
         if [[ "${zfs_probe_result}" == \{* ]]; then
             remote_probe_status=$(json_field "${zfs_probe_result}" "status")
             if [[ -n "${remote_probe_status}" ]]; then
                 remote_receive_dataset=$(json_field "${zfs_probe_result}" "dataset")
                 remote_probe_message=$(json_field "${zfs_probe_result}" "message")
+                while IFS= read -r ds_line; do
+                    [[ -n "${ds_line}" ]] && remote_receive_datasets+=("${ds_line}")
+                done < <(printf '%s' "${zfs_probe_result}" | jq -r 'if type == "object" then (if .datasets and (.datasets | type == "array") then .datasets[] elif .dataset and (.dataset | type == "string") then .dataset else empty end) else empty end' 2>/dev/null)
+                if [[ ${#remote_receive_datasets[@]} -eq 0 ]] && [[ -n "${remote_receive_dataset}" ]]; then
+                    remote_receive_datasets+=("${remote_receive_dataset}")
+                fi
             fi
         fi
 
-        if [[ "${remote_probe_status}" == "ok" ]] && [[ -n "${remote_receive_dataset}" ]]; then
-            local remote_receive_dataset_html
-            remote_receive_dataset_html=$(html_escape "${remote_receive_dataset}")
-            echo "Buddy's configured receive dataset: ${remote_receive_dataset_html}<br>"
+        if [[ "${remote_probe_status}" == "ok" ]] && [[ ${#remote_receive_datasets[@]} -gt 0 ]]; then
+            local formatted_datasets=""
+            local ds
+            for ds in "${remote_receive_datasets[@]}"; do
+                [[ -n "${formatted_datasets}" ]] && formatted_datasets+=", "
+                formatted_datasets+="$(html_escape "${ds}")"
+            done
+            if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                echo "Buddy's configured receive dataset: ${formatted_datasets}<br>"
+            else
+                echo "Buddy's configured receive datasets: ${formatted_datasets}<br>"
+            fi
 
             if [[ -z "${destination_dataset}" ]]; then
-                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset_html}/' or match '${remote_receive_dataset_html}'.</span><br>"
-            elif [[ "${destination_dataset}" == "${remote_receive_dataset}/"* ]]; then
-                echo "Destination dataset is under the receiver's configured dataset.<br>"
-            elif [[ "${destination_dataset}" == "${remote_receive_dataset}" ]]; then
-                echo "Destination dataset matches the receiver's configured dataset.<br>"
+                if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                    echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${formatted_datasets}/' or match '${formatted_datasets}'.</span><br>"
+                else
+                    echo "<span style='color:#996600'>Destination dataset is blank. It should begin with or match one of the receiver's configured datasets: ${formatted_datasets}.</span><br>"
+                fi
             else
-                echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${remote_receive_dataset_html}/' or match it.</span><br>"
+                local matched_dataset=""
+                local match_mode=""
+                for ds in "${remote_receive_datasets[@]}"; do
+                    if [[ "${destination_dataset}" == "${ds}" ]]; then
+                        matched_dataset="${ds}"
+                        match_mode="exact"
+                        break
+                    elif [[ "${destination_dataset}" == "${ds}/"* ]]; then
+                        matched_dataset="${ds}"
+                        match_mode="child"
+                        break
+                    fi
+                done
+
+                if [[ "${match_mode}" == "exact" ]]; then
+                    if [[ ${#remote_receive_datasets[@]} -gt 1 ]]; then
+                        echo "Destination dataset matches the receiver's configured dataset: $(html_escape "${matched_dataset}").<br>" # Destination dataset matches the receiver's configured dataset.
+                    else
+                        echo "Destination dataset matches the receiver's configured dataset.<br>"
+                    fi
+                elif [[ "${match_mode}" == "child" ]]; then
+                    if [[ ${#remote_receive_datasets[@]} -gt 1 ]]; then
+                        echo "Destination dataset is under the receiver's configured dataset: $(html_escape "${matched_dataset}").<br>"
+                    else
+                        echo "Destination dataset is under the receiver's configured dataset.<br>"
+                    fi
+                else
+                    if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                        echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${formatted_datasets}/' or match it.</span><br>"
+                    else
+                        echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with or match any of the receiver's configured datasets (${formatted_datasets}).</span><br>"
+                    fi
+                fi
             fi
         elif [[ "${zfs_probe_result}" != "ok" ]]; then
             if [[ -z "${zfs_probe_result}" ]] && [[ -n "${destination_dataset}" ]]; then

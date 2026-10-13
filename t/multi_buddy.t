@@ -827,4 +827,443 @@ PHP
     }
 };
 
+# ---------------------------------------------------------------------------
+# Issue #38: Hot-standby Multi-Dataset Destination Support
+# ---------------------------------------------------------------------------
+subtest 'Issue #38: consolidated authorized_keys generation for duplicate SSH keys' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $config_dir = File::Spec->catdir($workdir, 'boot', 'config', 'plugins', 'buddybackup');
+    make_path($config_dir);
+    my $home_ssh = File::Spec->catdir($workdir, 'home', 'buddybackup', '.ssh');
+    make_path($home_ssh);
+
+    my $incoming_cfg = File::Spec->catfile($config_dir, 'incoming.cfg');
+    my $auth_keys_file = File::Spec->catfile($home_ssh, 'authorized_keys');
+
+    open my $fh, '>', $incoming_cfg or die "Failed to write $incoming_cfg: $!";
+    print $fh <<'INCOMING';
+[card1]
+name="Appdata"
+enable="yes"
+destination_dataset="cache/appdata"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGsenderkey user@nodeA"
+
+[card2]
+name="PiHole"
+enable="yes"
+destination_dataset="cache/domains/PiHoleVM"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGsenderkey user@nodeA"
+
+[card3]
+name="MintVM"
+enable="yes"
+destination_dataset="cache/domains/MintCinnamon"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGsenderkey user@nodeA"
+
+[card4]
+name="CustomIcons"
+enable="yes"
+destination_dataset="cache/appdata/vm_custom_icons"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGsenderkey user@nodeA"
+
+[card_disabled]
+name="DisabledVM"
+enable="no"
+destination_dataset="cache/domains/DisabledVM"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGsenderkey user@nodeA"
+
+[card_other_key]
+name="OtherBuddy"
+enable="yes"
+destination_dataset="cache/backups/other"
+ssh_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGotherkey user@other"
+INCOMING
+    close $fh;
+
+    my $test_php = sprintf(<<'PHP', $incoming_cfg, $auth_keys_file);
+$incoming_config_path = '%s';
+$test_auth_keys_path = '%s';
+
+function BB_LOG($msg) {}
+function BB_WARN($msg) {}
+function BB_ERR($msg) {}
+function is_valid_zfs_dataset_name($ds) {
+    return (bool)preg_match('/^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/', $ds);
+}
+
+$incoming_cfg_data = parse_ini_file($incoming_config_path, true);
+$enabled_buddies = array_filter($incoming_cfg_data, function($b) {
+    return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
+});
+
+$empath = '/usr/local/emhttp/plugins/buddybackup';
+$first_dataset = null;
+$key_groups = array();
+
+foreach ($enabled_buddies as $uid => $buddy) {
+    $dataset = trim($buddy['destination_dataset']);
+    if (!is_valid_zfs_dataset_name($dataset)) {
+        continue;
+    }
+    if ($first_dataset === null) {
+        $first_dataset = $dataset;
+    }
+
+    $raw_key = trim($buddy['ssh_key'] ?? '');
+    if ($raw_key === '') continue;
+
+    $first_line = strtok($raw_key, "\r\n");
+    $trimmed_key = trim($first_line ?: '');
+    if ($trimmed_key === '') continue;
+
+    if (!isset($key_groups[$trimmed_key])) {
+        $key_groups[$trimmed_key] = array(
+            'uids' => array(),
+            'datasets' => array(),
+        );
+    }
+    $key_groups[$trimmed_key]['uids'][] = $uid;
+    if (!in_array($dataset, $key_groups[$trimmed_key]['datasets'], true)) {
+        $key_groups[$trimmed_key]['datasets'][] = $dataset;
+    }
+}
+
+$authorized_keys = "";
+foreach ($key_groups as $trimmed_key => $group) {
+    $primary_uid = $group['uids'][0];
+    $dataset_flags = "";
+    foreach ($group['datasets'] as $ds) {
+        $dataset_flags .= " --dataset " . escapeshellarg($ds);
+    }
+    $cmd_line = "$empath/deps/restrict_zfs" . $dataset_flags . " --uid " . escapeshellarg($primary_uid);
+    $authorized_keys .= 'restrict,command="' . str_replace('"', '\"', $cmd_line) . '" ' . $trimmed_key . "\n";
+}
+
+file_put_contents($test_auth_keys_path, $authorized_keys);
+echo "OK\n";
+PHP
+
+    my $stdout = gensym;
+    my $stderr = gensym;
+    my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $test_php);
+    my $out = do { local $/; <$stdout> // '' };
+    waitpid($pid, 0);
+
+    is($? >> 8, 0, 'key grouping PHP ran successfully');
+    ok(-f $auth_keys_file, 'authorized_keys file was written');
+
+    open my $afh, '<', $auth_keys_file or die "Cannot open $auth_keys_file: $!";
+    my @lines = <$afh>;
+    close $afh;
+    chomp @lines;
+    @lines = grep { length } @lines;
+
+    is(scalar @lines, 2, 'exactly 2 authorized_keys lines generated (1 for shared sender key, 1 for other buddy)');
+
+    my ($shared_line) = grep { /user\@nodeA/ } @lines;
+    ok(defined $shared_line, 'shared line present for nodeA sender key');
+    like($shared_line, qr/--dataset 'cache\/appdata'/, 'contains --dataset cache/appdata');
+    like($shared_line, qr/--dataset 'cache\/domains\/PiHoleVM'/, 'contains --dataset cache/domains/PiHoleVM');
+    like($shared_line, qr/--dataset 'cache\/domains\/MintCinnamon'/, 'contains --dataset cache/domains/MintCinnamon');
+    like($shared_line, qr/--dataset 'cache\/appdata\/vm_custom_icons'/, 'contains --dataset cache/appdata/vm_custom_icons');
+    like($shared_line, qr/--uid 'card1'/, 'passes primary uid card1');
+    unlike($shared_line, qr/DisabledVM/, 'excludes disabled buddy card dataset');
+
+    my ($other_line) = grep { /user\@other/ } @lines;
+    ok(defined $other_line, 'separate line present for other buddy key');
+    like($other_line, qr/--dataset 'cache\/backups\/other'/, 'contains --dataset cache/backups/other');
+    like($other_line, qr/--uid 'card_other_key'/, 'contains uid card_other_key');
+};
+
+subtest 'Issue #38: targeted probe_zfs and multi-dataset JSON output' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $php_test = <<'PHP';
+function is_valid_zfs_dataset_name($dataset) {
+    return (bool)preg_match('/^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/', $dataset);
+}
+
+function read_zfs_property_value($dataset, $property, &$error_message = null) {
+    if (in_array($dataset, ['cache/appdata', 'cache/domains/MintCinnamon', 'cache/domains/MintCinnamon/disk'])) {
+        return '10G';
+    }
+    $error_message = "dataset does not exist";
+    return null;
+}
+
+function read_receive_destination_datasets(&$error_message = null) {
+    $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
+    if ($env_dataset !== '') {
+        $datasets = [];
+        foreach (explode(',', $env_dataset) as $part) {
+            $ds = trim($part);
+            if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                $datasets[] = $ds;
+            }
+        }
+        if (!empty($datasets)) return $datasets;
+    }
+    return ['cache/appdata'];
+}
+
+function write_probe_zfs_response($status, $dataset = null, $message = null, $datasets = null) {
+    $response = array('status' => $status);
+    if ($dataset !== null) $response['dataset'] = $dataset;
+    if ($datasets !== null && is_array($datasets)) $response['datasets'] = array_values($datasets);
+    if ($message !== null) $response['message'] = $message;
+    echo json_encode($response, JSON_UNESCAPED_SLASHES);
+}
+
+function probe_zfs($target_dataset = null) {
+    $error_message = null;
+    $all_datasets = read_receive_destination_datasets($error_message);
+    if (empty($all_datasets)) {
+        write_probe_zfs_response('error', null, $error_message);
+        exit(1);
+    }
+
+    if (!empty($target_dataset)) {
+        $target = trim($target_dataset);
+        $matched_ds = null;
+        foreach ($all_datasets as $ds) {
+            if ($target === $ds || str_starts_with($target, $ds . '/')) {
+                $matched_ds = $ds;
+                break;
+            }
+        }
+        if ($matched_ds === null) {
+            write_probe_zfs_response('error', null, "Target dataset '$target' is not within the receiver's configured datasets.", $all_datasets);
+            exit(1);
+        }
+
+        $probe_ds = $target;
+        if (read_zfs_property_value($probe_ds, 'used', $error_message) === null) {
+            if ($probe_ds !== $matched_ds && read_zfs_property_value($matched_ds, 'used', $error_message) !== null) {
+                $probe_ds = $matched_ds;
+            } else {
+                write_probe_zfs_response('error', null, $error_message, $all_datasets);
+                exit(1);
+            }
+        }
+
+        write_probe_zfs_response('ok', $target, null, $all_datasets);
+        return;
+    }
+
+    $first_dataset = $all_datasets[0];
+    if (read_zfs_property_value($first_dataset, 'used', $error_message) !== null) {
+        write_probe_zfs_response('ok', $first_dataset, null, $all_datasets);
+        return;
+    }
+
+    write_probe_zfs_response('error', null, $error_message, $all_datasets);
+    exit(1);
+}
+
+$arg = $argv[1] ?? null;
+probe_zfs($arg);
+PHP
+
+    # 1. Targeted probe for MintCinnamon succeeds
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'cache/domains/MintCinnamon');
+        my $out = do { local $/; <$stdout> // '' };
+        waitpid($pid, 0);
+
+        is($? >> 8, 0, 'targeted probe exited with 0');
+        my $res = decode_json($out);
+        is($res->{status}, 'ok', 'targeted probe status is ok');
+        is($res->{dataset}, 'cache/domains/MintCinnamon', 'returns matched dataset');
+        is_deeply($res->{datasets}, ['cache/appdata', 'cache/domains/MintCinnamon'], 'returns full datasets list');
+    }
+
+    # 2. Targeted probe for non-existent child under MintCinnamon falls back to parent probe
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'cache/domains/MintCinnamon/new_vm');
+        my $out = do { local $/; <$stdout> // '' };
+        waitpid($pid, 0);
+
+        is($? >> 8, 0, 'probe for new child dataset exited with 0');
+        my $res = decode_json($out);
+        is($res->{status}, 'ok', 'status is ok');
+        is($res->{dataset}, 'cache/domains/MintCinnamon/new_vm', 'returns target child dataset');
+    }
+
+    # 3. Targeted probe outside allowed scope fails with exit code 1
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'secret_pool/data');
+        my $out = do { local $/; <$stdout> // '' };
+        waitpid($pid, 0);
+
+        is($? >> 8, 1, 'probe outside allowed scope exited with 1');
+        my $res = decode_json($out);
+        is($res->{status}, 'error', 'status is error');
+    }
+
+    # 4. Unparameterized probe succeeds and returns first dataset plus full list
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test);
+        my $out = do { local $/; <$stdout> // '' };
+        waitpid($pid, 0);
+
+        is($? >> 8, 0, 'unparameterized probe exited with 0');
+        my $res = decode_json($out);
+        is($res->{status}, 'ok', 'unparameterized probe status is ok');
+        is($res->{dataset}, 'cache/appdata', 'returns primary dataset');
+        is_deeply($res->{datasets}, ['cache/appdata', 'cache/domains/MintCinnamon'], 'returns full datasets list');
+    }
+};
+
+subtest 'Issue #38: dataset-first telemetry routing in mark_received_backup' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $incoming_cfg = File::Spec->catfile($workdir, 'incoming.cfg');
+    my $tmp_dir = File::Spec->catdir($workdir, 'tmp');
+    make_path($tmp_dir);
+
+    open my $fh, '>', $incoming_cfg or die "Failed to write $incoming_cfg: $!";
+    print $fh <<'INCOMING';
+[appdata_card]
+name="Appdata"
+enable="yes"
+destination_dataset="cache/appdata"
+ssh_key="shared_key_123"
+
+[mint_card]
+name="MintVM"
+enable="yes"
+destination_dataset="cache/domains/MintCinnamon"
+ssh_key="shared_key_123"
+INCOMING
+    close $fh;
+
+    my $php_test = sprintf(<<'PHP', $incoming_cfg, $tmp_dir);
+$incoming_config_path = '%s';
+$tmp_dir = '%s';
+
+function is_valid_zfs_dataset_name($ds) {
+    return (bool)preg_match('/^[A-Za-z0-9_][A-Za-z0-9_ \/-]*$/', $ds);
+}
+
+function BB_ERR($msg) {}
+
+function read_zfs_property_value($dataset, $property, &$error_message = null) {
+    if ($dataset === 'cache/appdata') return '120G';
+    if ($dataset === 'cache/domains/MintCinnamon') return '45G';
+    return null;
+}
+
+function read_receive_destination_dataset(&$err = null) {
+    return 'cache/appdata';
+}
+
+function mark_received_backup($target_dataset = null) {
+    global $incoming_config_path, $tmp_dir;
+
+    $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
+    $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
+
+    $matched_uid = null;
+    $dataset = !empty($target_dataset) ? trim($target_dataset) : null;
+
+    if ($dataset === null && !empty($env_dataset)) {
+        $dataset = trim(explode(',', $env_dataset)[0]);
+    }
+
+    if (file_exists($incoming_config_path)) {
+        $incoming_cfg = parse_ini_file($incoming_config_path, true);
+        if (is_array($incoming_cfg)) {
+            if (!empty($dataset)) {
+                foreach ($incoming_cfg as $uid => $buddy) {
+                    $b_ds = trim($buddy['destination_dataset'] ?? '');
+                    if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
+                        $matched_uid = $uid;
+                        $dataset = $b_ds;
+                        break;
+                    }
+                }
+            }
+
+            if ($matched_uid === null && !empty($env_uid) && isset($incoming_cfg[$env_uid])) {
+                $matched_uid = $env_uid;
+                if (empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
+                    $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
+                }
+            }
+        }
+    }
+
+    if (empty($dataset)) {
+        $dataset = read_receive_destination_dataset();
+    }
+
+    $dest_size = read_zfs_property_value($dataset, 'used');
+    $info = "last_ran=" . time() . "\ndest_size=$dest_size\n";
+    if ($matched_uid !== null && $matched_uid !== '') {
+        file_put_contents("$tmp_dir/buddybackup-buddy-$matched_uid", $info);
+    }
+}
+
+mark_received_backup($argv[1] ?? null);
+PHP
+
+    # When Mint VM backup finishes, even though BUDDY_UID is appdata_card,
+    # passing target dataset routes telemetry strictly to mint_card
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_UID} = 'appdata_card';
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'cache/domains/MintCinnamon');
+        waitpid($pid, 0);
+
+        my $mint_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy-mint_card');
+        my $appdata_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy-appdata_card');
+
+        ok(-f $mint_file, 'telemetry file created for mint_card');
+        ok(!-f $appdata_file, 'appdata_card telemetry NOT created by Mint backup');
+
+        my $content = do { local $/; open my $h, '<', $mint_file; <$h> };
+        like($content, qr/dest_size=45G/, 'recorded correct size 45G for mint card');
+    }
+
+    # When Appdata backup finishes, routes to appdata_card
+    {
+        local %ENV = %ENV;
+        $ENV{BUDDY_UID} = 'appdata_card';
+        $ENV{BUDDY_DATASET} = 'cache/appdata,cache/domains/MintCinnamon';
+
+        my $stdout = gensym;
+        my $stderr = gensym;
+        my $pid = open3(undef, $stdout, $stderr, 'php', '-r', $php_test, '--', 'cache/appdata');
+        waitpid($pid, 0);
+
+        my $appdata_file = File::Spec->catfile($tmp_dir, 'buddybackup-buddy-appdata_card');
+        ok(-f $appdata_file, 'telemetry file created for appdata_card');
+
+        my $content = do { local $/; open my $h, '<', $appdata_file; <$h> };
+        like($content, qr/dest_size=120G/, 'recorded correct size 120G for appdata card');
+    }
+};
+
 done_testing();

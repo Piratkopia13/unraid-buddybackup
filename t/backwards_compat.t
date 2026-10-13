@@ -186,6 +186,14 @@ subtest 'current receiver command surface accepted by previously released allowl
         qr/^\Qblocked command: $blocked_cmd\E\r?\n?$/,
         '2026.05.29 buddy blocks parameterized mark_received_backup (necessitating fallback)',
     );
+
+    my $blocked_probe_cmd = qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $dataset};
+    my $blocked_probe_res = run_restrict($previous_release_script, $blocked_probe_cmd);
+    like(
+        $blocked_probe_res->{stderr},
+        qr/^\Qblocked command: $blocked_probe_cmd\E\r?\n?$/,
+        '2026.05.29 buddy blocks parameterized probe_zfs (necessitating fallback)',
+    );
 };
 
 subtest 'older releases still send commands the current allowlist accepts' => sub {
@@ -198,6 +206,7 @@ subtest 'older releases still send commands the current allowlist accepts' => su
         $current_script,
         receiver_command_inventory(0),
         qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset},
+        qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $dataset},
     );
 };
 
@@ -305,6 +314,116 @@ BASH_POST
 
     is($? >> 8, 0, 'send_mark_received_backup fallback test exited with 0') or diag("stderr: $err\nstdout: $out");
     like($out, qr/ALL_BASH_TESTS_PASSED/, 'all fallback test scenarios passed');
+};
+
+subtest 'test_connection probe fallback logic' => sub {
+    my $bash_test = <<'BASH';
+set -e
+calls_file=$(mktemp)
+trap 'rm -f "$calls_file"' EXIT
+
+fail_param=0
+fail_base=0
+
+shell_single_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+run_remote_ssh() {
+    local host="$1"
+    local cmd="$2"
+    echo "$cmd" >> "$calls_file"
+    if [[ "$cmd" == *" probe_zfs '"* ]]; then
+        if [[ $fail_param -eq 1 ]]; then
+            return 1
+        fi
+        echo '{"status":"ok","dataset":"cache/domains/MintCinnamon","datasets":["cache/appdata","cache/domains/MintCinnamon"]}'
+        return 0
+    elif [[ "$cmd" == *" probe_zfs" ]]; then
+        if [[ $fail_base -eq 1 ]]; then
+            return 1
+        fi
+        echo '{"status":"ok","dataset":"cache/appdata"}'
+        return 0
+    fi
+    return 1
+}
+
+run_probe_with_fallback() {
+    local host="$1"
+    local destination_dataset="$2"
+
+    local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+    if [[ -n "${destination_dataset}" ]]; then
+        zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $(shell_single_quote "${destination_dataset}")"
+    fi
+    local zfs_probe_result
+    zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" 2>&1)
+    local zfs_probe_status=$?
+
+    if [[ -n "${destination_dataset}" ]] && [[ $zfs_probe_status -ne 0 ]]; then
+        local fallback_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+        local fallback_probe_result
+        fallback_probe_result=$(run_remote_ssh "${host}" "${fallback_probe_cmd}" 2>&1)
+        local fallback_probe_status=$?
+        if [[ $fallback_probe_status -eq 0 ]] && [[ "${fallback_probe_result}" == \{* ]]; then
+            zfs_probe_cmd="${fallback_probe_cmd}"
+            zfs_probe_result="${fallback_probe_result}"
+            zfs_probe_status=0
+        fi
+    fi
+
+    echo "${zfs_probe_result}"
+    return $zfs_probe_status
+}
+
+# Test 1: Modern receiver (parameterized probe succeeds on first try)
+: > "$calls_file"
+fail_param=0
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "cache/domains/MintCinnamon")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 1 failed: expected 1 call, got ${#calls[@]}"; exit 1; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs 'cache/domains/MintCinnamon'" ]] || { echo "Test 1 cmd mismatch: ${calls[0]}"; exit 1; }
+[[ "$res" == *"MintCinnamon"* ]] || { echo "Test 1 res mismatch: $res"; exit 1; }
+
+# Test 2: Legacy receiver (parameterized probe blocked, fallback succeeds)
+: > "$calls_file"
+fail_param=1
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "cache/domains/MintCinnamon")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 2 ]] || { echo "Test 2 failed: expected 2 calls, got ${#calls[@]}"; exit 2; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs 'cache/domains/MintCinnamon'" ]] || { echo "Test 2 call 0 mismatch: ${calls[0]}"; exit 2; }
+[[ "${calls[1]}" == *"/rc.buddybackup.php probe_zfs" ]] || { echo "Test 2 call 1 mismatch: ${calls[1]}"; exit 2; }
+[[ "$res" == *'"dataset":"cache/appdata"'* ]] || { echo "Test 2 res mismatch: $res"; exit 2; }
+
+# Test 3: Unparameterized probe when destination_dataset is empty
+: > "$calls_file"
+fail_param=0
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 3 failed: expected 1 call, got ${#calls[@]}"; exit 3; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs" ]] || { echo "Test 3 cmd mismatch: ${calls[0]}"; exit 3; }
+
+echo "ALL_PROBE_FALLBACK_TESTS_PASSED"
+BASH
+
+    my $stdin;
+    my $stdout = gensym;
+    my $stderr = gensym;
+    my $pid = open3($stdin, $stdout, $stderr, 'bash', '-s');
+    binmode($stdin, ':raw');
+    print $stdin $bash_test;
+    close $stdin;
+
+    my $out = do { local $/; <$stdout> // '' };
+    my $err = do { local $/; <$stderr> // '' };
+    waitpid($pid, 0);
+
+    is($? >> 8, 0, 'test_connection probe fallback test exited with 0') or diag("stderr: $err\nstdout: $out");
+    like($out, qr/ALL_PROBE_FALLBACK_TESTS_PASSED/, 'all probe fallback test scenarios passed');
 };
 
 # ---------------------------------------------------------------------------
