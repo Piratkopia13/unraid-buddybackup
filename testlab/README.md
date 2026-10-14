@@ -206,7 +206,25 @@ This initial implementation provides:
 - The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created, then run the generic smoke directly:
   - Dry-run: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json`
   - Execute: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+- Before this smoke can run, `nodes.nodeC` must exist in the lab config; if it is missing, the script stops with `Missing lab.nodes.nodeC.host`. Minimum requirements for the host you point it at:
+  - Debian-based OpenZFS host (Proxmox, Debian, or Ubuntu) reachable over SSH, with `zfs`/`zpool` working and a pool already created. The smoke does not create the pool.
+  - SSH login as `root` with the lab identity file (`lab.ssh.identityFile`, default `.testlab/lab_key`), or set `nodes.nodeC.user` / `nodes.nodeC.identityFile` for a different account or key.
+  - A config block like this (inserted into `nodes`):
+    ```json
+    "nodeC": {
+      "name": "buddybackup-node-c-generic",
+      "host": "127.0.0.1",
+      "port": 2224,
+      "platform": "generic-debian",
+      "zfsPool": "bbpool",
+      "datasetRoot": "buddybackup"
+    }
+    ```
+    `zfsPool` defaults to `setup.zfs.poolName` and `datasetRoot` defaults to `buddybackup`; the values above match the local lab defaults.
+  - A non-22 SSH port forwarded from the WSL/QEMU host (the example uses `127.0.0.1:2224`). nodeA cannot reach nodeC's SSH directly, so the smoke installs a `nodeCAliasIp:22 -> hostGatewayIp:<port>` DNAT rule on nodeA; that rule is skipped when the configured port is 22, which means port 22 does not work for the local WSL/QEMU lab. For a remote host on the LAN, terminate the forward on the WSL side (for example `socat` or `ssh -L 127.0.0.1:2224:<nodeC>:22`).
+  - Dry-runs only validate config parsing; SSH reachability is exercised when you pass `-Execute`.
 - The generic smoke reaches nodeC from nodeA through the same host-gateway DNAT pattern the functional smoke uses, so the Unraid backup entries connect to `setup.functionalTests.nodeCAliasIp` on port 22.
+- The smoke runs `generic_host_setup.sh` as receiver plus its `--verify` checklist on nodeC itself, so no manual setup-script run is required up front.
 - TrueNAS SCALE is validated manually; `testlab/MANUAL-SCALE-CHECKLIST.md` documents the full setup, Unraid push to TrueNAS, TrueNAS replication to Unraid, negative checks and pass criteria.
 
 ## Backup direction coverage
