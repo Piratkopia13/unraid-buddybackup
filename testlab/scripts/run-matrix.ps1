@@ -2154,7 +2154,6 @@ function Compare-UpgradeStateSnapshots {
                 'senderKeySha256',
                 'knownHostsKeyMaterialSha256',
                 'authorizedKeysKeyMaterialSha256',
-                'sanoidConfSha256',
                 'sanoidConfContainsReceiveDataset',
                 'buddybackupUserPresent',
                 'allowUsersContainsBuddybackup',
