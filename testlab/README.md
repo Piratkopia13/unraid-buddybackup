@@ -206,6 +206,11 @@ This initial implementation provides:
 - The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created, then run the generic smoke directly:
   - Dry-run: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json`
   - Execute: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+- For local runs, `provision-nodec-wsl-qemu.ps1` provisions a reusable throwaway generic host inside WSL/QEMU instead of pointing at an external machine:
+  - Provision or health-check: `./testlab/scripts/provision-nodec-wsl-qemu.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+  - Stop the VM: add `-Teardown -Execute`; also delete its disks: add `-RemoveDisks`; rebuild from scratch on the next provision: add `-Recreate`.
+  - It boots an Ubuntu 24.04 cloud image (`-ImageUrl` accepts Debian cloud images too), forwards SSH to `127.0.0.1:2224` (`-SshPort`), installs OpenZFS, creates the pool (`bbpool` by default) on a dedicated data disk, and injects the lab public key for root. VM state lives in `/var/lib/buddybackup-nodec` inside the WSL distro (`-VmRoot`), and reports are written to `.testlab/logs/nodec-*.json`.
+  - The `nodes.nodeC` block below matches these defaults, so no extra values are needed for the local path.
 - Before this smoke can run, `nodes.nodeC` must exist in the lab config; if it is missing, the script stops with `Missing lab.nodes.nodeC.host`. Minimum requirements for the host you point it at:
   - Debian-based OpenZFS host (Proxmox, Debian, or Ubuntu) reachable over SSH, with `zfs`/`zpool` working and a pool already created. The smoke does not create the pool.
   - SSH login as `root` with the lab identity file (`lab.ssh.identityFile`, default `.testlab/lab_key`), or set `nodes.nodeC.user` / `nodes.nodeC.identityFile` for a different account or key.
