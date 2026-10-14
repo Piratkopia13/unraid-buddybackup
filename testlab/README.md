@@ -146,6 +146,7 @@ This initial implementation provides:
 - For release-tag-only matrices, dirty worktrees now warn instead of blocking because the installed BuddyBackup artifacts come from published release URLs. Successful execute runs in that mode still publish repository history. `-AllowDirtyWorktree` remains available as an explicit override when you want to suppress the workspace-build cleanliness guard during harness development.
 - `run-release-gate.ps1` only publishes repository history for successful execute runs that do not use `-AllowDirtyWorktree` and either have a clean worktree or install published BuddyBackup releases only. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
 - Release-gate manifests now include `categoryRollups`, and published repository history shows per-category pass/fail columns such as `pluginCompatibility` and `unraidCompatibility` when the selected matrix defines categories.
+- `run-release-gate.ps1` also runs the generic host smoke as a stage after the matrix, recorded as `summary.genericSmoke` and a `genericHost` category rollup. For `windows-local` labs it auto-provisions the local `nodeC` VM first when `nodes.nodeC.host` is `127.0.0.1`. Pass `-SkipGenericSmoke` to skip the stage, or configure `releaseGate.genericSmoke` (`enabled`, `required`, `autoProvisionNodeC`).
 
 ## Test catalog
 
@@ -203,7 +204,7 @@ This initial implementation provides:
 
 ## Generic node and TrueNAS SCALE coverage
 
-- The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created, then run the generic smoke directly:
+- The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created. The release gate runs the generic smoke as a stage after the matrix (auto-provisioning the local nodeC VM when `nodes.nodeC.host` is `127.0.0.1`); to run the generic smoke directly instead:
   - Dry-run: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json`
   - Execute: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute`
 - For local runs, `provision-nodec-wsl-qemu.ps1` provisions a reusable throwaway generic host inside WSL/QEMU instead of pointing at an external machine:

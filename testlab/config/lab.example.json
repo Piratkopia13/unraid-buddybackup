@@ -45,6 +45,11 @@
     "latestSupportedUnraidVersion": "7.2.6",
     "versionPolicy": {
       "mode": "require"
+    },
+    "genericSmoke": {
+      "enabled": true,
+      "required": true,
+      "autoProvisionNodeC": true
     }
   },
   "timeouts": {

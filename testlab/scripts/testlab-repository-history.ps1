@@ -129,6 +129,7 @@ function ConvertTo-TestLabRepositoryHistoryEntry {
         passCells = [int]$Manifest.summary.passCells
         failCells = [int]$Manifest.summary.failCells
         categoryRollups = @($Manifest.categoryRollups)
+        genericSmoke = if ($Manifest.summary -is [System.Collections.IDictionary]) { $Manifest.summary['genericSmoke'] } else { $null }
         pluginCoverage = $pluginCoverage
         unraidCoverage = $unraidCoverage
         detailPath = ("runs/{0}.json" -f $Manifest.releaseGateRunId)
@@ -163,7 +164,7 @@ function Write-TestLabRepositoryHistoryReadme {
         "# Release Test History",
         "",
         "Successful execute release-gate runs are recorded here when they either use a clean worktree or install published BuddyBackup releases only.",
-        "Coverage columns record the version pairs assigned to the two fixed lab slots for each run. The functional smoke still exercises remote backup and restore in both directions within that slot pairing.",
+        "Coverage columns record the version pairs assigned to the two fixed lab slots for each run. The functional smoke still exercises remote backup and restore in both directions within that slot pairing. The Generic Host column records the release-gate generic OpenZFS smoke stage.",
         "",
         "## Runs",
         ""
@@ -172,17 +173,18 @@ function Write-TestLabRepositoryHistoryReadme {
     if ($sortedEntries.Count -eq 0) {
         $lines += "No successful publishable execute release-gate runs have been recorded yet."
     } else {
-        $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | BuddyBackup Pair Coverage | Unraid Pair Coverage | Detail |"
-        $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        $lines += "| Run | Plugin | Commit | Matrix | Plugin Compat | Unraid Compat | Generic Host | BuddyBackup Pair Coverage | Unraid Pair Coverage | Detail |"
+        $lines += "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         foreach ($entry in $sortedEntries) {
             $detailPath = ([string]$entry.detailPath).Replace('\\', '/')
-            $lines += "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | [detail]({8}) |" -f `
+            $lines += "| {0} | {1} | {2} | {3} | {4} | {5} | {6} | {7} | {8} | [detail]({9}) |" -f `
                 $entry.releaseGateRunId, `
                 $entry.pluginDisplayVersion, `
                 $entry.shortSha, `
                 $entry.matrixProfile, `
                 (Get-TestLabRepositoryHistoryCategoryStatus -Entry $entry -CategoryName "pluginCompatibility"), `
                 (Get-TestLabRepositoryHistoryCategoryStatus -Entry $entry -CategoryName "unraidCompatibility"), `
+                (Get-TestLabRepositoryHistoryCategoryStatus -Entry $entry -CategoryName "genericHost"), `
                 (Join-TestLabRepositoryHistoryValues -Values $entry.pluginCoverage), `
                 (Join-TestLabRepositoryHistoryValues -Values $entry.unraidCoverage), `
                 $detailPath
@@ -222,6 +224,7 @@ function Write-TestLabRepositoryHistory {
             totalCells = $entry.totalCells
             passCells = $entry.passCells
             failCells = $entry.failCells
+            genericSmoke = $entry.genericSmoke
             categoryRollups = $entry.categoryRollups
             pluginCoverage = $entry.pluginCoverage
             unraidCoverage = $entry.unraidCoverage

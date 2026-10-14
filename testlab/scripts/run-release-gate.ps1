@@ -8,7 +8,8 @@ param(
     [switch]$Execute,
     [switch]$AllowDirtyWorktree,
     [switch]$SkipProvision,
-    [switch]$SkipArtifacts
+    [switch]$SkipArtifacts,
+    [switch]$SkipGenericSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -366,6 +367,37 @@ function Ensure-ReleaseGateConfig {
     $releaseGateCfg = [pscustomobject]@{}
     Set-ObjectValue -Object $Lab -Name "releaseGate" -Value $releaseGateCfg
     return $releaseGateCfg
+}
+
+function Get-GenericSmokeConfig {
+    param($Lab)
+
+    $releaseGateCfg = Get-ObjectValue -Object $Lab -Name "releaseGate"
+    $genericCfg = Get-ObjectValue -Object $releaseGateCfg -Name "genericSmoke"
+
+    $enabled = $true
+    $enabledValue = Get-ObjectValue -Object $genericCfg -Name "enabled"
+    if ($null -ne $enabledValue) {
+        $enabled = [bool]$enabledValue
+    }
+
+    $required = $true
+    $requiredValue = Get-ObjectValue -Object $genericCfg -Name "required"
+    if ($null -ne $requiredValue) {
+        $required = [bool]$requiredValue
+    }
+
+    $autoProvisionNodeC = $true
+    $autoProvisionValue = Get-ObjectValue -Object $genericCfg -Name "autoProvisionNodeC"
+    if ($null -ne $autoProvisionValue) {
+        $autoProvisionNodeC = [bool]$autoProvisionValue
+    }
+
+    return [pscustomobject]@{
+        Enabled = $enabled
+        Required = $required
+        AutoProvisionNodeC = $autoProvisionNodeC
+    }
 }
 
 function Apply-ReleaseGateOverrides {
@@ -814,13 +846,19 @@ $resolvedLabConfig = Resolve-WorkspacePath -Path $LabConfig
 $resolvedMatrixConfig = $null
 $provisionScript = Join-Path $PSScriptRoot "provision-lab.ps1"
 $matrixScript = Join-Path $PSScriptRoot "run-matrix.ps1"
+$genericSmokeScript = Join-Path $PSScriptRoot "run-generic-smoke.ps1"
+$nodecProvisionScript = Join-Path $PSScriptRoot "provision-nodec-wsl-qemu.ps1"
 
 Require-File -Path $resolvedLabConfig
 Require-File -Path $provisionScript
 Require-File -Path $matrixScript
+Require-File -Path $genericSmokeScript
+Require-File -Path $nodecProvisionScript
 
 $lab = Get-Json -Path $resolvedLabConfig
 Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePlugin -PreviousReleaseVersion $PreviousReleaseVersion
+$labProvider = [string](Get-ObjectValue -Object $lab -Name "provider")
+$genericSmokeCfg = Get-GenericSmokeConfig -Lab $lab
 $resolvedMatrixProfile = $null
 if (-not [string]::IsNullOrWhiteSpace($MatrixProfile)) {
     $generatedMatrix = Write-TestLabReleaseMatrixFile -WorkspaceRoot $workspaceRoot -Lab $lab -ProfileName $MatrixProfile
@@ -900,6 +938,19 @@ try {
     $failureMessage = $null
     $overallStatus = "fail"
     $matrixResults = @()
+    $genericSmokeStartedAt = $null
+    $genericSmokeReportPath = $null
+    $genericSmokeCopyPath = $null
+    $genericSmokeSummary = [ordered]@{
+        enabled = [bool]$genericSmokeCfg.Enabled
+        required = [bool]$genericSmokeCfg.Required
+        skipped = [bool]$SkipGenericSmoke
+        autoProvisionNodeC = [bool]$genericSmokeCfg.AutoProvisionNodeC
+        status = "not-run"
+        reportPath = $null
+        copiedReportPath = $null
+        error = $null
+    }
 
     try {
         if (-not $SkipProvision) {
@@ -949,6 +1000,85 @@ try {
 
         $failedCells = @($matrixResults | Where-Object { ([string]$_.status).ToLowerInvariant() -ne "pass" })
         $overallStatus = if ($failedCells.Count -eq 0) { "pass" } else { "fail" }
+
+        if (-not $genericSmokeCfg.Enabled) {
+            $genericSmokeSummary.status = "disabled"
+            Write-Host "[testlab] Generic host smoke stage is disabled in the lab config"
+        } elseif ($SkipGenericSmoke) {
+            $genericSmokeSummary.status = "skipped"
+            Write-Host "[testlab] Generic host smoke stage skipped (-SkipGenericSmoke)"
+        } elseif ($failedCells.Count -gt 0) {
+            $genericSmokeSummary.status = "not-run"
+            $genericSmokeSummary.error = "Matrix cells failed; the generic host smoke stage was not run."
+        } else {
+            $genericSmokeStartedAt = Get-Date
+            Write-Host "[testlab] Starting generic host smoke phase"
+
+            $labNodesCfg = Get-ObjectValue -Object $lab -Name "nodes"
+            $nodecCfg = Get-ObjectValue -Object $labNodesCfg -Name "nodeC"
+            $nodecHost = [string](Get-ObjectValue -Object $nodecCfg -Name "host")
+            $smokeFailed = $false
+
+            try {
+                if ([string]::IsNullOrWhiteSpace($nodecHost)) {
+                    throw "The generic host smoke stage requires a nodes.nodeC block in the lab config. Provision a local host with ./testlab/scripts/provision-nodec-wsl-qemu.ps1 -Execute and add the printed nodes.nodeC block to the lab config."
+                }
+
+                $shouldAutoProvision = $genericSmokeCfg.AutoProvisionNodeC -and ($labProvider -in @("windows-local", "windows-wsl-qemu")) -and ($nodecHost -in @("127.0.0.1", "localhost"))
+                if ($shouldAutoProvision) {
+                    Write-Host "[testlab] Ensuring the local nodeC VM is running"
+                    & $nodecProvisionScript -LabConfig $resolvedLabConfig -Execute:$Execute
+                }
+
+                & $genericSmokeScript -LabConfig $resolvedLabConfig -Execute:$Execute
+            } catch {
+                $smokeFailed = $true
+                $genericSmokeSummary.error = $_.Exception.Message
+            }
+
+            $logsRoot = [string](Get-ObjectValue -Object $lab -Name "logsRoot")
+            if ([string]::IsNullOrWhiteSpace($logsRoot)) {
+                $logsRoot = ".testlab/logs"
+            }
+            $genericReport = Get-LatestMatchingFile -Directory (Resolve-WorkspacePath -Path $logsRoot) -Filter "generic-smoke-*.json" -StartedAt $genericSmokeStartedAt
+            if ($genericReport) {
+                $genericSmokeReportPath = $genericReport.FullName
+                try {
+                    $genericReportJson = Get-Json -Path $genericSmokeReportPath
+                    if (-not $Execute) {
+                        $genericSmokeSummary.status = if ($smokeFailed) { "fail" } else { "dry-run" }
+                    } elseif ($genericReportJson.success -and -not $smokeFailed) {
+                        $genericSmokeSummary.status = "pass"
+                    } else {
+                        $genericSmokeSummary.status = "fail"
+                        if ([string]::IsNullOrWhiteSpace($genericSmokeSummary.error)) {
+                            $genericSmokeSummary.error = "The generic smoke report at $genericSmokeReportPath reports failure."
+                        }
+                    }
+                } catch {
+                    $genericSmokeSummary.status = "fail"
+                    $genericSmokeSummary.error = "Unable to read the generic smoke report at ${genericSmokeReportPath}: $($_.Exception.Message)"
+                }
+            } else {
+                $genericSmokeSummary.status = "fail"
+                if ([string]::IsNullOrWhiteSpace($genericSmokeSummary.error)) {
+                    $genericSmokeSummary.error = "The generic smoke run did not produce a report under $logsRoot."
+                }
+            }
+
+            $genericSmokeSummary.reportPath = $genericSmokeReportPath
+
+            if ($genericSmokeSummary.status -eq "fail") {
+                if ($genericSmokeCfg.Required) {
+                    throw "Generic host smoke failed. Review $genericSmokeReportPath"
+                }
+                Write-Warning "Generic host smoke failed but is not required in the lab config: $($genericSmokeSummary.error)"
+            } elseif ($genericSmokeSummary.status -eq "pass") {
+                Write-Host "[testlab] Generic host smoke passed"
+            } elseif ($genericSmokeSummary.status -eq "dry-run") {
+                Write-Host "[testlab] Generic host smoke dry-run completed"
+            }
+        }
     } catch {
         $failureMessage = $_.Exception.Message
         Write-Warning "Release gate execution failed: $failureMessage"
@@ -990,13 +1120,23 @@ try {
 
     $provisionCopyPath = Copy-FileIfPresent -SourcePath $provisionReportPath -DestinationDirectory $historyDir
     $matrixResultsCopyPath = Copy-FileIfPresent -SourcePath $matrixResultsPath -DestinationDirectory $historyDir
+    $genericSmokeCopyPath = Copy-FileIfPresent -SourcePath $genericSmokeReportPath -DestinationDirectory $historyDir
+    $genericSmokeSummary.copiedReportPath = $genericSmokeCopyPath
 
     $completedAt = Get-Date
     $passCount = @($matrixResults | Where-Object { ([string]$_.status).ToLowerInvariant() -eq "pass" }).Count
     $failCount = @($matrixResults | Where-Object { ([string]$_.status).ToLowerInvariant() -ne "pass" }).Count
     $totalCells = $matrixResults.Count
     $cellSummary = Get-ResultCellSummary -MatrixResults $matrixResults
-    $categoryRollups = Get-CategoryRollups -Cells $cellSummary
+    $rollupCells = @($cellSummary)
+    if ($genericSmokeSummary.status -in @("pass", "fail")) {
+        $rollupCells += [pscustomobject]@{
+            cellId = "generic-host-smoke"
+            status = $genericSmokeSummary.status
+            categories = @("genericHost")
+        }
+    }
+    $categoryRollups = Get-CategoryRollups -Cells $rollupCells
 
     if ($totalCells -eq 0 -and [string]::IsNullOrWhiteSpace($failureMessage)) {
         $overallStatus = "unknown"
@@ -1030,6 +1170,7 @@ try {
         allowDirtyWorktree = [bool]$AllowDirtyWorktree
         skipProvision = [bool]$SkipProvision
         skipArtifacts = [bool]$SkipArtifacts
+        skipGenericSmoke = [bool]$SkipGenericSmoke
         matrixProfile = $matrixProfile
         overallStatus = $overallStatus
         historyRoot = $historyRootPath
@@ -1057,13 +1198,16 @@ try {
         outputs = [ordered]@{
             provisionReportPath = $provisionReportPath
             matrixResultsPath = $matrixResultsPath
+            genericSmokeReportPath = $genericSmokeReportPath
             copiedProvisionReportPath = $provisionCopyPath
             copiedMatrixResultsPath = $matrixResultsCopyPath
+            copiedGenericSmokeReportPath = $genericSmokeCopyPath
         }
         summary = [ordered]@{
             totalCells = $totalCells
             passCells = $passCount
             failCells = $failCount
+            genericSmoke = $genericSmokeSummary
             cells = $cellSummary
         }
         categoryRollups = $categoryRollups
