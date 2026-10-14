@@ -189,8 +189,10 @@ fi
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
    - **Buddy's hostname or IP**: Remote Unraid VPN/LAN IP.
+   - **SSH port**: SSH port (default: `22`). Useful when connecting over custom NAT port forward rules.
    - **Test connection**: Verifies SSH connectivity, command restriction (`restrict_zfs`), and destination dataset compatibility against the receiver's allowed datasets.
    - **Destination dataset**: Must start with or match one of your buddy's configured receive datasets (e.g. `tank/backups/buddy/my-data`, or matching the destination dataset directly like `cache/appdata` when replicating like-for-like with **Skip parent dataset**).
+   - **Auto-generated destination sub-dataset**: When a bare parent destination dataset is selected, BuddyBackup automatically derives and suggests an organized destination sub-dataset path based on your source dataset name (e.g. selecting parent `disk1/buddy_backups` with source `cache/appdata` offers `disk1/buddy_backups/cache_appdata`). Click **Use this** to apply.
 
 2. **Remote (generic ZFS host)** (Unraid → TrueNAS SCALE / Proxmox VE / Linux):
    - **Buddy's hostname or IP**: Remote host IP or hostname.
@@ -202,7 +204,7 @@ fi
 ![Generic ZFS Host Setup Helper](images/screenshot_03_generic_host_helper.png)
 
 3. **Local** (Pool-to-Pool on the same Unraid server):
-   - **Destination dataset**: Local target dataset (autocomplete provided).
+   - **Destination dataset**: Local target dataset (autocomplete provided, with automatic sub-dataset path suggestions).
    - **Write Protection**: Local destination datasets are automatically set to `readonly=on` upon sync to prevent accidental tampering and ransomware corruption.
 
 #### Task Actions
@@ -368,6 +370,7 @@ Fine-tune daemon settings, alert thresholds, and security overrides.
 
 #### General
 - **Use UTC timezone** (default: `No`): Uses UTC timestamps (`TZ=UTC`) for snapshot creation, Sanoid cron, and manual snapshot naming. Useful to align timestamps between servers in different timezones.
+- **Suggested sub-dataset delimiter** (default: `_` Underscore): Delimiter character (`_` Underscore or `-` Dash) used to replace path separators in source dataset names when suggesting destination sub-dataset paths (e.g. `cache/appdata` suggests `disk1/buddy_backups/cache_appdata` with underscore, or `disk1/buddy_backups/cache-appdata` with dash).
 
 #### Dashboard Panel & Alert Thresholds
 Configure when status indicators turn warning or alert on the dashboard and task cards (leave empty or `0` to disable):
