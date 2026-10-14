@@ -10,6 +10,7 @@ $sanoid_config_path = "$plugin_path/sanoid.conf";
 $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
 $tmp_recv_dataset_path = "/tmp/buddybackup-recv-dest";
+$tmp_incoming_json_path = "/tmp/buddybackup-incoming.json";
 $incoming_config_path = "$plugin_path/incoming.cfg";
 
 $buddybackup_path = '/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin';
@@ -212,7 +213,7 @@ function normalize_snapshot_time($hour, $min) {
 }
 
 function read_receive_destination_datasets(&$error_message = null) {
-    global $tmp_recv_dataset_path, $incoming_config_path;
+    global $tmp_recv_dataset_path, $incoming_config_path, $tmp_incoming_json_path;
 
     $datasets = array();
 
@@ -230,28 +231,31 @@ function read_receive_destination_datasets(&$error_message = null) {
         }
     }
 
-    // Check incoming.cfg
-    if (file_exists($incoming_config_path)) {
+    // Check incoming.cfg or /tmp/buddybackup-incoming.json
+    $incoming_cfg = null;
+    if (file_exists($incoming_config_path) && is_readable($incoming_config_path)) {
         $incoming_cfg = parse_ini_file($incoming_config_path, true);
-        if (is_array($incoming_cfg)) {
-            $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
-            if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
-                $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
+    } else if (file_exists($tmp_incoming_json_path) && is_readable($tmp_incoming_json_path)) {
+        $incoming_cfg = json_decode(file_get_contents($tmp_incoming_json_path), true);
+    }
+    if (is_array($incoming_cfg)) {
+        $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
+        if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
+            $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
+            if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                $datasets[] = $ds;
+            }
+        }
+        foreach ($incoming_cfg as $uid => $buddy) {
+            if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+                $ds = trim($buddy['destination_dataset']);
                 if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
                     $datasets[] = $ds;
                 }
             }
-            foreach ($incoming_cfg as $uid => $buddy) {
-                if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
-                    $ds = trim($buddy['destination_dataset']);
-                    if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
-                        $datasets[] = $ds;
-                    }
-                }
-            }
-            if (!empty($datasets)) {
-                return $datasets;
-            }
+        }
+        if (!empty($datasets)) {
+            return $datasets;
         }
     }
 
@@ -607,7 +611,7 @@ function ensure_incoming_config_migrated() {
 }
 
 function sync_incoming_buddies() {
-    global $rc, $incoming_config_path, $empath, $tmp_recv_dataset_path;
+    global $rc, $incoming_config_path, $empath, $tmp_recv_dataset_path, $tmp_incoming_json_path;
 
     ensure_incoming_config_migrated();
 
@@ -631,6 +635,9 @@ function sync_incoming_buddies() {
         passthru($rc . ' disable_backups_from_buddy');
         if (file_exists($tmp_recv_dataset_path)) {
             @unlink($tmp_recv_dataset_path);
+        }
+        if (file_exists($tmp_incoming_json_path)) {
+            @unlink($tmp_incoming_json_path);
         }
         return;
     }
@@ -706,6 +713,29 @@ function sync_incoming_buddies() {
 
     if ($first_dataset !== null) {
         file_put_contents($tmp_recv_dataset_path, $first_dataset);
+    }
+
+    $incoming_map = array();
+    foreach ($enabled_buddies as $uid => $buddy) {
+        $incoming_map[$uid] = array(
+            'name' => $buddy['name'] ?? 'Buddy',
+            'enable' => $buddy['enable'] ?? 'yes',
+            'destination_dataset' => trim($buddy['destination_dataset']),
+        );
+    }
+    file_put_contents($tmp_incoming_json_path, json_encode($incoming_map, JSON_PRETTY_PRINT));
+    @chmod($tmp_incoming_json_path, 0644);
+    @chown($tmp_incoming_json_path, 'buddybackup');
+    @chgrp($tmp_incoming_json_path, 'buddybackup');
+
+    // Ensure all existing buddy telemetry files can be updated by buddybackup user
+    $tmp_buddy_files = glob("/tmp/buddybackup-buddy*");
+    if (is_array($tmp_buddy_files)) {
+        foreach ($tmp_buddy_files as $f) {
+            @chown($f, 'buddybackup');
+            @chgrp($f, 'buddybackup');
+            @chmod($f, 0666);
+        }
     }
 
     if (file_exists("/tmp/buddybackup-buddy")) {
@@ -1231,7 +1261,7 @@ function get_available_snapshots($uid) {
 
 // Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
 function mark_received_backup($target_dataset = null) {
-    global $incoming_config_path, $tmp_recv_dataset_path;
+    global $incoming_config_path, $tmp_recv_dataset_path, $tmp_incoming_json_path;
 
     $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
     $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
@@ -1243,38 +1273,45 @@ function mark_received_backup($target_dataset = null) {
         $dataset = trim(explode(',', $env_dataset)[0]);
     }
 
-    if (file_exists($incoming_config_path)) {
+    $incoming_cfg = null;
+    $has_incoming_config = false;
+    if (file_exists($incoming_config_path) && is_readable($incoming_config_path)) {
         $incoming_cfg = parse_ini_file($incoming_config_path, true);
-        if (is_array($incoming_cfg)) {
-            // Prioritize matching dataset against incoming.cfg entries
-            if (!empty($dataset)) {
-                foreach ($incoming_cfg as $uid => $buddy) {
-                    $b_ds = trim($buddy['destination_dataset'] ?? '');
-                    if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
-                        $matched_uid = $uid;
-                        $dataset = $b_ds;
-                        break;
-                    }
+        $has_incoming_config = true;
+    } else if (file_exists($tmp_incoming_json_path) && is_readable($tmp_incoming_json_path)) {
+        $incoming_cfg = json_decode(file_get_contents($tmp_incoming_json_path), true);
+        $has_incoming_config = true;
+    }
+
+    if (is_array($incoming_cfg)) {
+        // Prioritize matching dataset against incoming entries
+        if (!empty($dataset)) {
+            foreach ($incoming_cfg as $uid => $buddy) {
+                $b_ds = trim($buddy['destination_dataset'] ?? '');
+                if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
+                    $matched_uid = $uid;
+                    $dataset = $b_ds;
+                    break;
                 }
             }
+        }
 
-            // Fall back to environment UID if no dataset match
-            if ($matched_uid === null && !empty($env_uid) && isset($incoming_cfg[$env_uid])) {
-                $matched_uid = $env_uid;
-                if (empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
-                    $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
-                }
+        // Fall back to environment UID if no dataset match
+        if ($matched_uid === null && !empty($env_uid) && isset($incoming_cfg[$env_uid])) {
+            $matched_uid = $env_uid;
+            if (empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
+                $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
             }
+        }
 
-            // Fallback for single enabled buddy
-            if (empty($dataset) && $matched_uid === null) {
-                $enabled_buddies = array_filter($incoming_cfg, function($b) {
-                    return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
-                });
-                if (count($enabled_buddies) === 1) {
-                    $matched_uid = array_key_first($enabled_buddies);
-                    $dataset = trim($enabled_buddies[$matched_uid]['destination_dataset']);
-                }
+        // Fallback for single enabled buddy
+        if (empty($dataset) && $matched_uid === null) {
+            $enabled_buddies = array_filter($incoming_cfg, function($b) {
+                return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
+            });
+            if (count($enabled_buddies) === 1) {
+                $matched_uid = array_key_first($enabled_buddies);
+                $dataset = trim($enabled_buddies[$matched_uid]['destination_dataset']);
             }
         }
     }
@@ -1299,9 +1336,11 @@ function mark_received_backup($target_dataset = null) {
     $info = "last_ran=".time()."\ndest_size=$dest_size";
     if ($matched_uid !== null && $matched_uid !== '') {
         file_put_contents("/tmp/buddybackup-buddy-$matched_uid", $info);
+        @chmod("/tmp/buddybackup-buddy-$matched_uid", 0666);
     }
-    if (!file_exists($incoming_config_path)) {
+    if (!$has_incoming_config) {
         file_put_contents("/tmp/buddybackup-buddy", $info);
+        @chmod("/tmp/buddybackup-buddy", 0666);
     } else if (file_exists("/tmp/buddybackup-buddy")) {
         @unlink("/tmp/buddybackup-buddy");
     }

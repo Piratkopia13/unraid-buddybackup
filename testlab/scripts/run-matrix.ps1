@@ -582,6 +582,70 @@ function Invoke-FunctionalSmokeScenario {
     return $result
 }
 
+function Invoke-MultiDatasetScenario {
+    param(
+        [string]$LabConfigPath,
+        $Lab,
+        [hashtable]$ScenarioCache,
+        [switch]$DoExecute
+    )
+
+    if ($ScenarioCache.ContainsKey("multi-dataset")) {
+        Write-Host "[testlab] Reusing cached multi-dataset scenario result"
+        return $ScenarioCache["multi-dataset"]
+    }
+
+    $scenarioScript = Join-Path -Path $PSScriptRoot -ChildPath "scenario-multi-dataset.ps1"
+    $logsRoot = if ($Lab.logsRoot) { Resolve-IdentityPath -IdentityFile ([string]$Lab.logsRoot) } else { Resolve-IdentityPath -IdentityFile ".testlab/logs" }
+    $started = Get-Date
+    $runError = $null
+
+    try {
+        Write-Host "[testlab] Running multi-dataset hot-standby scenario"
+        & $scenarioScript -LabConfig $LabConfigPath -Execute:$DoExecute
+    } catch {
+        $runError = ($_ | Out-String).Trim()
+    }
+
+    $reportFile = Get-ChildItem -Path $logsRoot -Filter "scenario-multi-dataset-*.json" -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $started.AddSeconds(-5) } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+
+    if (-not $reportFile) {
+        if ($runError) {
+            throw "Multi-dataset run did not produce a report.`n$runError"
+        }
+
+        throw "Multi-dataset run did not produce a report."
+    }
+
+    $report = Get-Content -Raw -Path $reportFile.FullName | ConvertFrom-Json
+    $result = [pscustomobject]@{
+        Success = [bool]$report.success
+        Error = if ($report.success) { $null } elseif ($report.error) { [string]$report.error } else { $runError }
+        ReportPath = $reportFile.FullName
+    }
+
+    $ScenarioCache["multi-dataset"] = $result
+
+    if ($result.Success) {
+        Write-Host "[testlab] Multi-dataset scenario completed"
+    } else {
+        Write-Warning "Multi-dataset scenario failed: $($result.Error)"
+    }
+
+    if (-not $result.Success -and $runError) {
+        return [pscustomobject]@{
+            Success = $false
+            Error = $result.Error
+            ReportPath = $result.ReportPath
+        }
+    }
+
+    return $result
+}
+
 function Get-NodeConnection {
     param(
         $Lab,
@@ -2681,6 +2745,16 @@ chmod 700 "$post_boot_refresh_script"
                 ExitCode = if ($functionalSmoke.Success) { 0 } else { 1 }
                 Output = if ($functionalSmoke.Success) { "Functional smoke completed successfully.`nreport=$($functionalSmoke.ReportPath)" } else { $functionalSmoke.Error }
                 Success = $functionalSmoke.Success
+            }
+        }
+        "multi-dataset" {
+            $multiDataset = Invoke-MultiDatasetScenario -LabConfigPath $LabConfig -Lab $Lab -ScenarioCache $ScenarioCache -DoExecute:$DoExecute
+            $results += [pscustomobject]@{
+                Label = "multi-dataset"
+                Command = "scenario-multi-dataset.ps1"
+                ExitCode = if ($multiDataset.Success) { 0 } else { 1 }
+                Output = if ($multiDataset.Success) { "Multi-dataset scenario completed successfully.`nreport=$($multiDataset.ReportPath)" } else { $multiDataset.Error }
+                Success = $multiDataset.Success
             }
         }
         default {

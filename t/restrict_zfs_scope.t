@@ -313,7 +313,7 @@ subtest 'unified post-receive hook triggers on successful receive' => sub {
         open my $lfh, '<', $hook_log or die $!;
         my $content = do { local $/; <$lfh> };
         close $lfh;
-        like($content, qr/call:mark_received_backup ds:tank\/backups\/alice uid:alice_123/, 'hook received expected args and environment');
+        like($content, qr/call:mark_received_backup(?: tank\/backups\/alice)? ds:tank\/backups\/alice uid:alice_123/, 'hook received expected args and environment');
         unlink $hook_log;
     }
 

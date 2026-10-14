@@ -578,9 +578,17 @@ foreach my $command (split /;/, $unwrapped) {
             # Unified post-receive hook:
             # If the successful command was a zfs receive (and not -A abort), update telemetry
             if ($command =~ /zfs\s+(?:recv|receive)\b(?!.*-A)/) {
+                my $target_ds;
+                if ($command =~ /zfs\s+(?:recv|receive)\b(?!.*-A)(?:.*?\s+)?(?:'([^']+)'|"([^"]+)"|([A-Za-z0-9_][A-Za-z0-9_.\/-]*))(?:\s+2>(?:\/dev\/null|&1))?\s*$/) {
+                    $target_ds = $1 // $2 // $3;
+                }
                 my $php_script = $ENV{'BUDDYBACKUP_RC_PHP'} // '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php';
                 if (-f $php_script) {
-                    system($php_script, 'mark_received_backup');
+                    if (defined $target_ds && length $target_ds) {
+                        system($php_script, 'mark_received_backup', $target_ds);
+                    } else {
+                        system($php_script, 'mark_received_backup');
+                    }
                 }
             }
         }
