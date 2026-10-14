@@ -288,12 +288,12 @@ PHP
         like($daily_sec, qr/daily_min = 30/, 'scoped_hooks_daily has daily_min = 30');
         like(
             $daily_sec,
-            qr/pre_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && \[\[ "\$\{SANOID_TYPES\}" != \*"daily"\* \]\] && exit 0; \/usr\/local\/bin\/freeze\.sh/,
+            qr/pre_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && case "\$\{SANOID_TYPES\}" in \*daily\*\) ;; \*\) exit 0;; esac; \/usr\/local\/bin\/freeze\.sh/,
             'pre_snapshot_script has SANOID_TYPES guard for daily scope'
         );
         like(
             $daily_sec,
-            qr/post_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && \[\[ "\$\{SANOID_TYPES\}" != \*"daily"\* \]\] && exit 0; \/usr\/local\/bin\/thaw\.sh/,
+            qr/post_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && case "\$\{SANOID_TYPES\}" in \*daily\*\) ;; \*\) exit 0;; esac; \/usr\/local\/bin\/thaw\.sh/,
             'post_snapshot_script has SANOID_TYPES guard for daily scope'
         );
 

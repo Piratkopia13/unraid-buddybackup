@@ -423,8 +423,12 @@ run_snapshot_post_hook_and_trigger() {
 
     # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>" in the background.
     if [[ -n "${trigger_uid}" && "${trigger_uid}" != "no" ]]; then
-        logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
-        ( "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh" ) >/dev/null 2>&1 &
+        if [[ "${trigger_uid}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
+            ( flock -n "/var/lock/buddybackup-${trigger_uid}" "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh" ) >/dev/null 2>&1 &
+        else
+            logger "Invalid trigger_uid '${trigger_uid}' for dataset '${dataset}', ignoring trigger" -t"${plugin}"
+        fi
     fi
 
     return 0
@@ -609,6 +613,9 @@ EOF
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
     chmod 644 "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
     chown -R "${username}:${username}" "/home/${username}/" >/dev/null 2>&1 || chown -R "${username}" "/home/${username}/" >/dev/null 2>&1
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    chown root:buddybackup /var/run/buddybackup >/dev/null 2>&1 || chown root:root /var/run/buddybackup >/dev/null 2>&1
+    chmod 0770 /var/run/buddybackup >/dev/null 2>&1
 }
 
 allow_buddy_dataset() {
@@ -1117,7 +1124,15 @@ mark_sent_backup() {
         fi
     fi
 
-    printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "/tmp/buddybackup-${uid}";
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    local run_file="/var/run/buddybackup/${uid}"
+    if [[ ! -L "${run_file}" ]]; then
+        printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "${run_file}"
+    fi
+    local tmp_file="/tmp/buddybackup-${uid}"
+    if [[ ! -L "${tmp_file}" ]]; then
+        printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "${tmp_file}"
+    fi
 }
 
 mark_failed_backup() {
@@ -1127,25 +1142,45 @@ mark_failed_backup() {
     if [[ -z "${uid}" ]]; then
         return
     fi
+    local run_file="/var/run/buddybackup/${uid}"
     local tmp_file="/tmp/buddybackup-${uid}"
+    local target_file="${run_file}"
+    if [[ -f "${run_file}" && ! -L "${run_file}" ]]; then
+        target_file="${run_file}"
+    elif [[ -f "${tmp_file}" && ! -L "${tmp_file}" ]]; then
+        target_file="${tmp_file}"
+    fi
     local last_ran=""
     local dest_size=""
-    if [[ -f "${tmp_file}" ]]; then
-        last_ran=$(grep '^last_ran=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
-        dest_size=$(grep '^dest_size=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+    if [[ -f "${target_file}" && ! -L "${target_file}" ]]; then
+        last_ran=$(grep '^last_ran=' "${target_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+        dest_size=$(grep '^dest_size=' "${target_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
     fi
 
     local clean_msg
     clean_msg=$(printf '%s' "${error_msg}" | tr '\r\n' ' ' | sed 's/"//g' | head -c 250)
 
-    {
-        [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
-        [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
-        echo "last_status=failed"
-        echo "last_error_time=$(date +%s)"
-        echo "last_error_code=${error_code}"
-        echo "last_error_message=\"${clean_msg}\""
-    } > "${tmp_file}"
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    if [[ ! -L "${run_file}" ]]; then
+        {
+            [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
+            [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
+            echo "last_status=failed"
+            echo "last_error_time=$(date +%s)"
+            echo "last_error_code=${error_code}"
+            echo "last_error_message=\"${clean_msg}\""
+        } > "${run_file}"
+    fi
+    if [[ ! -L "${tmp_file}" ]]; then
+        {
+            [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
+            [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
+            echo "last_status=failed"
+            echo "last_error_time=$(date +%s)"
+            echo "last_error_code=${error_code}"
+            echo "last_error_message=\"${clean_msg}\""
+        } > "${tmp_file}"
+    fi
 }
 
 send_backup() {
@@ -2217,6 +2252,9 @@ uninstall() {
     disable_backups_from_buddy
     remove_cron_files
     clear_known_hosts
+    rm -rf /var/run/buddybackup >/dev/null 2>&1 || true
+    rm -f /tmp/buddybackup* >/dev/null 2>&1 || true
+    rm -f /var/lock/buddybackup* >/dev/null 2>&1 || true
 }
 
 # read our configuration.

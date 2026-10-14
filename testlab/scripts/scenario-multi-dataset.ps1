@@ -329,7 +329,7 @@ if zfs list -H -o name "${pool_name}/domains/MintCinnamon" >/dev/null 2>&1; then
 fi
 
 # Clean any existing telemetry files for these cards
-rm -f "/tmp/buddybackup-buddy-${appdata_uid}" "/tmp/buddybackup-buddy-${domains_uid}"
+rm -f "/var/run/buddybackup/buddy-${appdata_uid}" "/var/run/buddybackup/buddy-${domains_uid}" "/tmp/buddybackup-buddy-${appdata_uid}" "/tmp/buddybackup-buddy-${domains_uid}"
 
 # Configure incoming.cfg with 2 cards sharing the sender SSH key
 mkdir -p /boot/config/plugins/buddybackup
@@ -542,7 +542,7 @@ EOF
     }
 
     # Verify telemetry attribution specifically to Card 2 (MintVM)
-    $telemetryMint = Invoke-NodeSshCommand -NodeConnection $nodeB -Command ("cat /tmp/buddybackup-buddy-{0}" -f $cardDomainsUid) -Label "nodeB-verify-telemetry-mint" -DoExecute:$Execute
+    $telemetryMint = Invoke-NodeSshCommand -NodeConnection $nodeB -Command ("cat /var/run/buddybackup/buddy-{0} 2>/dev/null || cat /tmp/buddybackup-buddy-{0}" -f $cardDomainsUid) -Label "nodeB-verify-telemetry-mint" -DoExecute:$Execute
     $actions += $telemetryMint
     if ($Execute) {
         $telemetryContent = ($telemetryMint.output -join "`n")
@@ -552,7 +552,7 @@ EOF
     }
 
     # Verify telemetry for Card 1 (Appdata) was NOT written by the Mint send
-    $telemetryAppdata = Invoke-NodeSshCommand -NodeConnection $nodeB -Command ("test ! -f /tmp/buddybackup-buddy-{0} && echo 'isolated_clean'" -f $cardAppdataUid) -Label "nodeB-verify-telemetry-isolation" -DoExecute:$Execute
+    $telemetryAppdata = Invoke-NodeSshCommand -NodeConnection $nodeB -Command ("test ! -f /var/run/buddybackup/buddy-{0} && test ! -f /tmp/buddybackup-buddy-{0} && echo 'isolated_clean'" -f $cardAppdataUid) -Label "nodeB-verify-telemetry-isolation" -DoExecute:$Execute
     $actions += $telemetryAppdata
     if ($Execute) {
         $isolationOutput = ($telemetryAppdata.output -join "")
