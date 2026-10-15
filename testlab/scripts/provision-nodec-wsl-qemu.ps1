@@ -333,11 +333,17 @@ fi
 
 rm -f "$vm_root/serial.log"
 
+# Boot the cloud image from a USB storage device. QEMU 8.2.2+ds-0ubuntu1.18 in
+# this WSL lab fails to BIOS-boot this image from virtio-blk ("Boot failed: not
+# a bootable disk"), while the same image boots fine through the xHCI path that
+# the Unraid lab nodes use, so keep the boot path consistent with them.
 qemu-system-x86_64 \
   -m "$memory_mb" -smp "$cpus" -enable-kvm -cpu host \
-  -drive if=virtio,format=qcow2,file="$vm_root/nodec-boot.qcow2" \
+  -device qemu-xhci,id=xhci \
+  -device usb-storage,bus=xhci.0,drive=nodecboot,bootindex=1 \
+  -drive if=none,id=nodecboot,format=qcow2,file="$vm_root/nodec-boot.qcow2" \
   -drive if=none,id=nodecdata,format=qcow2,file="$vm_root/nodec-data.qcow2" \
-  -device virtio-blk-pci,drive=nodecdata,serial=buddybackup_nodec_data \
+  -device virtio-blk-pci,drive=nodecdata,serial=bbnodecdata \
   -drive if=virtio,format=raw,file="$vm_root/seed.iso" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22 \
   -device virtio-net-pci,netdev=net0 \
@@ -383,11 +389,44 @@ if [ "$remove_disks" = "1" ]; then
 fi
 '@
 
+$bootDiagnosticsScript = @'
+set -uo pipefail
+
+vm_root="$1"
+pid_file="$vm_root/qemu.pid"
+
+vm_state="not-running"
+if [ -f "$pid_file" ]; then
+  pid=$(cat "$pid_file" 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    vm_state="running"
+  else
+    vm_state="exited"
+  fi
+fi
+echo "vm-state=$vm_state"
+
+if [ -f "$vm_root/serial.log" ]; then
+  echo "serial-log-tail:"
+  tail -n 30 "$vm_root/serial.log" 2>/dev/null || true
+else
+  echo "serial-log-tail: (missing)"
+fi
+'@
+
 $ensureZfsScript = @'
 set -euo pipefail
 
 pool="$1"
-data_dev="/dev/disk/by-id/virtio-buddybackup_nodec_data"
+data_dev="/dev/disk/by-id/virtio-bbnodecdata"
+if [ ! -e "$data_dev" ]; then
+  for candidate in /dev/disk/by-id/virtio-bbnodecdata*; do
+    if [ -e "$candidate" ]; then
+      data_dev="$candidate"
+      break
+    fi
+  done
+fi
 
 if ! command -v zpool >/dev/null 2>&1 || ! zpool list -H -o name "$pool" >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
@@ -586,7 +625,14 @@ try {
             }
 
             if (-not $ready) {
-                throw "nodeC SSH did not become ready on 127.0.0.1:$SshPort within $SshReadySeconds seconds. Check $VmRoot/serial.log in distro '$Distro'."
+                $diagnosticsResult = Invoke-NodecWslScript -Label "boot-diagnostics" -ScriptContent $bootDiagnosticsScript -Arguments @($VmRoot) -DoExecute
+                Add-NodecAction -Report $report -Result $diagnosticsResult
+                $diagnosticsText = (@($diagnosticsResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+
+                $stopResult = Invoke-NodecWslScript -Label "readiness-stop" -ScriptContent $teardownScript -Arguments @($VmRoot, "0") -DoExecute
+                Add-NodecAction -Report $report -Result $stopResult
+
+                throw "nodeC SSH did not become ready on 127.0.0.1:$SshPort within $SshReadySeconds seconds. The VM was stopped so the next run starts it fresh. Check $VmRoot/serial.log in distro '$Distro'.`n$diagnosticsText"
             }
 
             Add-NodecAction -Report $report -Result $lastProbe

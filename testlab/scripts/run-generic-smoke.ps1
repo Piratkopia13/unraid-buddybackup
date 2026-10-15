@@ -247,6 +247,90 @@ function Invoke-NodeSshCommand {
     }
 }
 
+function Invoke-NodeBashScriptUpload {
+    param(
+        $NodeConnection,
+        [string]$ScriptContent,
+        [string[]]$Arguments,
+        [string]$Label,
+        [switch]$DoExecute
+    )
+
+    $normalizedScript = ($ScriptContent -replace "`r`n", "`n").Trim() + "`n"
+    $scriptName = "buddybackup-testlab-{0}.sh" -f ([Guid]::NewGuid().ToString("N").Substring(0, 12))
+    $remotePath = "/tmp/$scriptName"
+    $localPath = Join-Path ([System.IO.Path]::GetTempPath()) $scriptName
+    $commandForLogs = "upload ${scriptName} and run with bash"
+
+    try {
+        [System.IO.File]::WriteAllText($localPath, $normalizedScript)
+
+        if (-not $DoExecute) {
+            Write-Host "[dry-run][$($NodeConnection.NodeName)][$Label] $commandForLogs"
+            return [pscustomobject]@{
+                node = $NodeConnection.NodeName
+                label = $Label
+                command = $commandForLogs
+                success = $true
+                exitCode = 0
+                output = @("dry-run")
+            }
+        }
+
+        $scpArgs = @(
+            "-F", "NUL",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=8",
+            "-o", "IdentitiesOnly=yes",
+            "-o", "LogLevel=ERROR",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=NUL",
+            "-o", "GlobalKnownHostsFile=NUL",
+            "-P", ([string]$NodeConnection.Port)
+        )
+        if ($NodeConnection.IdentityFile) {
+            $identityPath = Get-LocalSshIdentityFile -IdentityFile ([string]$NodeConnection.IdentityFile)
+            $scpArgs += @("-i", $identityPath)
+        }
+        $scpArgs += @($localPath, "$($NodeConnection.User)@$($NodeConnection.Host):$remotePath")
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $scpOutput = & scp @scpArgs 2>&1
+            $scpExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($scpExitCode -ne 0) {
+            $scpText = (@($scpOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+            return [pscustomobject]@{
+                node = $NodeConnection.NodeName
+                label = $Label
+                command = $commandForLogs
+                success = $false
+                exitCode = $scpExitCode
+                output = @("Failed to upload $scriptName to $($NodeConnection.NodeName).", $scpText)
+            }
+        }
+
+        $runCommand = "bash " + (Convert-ToShellSingleQuoted -Value $remotePath)
+        if ($Arguments -and $Arguments.Count -gt 0) {
+            $runCommand += " " + (($Arguments | ForEach-Object { Convert-ToShellSingleQuoted -Value ([string]$_) }) -join " ")
+        }
+        $wrappedCommand = $runCommand + '; rc=$?; rm -f ' + (Convert-ToShellSingleQuoted -Value $remotePath) + '; exit $rc'
+
+        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $wrappedCommand -Label $Label -DoExecute:$DoExecute
+        $result.command = $commandForLogs
+        return $result
+    } finally {
+        if (Test-Path -LiteralPath $localPath) {
+            Remove-Item -LiteralPath $localPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-NodeBashScript {
     param(
         $NodeConnection,
@@ -261,6 +345,12 @@ function Invoke-NodeBashScript {
     $command = "printf '%s' '$scriptB64' | base64 -d | bash -s --"
     if ($Arguments -and $Arguments.Count -gt 0) {
         $command += " " + (($Arguments | ForEach-Object { Convert-ToShellSingleQuoted -Value ([string]$_) }) -join " ")
+    }
+
+    # Windows caps a native process command line at about 32k characters, so
+    # large scripts are uploaded with scp and executed from /tmp instead.
+    if ($command.Length -gt 24000) {
+        return Invoke-NodeBashScriptUpload -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
     }
 
     return Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $command -Label $Label -DoExecute:$DoExecute
@@ -282,7 +372,7 @@ function Test-IsTransientSshFailure {
         return $true
     }
 
-    return $outputText -match '(?i)connection closed by remote host|connection refused|operation timed out|connection timed out|broken pipe'
+    return $outputText -match '(?i)connection closed by|connection reset by peer|connection refused|operation timed out|connection timed out|broken pipe|kex_exchange_identification'
 }
 
 function Invoke-NodeBashScriptWithRetry {
@@ -486,6 +576,7 @@ function New-GenericNodePrepScript {
 pool="$1"
 dataset_root="$2"
 snapshot_name="$3"
+push_destination_dataset="$4"
 
 set -euo pipefail
 
@@ -497,6 +588,13 @@ fi
 source_dataset="${pool}/${dataset_root}/generic-source"
 if zfs list -H -o name "$source_dataset" >/dev/null 2>&1; then
     zfs destroy -r "$source_dataset"
+fi
+
+# The push destination is recreated by each run; a leftover target from a
+# previous smoke makes syncoid reject the initial send ("target exists but has
+# no snapshots matching") because the source dataset is rebuilt each run.
+if [ -n "$push_destination_dataset" ] && zfs list -H -o name "$push_destination_dataset" >/dev/null 2>&1; then
+    zfs destroy -r "$push_destination_dataset"
 fi
 
 # Dataset that exists on the generic node but is NEVER added to any role's
@@ -732,7 +830,8 @@ try {
     $genericPrep = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent (New-GenericNodePrepScript) -Arguments @(
         $genericPool,
         $genericDatasetRootName,
-        $genericSnapshotName
+        $genericSnapshotName,
+        $pushDestinationDataset
     ) -Label "nodeC-prep" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $genericPrep
     Assert-CommandSucceeded -Result $genericPrep -FailureMessage "Generic node preparation failed on nodeC."

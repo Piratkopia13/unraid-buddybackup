@@ -864,7 +864,7 @@ function Invoke-RemoteUploadWithRetry {
         [string[]]$LocalPaths,
         [string]$RemoteDirectory,
         [string]$Label,
-        [int]$MaxAttempts = 3,
+        [int]$MaxAttempts = 6,
         [switch]$DoExecute
     )
 
@@ -873,6 +873,37 @@ function Invoke-RemoteUploadWithRetry {
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $result = Invoke-RemoteUpload -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -LocalPaths $LocalPaths -RemoteDirectory $RemoteDirectory -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.Success) {
+            break
+        }
+
+        if ($DoExecute -and $attempt -lt $MaxAttempts) {
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    return New-RetrySummaryResult -Result $result -Attempts $attempts
+}
+
+function Invoke-RemoteCommandWithRetry {
+    param(
+        [string]$User,
+        [string]$TargetHost,
+        [int]$Port,
+        [string]$IdentityFile,
+        [string]$Command,
+        [string]$LoggedCommand = $null,
+        [string]$Label = "remote",
+        [int]$MaxAttempts = 4,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-RemoteCommand -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $Command -LoggedCommand $LoggedCommand -Label $Label -DoExecute:$DoExecute
         $attempts += $result
         if ($result.Success) {
             break
@@ -1782,18 +1813,43 @@ fi
 
 known_hosts_file="$plugin_root/buddybackup_known_hosts"
 scanned_keys=""
+attempt_keys=""
+# ssh-keyscan can return partial results or time out entirely while the peer is
+# busy. Merge several scans (deduped by key material) and require the common key
+# types so the seeded state stays stable.
 for attempt in 1 2 3 4 5; do
-    scanned_keys=$(ssh-keyscan "$remote_host" 2>/dev/null || true)
-    if [ -n "$scanned_keys" ]; then
-        break
+    attempt_keys=$(ssh-keyscan -T 3 "$remote_host" 2>/dev/null || true)
+    if [ -n "$attempt_keys" ]; then
+        if [ -n "$scanned_keys" ]; then
+            scanned_keys=$(printf '%s\n%s\n' "$scanned_keys" "$attempt_keys" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { if (!comment[$0]++) print; next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print; next }
+                { print }
+            ')
+        else
+            scanned_keys=$(printf '%s\n' "$attempt_keys" | sed '/^[[:space:]]*$/d')
+        fi
+
+        if printf '%s\n' "$scanned_keys" | grep -q 'ssh-ed25519' && \
+           printf '%s\n' "$scanned_keys" | grep -q 'ecdsa-sha2-nistp256' && \
+           printf '%s\n' "$scanned_keys" | grep -q 'ssh-rsa'; then
+            break
+        fi
     fi
-    sleep 1
+
+    if [ "$attempt" -lt 5 ]; then
+        sleep 1
+    fi
 done
+
+if [ -z "$scanned_keys" ]; then
+    echo "ssh-keyscan returned no host keys for ${remote_host}; refusing to seed an empty managed known_hosts" >&2
+    exit 1
+fi
+
 {
     printf '# buddybackup start\n'
-    if [ -n "$scanned_keys" ]; then
-        printf '%s\n' "$scanned_keys"
-    fi
+    printf '%s\n' "$scanned_keys"
     printf '# buddybackup end\n'
 } > "$known_hosts_file"
 chmod 600 "$known_hosts_file"
@@ -2047,7 +2103,7 @@ function Get-UpgradeStateSnapshot {
 
         $script = Get-UpgradeStateSummaryScript
         $command = Convert-ToRemoteBashScriptCommand -Script $script -Arguments @()
-    $maxSnapshotAttempts = 3
+    $maxSnapshotAttempts = 6
     $attempts = @()
     $result = $null
 
@@ -2250,7 +2306,7 @@ echo "plugin source metadata written to $marker_path"
         $packageSha256,
         $packageMd5
     )
-    $maxPluginInstallAttempts = 3
+    $maxPluginInstallAttempts = 8
     $attempts = @()
     $result = $null
 
@@ -2418,8 +2474,8 @@ function Run-Scenario {
                     [string]$sender.Port,
                     [string]$receiverPlan.PeerAliasIp
                 )
-                $results += Invoke-RemoteCommand -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $senderSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeA" -Label "nodeA-upgrade-seed" -DoExecute:$DoExecute
-                $results += Invoke-RemoteCommand -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command $receiverSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeB" -Label "nodeB-upgrade-seed" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommandWithRetry -User $sender.User -TargetHost $sender.Host -Port $sender.Port -IdentityFile $sender.IdentityFile -Command $senderSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeA" -Label "nodeA-upgrade-seed" -DoExecute:$DoExecute
+                $results += Invoke-RemoteCommandWithRetry -User $receiver.User -TargetHost $receiver.Host -Port $receiver.Port -IdentityFile $receiver.IdentityFile -Command $receiverSetupCommand -LoggedCommand "seed pre-upgrade BuddyBackup state on nodeB" -Label "nodeB-upgrade-seed" -DoExecute:$DoExecute
             } else {
                 $results += [pscustomobject]@{
                     Label = 'upgrade-seed-prerequisites'
@@ -2494,7 +2550,7 @@ function Run-Scenario {
 
                 if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
                     $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
-                    if (-not $senderCompare.Success -and $senderCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                    if (-not $senderCompare.Success -and $senderCompare.Error -like "*KeyMaterialSha256*") {
                         for ($attempt = 1; $attempt -le 5; $attempt++) {
                             Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeA (attempt $attempt)"
                             Start-Sleep -Seconds 2
@@ -2503,7 +2559,7 @@ function Run-Scenario {
                             $senderAfter = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$DoExecute
                             $results += $senderAfter.Result
                             $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
-                            if ($senderCompare.Success -or ($senderCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                            if ($senderCompare.Success -or ($senderCompare.Error -notlike "*KeyMaterialSha256*")) {
                                 break
                             }
                         }
@@ -2519,7 +2575,7 @@ function Run-Scenario {
 
                 if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
                     $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
-                    if (-not $receiverCompare.Success -and $receiverCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                    if (-not $receiverCompare.Success -and $receiverCompare.Error -like "*KeyMaterialSha256*") {
                         for ($attempt = 1; $attempt -le 5; $attempt++) {
                             Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeB (attempt $attempt)"
                             Start-Sleep -Seconds 2
@@ -2528,7 +2584,7 @@ function Run-Scenario {
                             $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$DoExecute
                             $results += $receiverAfter.Result
                             $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
-                            if ($receiverCompare.Success -or ($receiverCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                            if ($receiverCompare.Success -or ($receiverCompare.Error -notlike "*KeyMaterialSha256*")) {
                                 break
                             }
                         }
@@ -2685,7 +2741,7 @@ chmod 700 "$post_boot_refresh_script"
                     }
 
                     $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
-                    if (-not $stateCompare.Success -and $stateCompare.Error -like "*knownHostsKeyMaterialSha256*") {
+                    if (-not $stateCompare.Success -and $stateCompare.Error -like "*KeyMaterialSha256*") {
                         for ($attempt = 1; $attempt -le 5; $attempt++) {
                             Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-reboot for $($node.Name) (attempt $attempt)"
                             Start-Sleep -Seconds 2
@@ -2694,7 +2750,7 @@ chmod 700 "$post_boot_refresh_script"
                             $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$DoExecute
                             $results += $afterSnapshot.Result
                             $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
-                            if ($stateCompare.Success -or ($stateCompare.Error -notlike "*knownHostsKeyMaterialSha256*")) {
+                            if ($stateCompare.Success -or ($stateCompare.Error -notlike "*KeyMaterialSha256*")) {
                                 break
                             }
                         }

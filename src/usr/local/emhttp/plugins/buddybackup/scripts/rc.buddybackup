@@ -124,6 +124,18 @@ zfs_error_indicates_missing_dataset() {
     [[ "${error_text}" == *"dataset does not exist"* ]] || [[ "${error_text}" == *"cannot open"* ]]
 }
 
+zfs_error_indicates_unsupported_json() {
+    local error_text="$1"
+
+    # OpenZFS versions before JSON output support (e.g. 2.2 on Ubuntu 24.04)
+    # fail `zfs list -j` / `zfs get -j` with an invalid-option error instead of
+    # returning empty or malformed JSON. Missing datasets are handled separately.
+    [[ "${error_text}" == *"invalid option"*"j"* ]] \
+        || [[ "${error_text}" == *"unrecognized option"*"j"* ]] \
+        || [[ "${error_text}" == *"illegal option"*"j"* ]] \
+        || [[ "${error_text}" == *"unknown option"*"j"* ]]
+}
+
 zfs_legacy_dataset_names() {
     local output="$1"
     local destination_dataset="$2"
@@ -2084,15 +2096,21 @@ get_available_snapshots() {
         result=$(eval "${cmd}")
     fi
     local result_status=$?
+    local result_unsupported_json=0
     if zfs_error_indicates_missing_dataset "${result}"; then
         jq -cn --arg empty_message "${empty_message}" '{"status": "ok", "data": {}, "empty_message": $empty_message}'
         return
     fi
 
     if [ ${result_status} -ne 0 ]; then
-        result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-        printf '{"status": "failed", "error": "%s"}' "${result}"
-        return
+        if zfs_error_indicates_unsupported_json "${result}"; then
+            result_unsupported_json=1
+            result=""
+        else
+            result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "${result}"
+            return
+        fi
     fi
 
     local dataset_list=""
@@ -2103,9 +2121,20 @@ get_available_snapshots() {
     ' 2>/dev/null)
     local dataset_list_status=$?
 
-    if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${result}" ]] || [[ ${dataset_list_status} -ne 0 ]]; }; then
+    local need_legacy_dataset_list=0
+    if [[ ${result_unsupported_json} -eq 1 ]]; then
+        need_legacy_dataset_list=1
+    elif [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${result}" ]] || [[ ${dataset_list_status} -ne 0 ]]; }; then
+        need_legacy_dataset_list=1
+    fi
+
+    if [[ ${need_legacy_dataset_list} -eq 1 ]]; then
         local legacy_result=""
-        legacy_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        if [[ "${type}" == "local" ]]; then
+            legacy_result=$(eval "${legacy_cmd}" 2>&1)
+        else
+            legacy_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        fi
         local legacy_status=$?
 
         if zfs_error_indicates_missing_dataset "${legacy_result}"; then
@@ -2167,18 +2196,36 @@ get_available_snapshots() {
             sub_result=$(eval "${sub_cmd}" 2>&1)
         fi
         local sub_result_status=$?
+        local sub_result_unsupported_json=0
         if [ ${sub_result_status} -ne 0 ]; then
-            sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-            printf '{"status": "failed", "error": "%s"}' "${sub_result}"
-            return
+            if zfs_error_indicates_unsupported_json "${sub_result}"; then
+                sub_result_unsupported_json=1
+                sub_result=""
+            else
+                sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+                printf '{"status": "failed", "error": "%s"}' "${sub_result}"
+                return
+            fi
         fi
 
         local dataset_snapshots=""
         dataset_snapshots=$(zfs_json_snapshots_for_dataset "${sub_result}" "${dataset}")
         local dataset_snapshots_status=$?
-        if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${sub_result}" ]] || [[ ${dataset_snapshots_status} -ne 0 ]]; }; then
+
+        local need_legacy_snapshots=0
+        if [[ ${sub_result_unsupported_json} -eq 1 ]]; then
+            need_legacy_snapshots=1
+        elif [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${sub_result}" ]] || [[ ${dataset_snapshots_status} -ne 0 ]]; }; then
+            need_legacy_snapshots=1
+        fi
+
+        if [[ ${need_legacy_snapshots} -eq 1 ]]; then
             local legacy_sub_result=""
-            legacy_sub_result=$(run_remote_ssh "${destination_host}" "${legacy_sub_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+            if [[ "${type}" == "local" ]]; then
+                legacy_sub_result=$(eval "${legacy_sub_cmd}" 2>&1)
+            else
+                legacy_sub_result=$(run_remote_ssh "${destination_host}" "${legacy_sub_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+            fi
             local legacy_sub_status=$?
             if [[ ${legacy_sub_status} -ne 0 ]]; then
                 legacy_sub_result=$(echo "${legacy_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
@@ -2242,6 +2289,16 @@ get_buddy_used_size() {
 
         ssh_result="failed to parse zfs JSON output"
         error_code=1
+    fi
+
+    if [[ $error_code -ne 0 ]] && zfs_error_indicates_unsupported_json "${ssh_result}"; then
+        local legacy_cmd="zfs get -H -o value used $(shell_single_quote "${destination_dataset}")"
+        ssh_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        error_code=$?
+        if [[ $error_code -eq 0 ]] && [[ -n "${ssh_result}" ]]; then
+            printf '%s\n' "${ssh_result}"
+            exit 0
+        fi
     fi
 
     echo "${ssh_result}";

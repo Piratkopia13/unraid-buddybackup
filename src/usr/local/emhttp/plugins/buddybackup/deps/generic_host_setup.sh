@@ -464,6 +464,7 @@ my $REDIRS = qr/(?:\s+(?:2>\/dev\/null|2>&1))?/;
 my $PIPE = qr/\s*\|\s*/;
 my $MBUFFER_CMD = qr/mbuffer (?:-[rR] \d+[kM])? (?:-W \d+ -I [\w.:-]+ )?-q -s \d+[kM] -m (?:[1-9]\d{0,2}[kM]|1024M)/;
 my $COMPRESS_CMD = qr/(?:(?:gzip -3|zcat|pigz -(?:\d+|dc)|(?:zstd|zstdmt) -(?:\d+|dc)|xz(?: -d)?|lzop(?: -dfc)?|lz4(?: -dc)?)\s*\|)?/;
+my $COMPRESS_CMD_TAIL = qr/(?:(?:gzip -3|zcat|pigz -(?:\d+|dc)|(?:zstd|zstdmt) -(?:\d+|dc)|xz(?: -d)?|lzop(?: -dfc)?|lz4(?: -dc)?))?/;
 my $SAFE_PROP_VAL = qr/(?:'[\w:.\/-]+'|"[\w:.\/-]+"|[\w:.\/-]+)/;
 my $SAFE_O_ASSIGN = qr/(?:(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=$SAFE_PROP_VAL|'(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=[\w:.\/-]+'|"(?!mountpoint=|setuid=|exec=|readonly=off)[\w:.-]+=[\w:.\/-]+")/ ;
 my $SHORTOPTSVALS = qr/(?:-(?!o\b|x\b)[A-Za-z0-9]+(?:\s+[a-z0-9:._=\/-]+)?\s+|-x\s+[a-z0-9:._-]+\s+|-o\s+$SAFE_O_ASSIGN\s+)*/;
@@ -499,10 +500,15 @@ my @ALLOWED_COMMANDS = (
     qr/zfs (?:recv|receive) -A $DATASET$REDIRS/,
     qr/zfs send (?:-[A-Za-z0-9]+ )*$DATASET_SNAPSHOT$REDIRS/,
     qr/zfs send (?:-[A-Za-z0-9]+ )*-[iI] $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/$MBUFFER_CMD$PIPE$COMPRESS_CMD\s*zfs receive\s+$SHORTOPTSVALS$DATASET$REDIRS/,
     qr/zfs receive -A $DATASET$REDIRS/,
     qr/zfs send -w -nvP $DATASET_SNAPSHOT$REDIRS/,
     qr/zfs send -w -nvP -I $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$REDIRS/,
+    qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD_TAIL$REDIRS/,
+    qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD_TAIL$REDIRS/,
     qr/zfs send -w\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
     qr/zfs send -w\s+-i $DATASET_SNAPSHOT\s+$DATASET_SNAPSHOT$PIPE$COMPRESS_CMD\s*$MBUFFER_CMD$REDIRS/,
     qr/\/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc.buddybackup.php probe_zfs(?:\s+$DATASET)?$REDIRS/,
