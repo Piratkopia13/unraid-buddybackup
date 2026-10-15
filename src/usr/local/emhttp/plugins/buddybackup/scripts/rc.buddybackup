@@ -561,20 +561,50 @@ load_backup_hooks() {
     done < "${cfg_file}"
 }
 
+sshd_is_running() {
+    pgrep -x sshd >/dev/null 2>&1
+}
+
+reload_sshd() {
+    # Restart sshd so it picks up the sshd_config changes. OpenSSH unlinks its
+    # pid file and re-execs itself while restarting, so never use the pid file
+    # to decide whether a manual start is needed: checking it right after the
+    # SIGHUP races the restart and spawns a second sshd that cannot bind the
+    # port ("Address already in use", "fatal: Cannot bind any address").
+    local sshd_pid
+    sshd_pid=$(cat /var/run/sshd.pid 2>/dev/null)
+    if [[ -n "${sshd_pid}" ]] && kill -HUP "${sshd_pid}" 2>/dev/null; then
+        sleep 1
+    elif [[ -x /etc/rc.d/rc.sshd ]]; then
+        /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || true
+    fi
+
+    if sshd_is_running; then
+        return 0
+    fi
+
+    if [[ -x /etc/rc.d/rc.sshd ]]; then
+        /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+    else
+        /usr/sbin/sshd >/dev/null 2>&1 || true
+    fi
+}
+
 setup_buddy_user() {
-    # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
+    local sshd_config_checksum_before
+    sshd_config_checksum_before=$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')
+
+    # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
     local grepped=$(grep "AllowUsers.*${username}" "${sshd_config}")
     local trimmed=$(echo "${grepped}" | sed 's/^[ \t]*//')
-    local restart_sshd=false
     if [[ ! $grepped ]] || [[ $trimmed == "#"* ]]; then
         sed -i 's/^#\?AllowUsers .*/AllowUsers root/' "${sshd_config}"
         sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' "${sshd_config}"
-        restart_sshd=true
     fi
 
     # Add own section to sshd_config for buddybackup to try avoid having unraid updates break buddybackup auth
-    if ! grep -q "^Match User ${username}" "${sshd_config}"; then
+    if ! grep -Eq "^[[:space:]]*Match[[:space:]]+User[[:space:]]+${username}([[:space:]]|$)" "${sshd_config}"; then
         cat <<EOF >> "${sshd_config}"
 Match User ${username}
     PasswordAuthentication no
@@ -582,20 +612,12 @@ Match User ${username}
     PubkeyAuthentication yes
     AuthorizedKeysFile    .ssh/authorized_keys
 EOF
-        restart_sshd=true
     fi
 
-    if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            :
-        elif [ -x /etc/rc.d/rc.sshd ]; then
-            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        else
-            /usr/sbin/sshd >/dev/null 2>&1 || true
-        fi
-        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        fi
+    # Only restart sshd when the config actually changed; an unconditional
+    # restart on every update is unnecessary and trips the pid file race above.
+    if [[ "$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')" != "${sshd_config_checksum_before}" ]]; then
+        reload_sshd
     fi
 
     # Ensure user exists; create if missing
@@ -765,37 +787,29 @@ enable_backups_from_buddy() {
 }
 
 disable_backups_from_buddy() {
-    local restart_sshd=false
+    local sshd_config_checksum_before
+    sshd_config_checksum_before=$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')
+
     # Remove "Match User buddybackup" section from sshd_config
-    if grep -q "^Match User ${username}" "${sshd_config}"; then
+    if grep -Eq "^[[:space:]]*Match[[:space:]]+User[[:space:]]+${username}([[:space:]]|$)" "${sshd_config}"; then
         awk -v user="${username}" '
         BEGIN { skip=0 }
-        $0 ~ "^Match User "user"$" { skip=1; next }
+        $0 ~ "^[[:space:]]*Match[[:space:]]+User[[:space:]]+"user"([[:space:]]|$)" { skip=1; next }
         skip {
             if ($0 !~ /^(\t|    )/) { skip=0 } else { next }
         }
         { print }
         ' "${sshd_config}" | tee "${sshd_config}.tmp" > /dev/null && mv "${sshd_config}.tmp" "${sshd_config}"
-        restart_sshd=true
     fi
 
     # remove buddybackup from "AllowUsers list" in sshd_config
     if grep -q "AllowUsers.*${username}" "${sshd_config}"; then
         sed -i '/^[[:space:]#]*AllowUsers/ s/ '${username}'\b//' "${sshd_config}"
-        restart_sshd=true
     fi
 
-    if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            :
-        elif [ -x /etc/rc.d/rc.sshd ]; then
-            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        else
-            /usr/sbin/sshd >/dev/null 2>&1 || true
-        fi
-        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        fi
+    # Only restart sshd when the config actually changed
+    if [[ "$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')" != "${sshd_config_checksum_before}" ]]; then
+        reload_sshd
     fi
 
     rm -r "/home/${username}" >/dev/null 2>&1
