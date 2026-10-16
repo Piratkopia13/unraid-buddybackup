@@ -28,6 +28,19 @@ Title="Advanced Settings"
     </dd>
 </dl>
 
+
+<dl class="buddybackup-form-dl">
+    <dt><?=_('Suggested sub-dataset delimiter')?>:</dt>
+    <dd>
+        <select name="DestinationSubdatasetDelimiter" class="align" <?=$disabled?>>
+            <?=mk_option($cfg['DestinationSubdatasetDelimiter'], "_", _("Underscore (_)"));?>
+            <?=mk_option($cfg['DestinationSubdatasetDelimiter'], "-", _("Dash (-)"));?>
+            <?=mk_option($cfg['DestinationSubdatasetDelimiter'], "/", _("Slash (/) - nested child dataset"));?>
+        </select>
+        <div class="buddybackup-field-note"><?=_('Delimiter character used to replace path separators in the source dataset name when suggesting destination sub-dataset paths (e.g. cache/appdata suggests disk1/cache_appdata with underscore, or disk1/cache-appdata with dash).')?></div>
+    </dd>
+</dl>
+
 <div class="buddybackup-col-header" style="margin-top: 22px;"><?=_('Dashboard Panel & Alert Thresholds')?></div>
 <div class="buddybackup-field-note" style="margin-bottom: 12px;"><?=_('Configure when backup status indicators turn warning or alert on the dashboard. Leave empty or set to 0 to disable.')?></div>
 

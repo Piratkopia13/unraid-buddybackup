@@ -189,8 +189,10 @@ fi
 
 1. **Remote (BuddyBackup)** (Unraid → Unraid):
    - **Buddy's hostname or IP**: Remote Unraid VPN/LAN IP.
-   - **Test connection**: Verifies SSH connectivity and command restriction (`restrict_zfs`).
-   - **Destination dataset**: Must start with or match your buddy's configured parent dataset (e.g. `tank/backups/buddy/my-data`, or matching the parent dataset directly when replicating child datasets with **Skip parent dataset**).
+   - **SSH port**: SSH port (default: `22`). Useful when connecting over custom NAT port forward rules.
+   - **Test connection**: Verifies SSH connectivity, command restriction (`restrict_zfs`), and destination dataset compatibility against the receiver's allowed datasets.
+   - **Destination dataset**: Must start with or match one of your buddy's configured receive datasets (e.g. `tank/backups/buddy/my-data`, or matching the destination dataset directly like `cache/appdata` when replicating like-for-like with **Skip parent dataset**).
+   - **Auto-generated destination sub-dataset**: When a bare parent destination dataset is selected, BuddyBackup automatically derives and suggests an organized destination sub-dataset path based on your source dataset name (e.g. selecting parent `disk1/buddy_backups` with source `cache/appdata` offers `disk1/buddy_backups/cache_appdata`). Click **Use this** to apply.
 
 2. **Remote (generic ZFS host)** (Unraid → TrueNAS SCALE / Proxmox VE / Linux):
    - **Buddy's hostname or IP**: Remote host IP or hostname.
@@ -202,7 +204,7 @@ fi
 ![Generic ZFS Host Setup Helper](images/screenshot_03_generic_host_helper.png)
 
 3. **Local** (Pool-to-Pool on the same Unraid server):
-   - **Destination dataset**: Local target dataset (autocomplete provided).
+   - **Destination dataset**: Local target dataset (autocomplete provided, with automatic sub-dataset path suggestions).
    - **Write Protection**: Local destination datasets are automatically set to `readonly=on` upon sync to prevent accidental tampering and ransomware corruption.
 
 #### Task Actions
@@ -231,10 +233,13 @@ Automated snapshot creation and retention policies powered by **Sanoid**.
 
 ![Snapshot Creation and Pruning](images/screenshot_05_snapshots_page.png)
 
-- **Dataset** & **Recursive**: Dataset to snapshot, with optional recursion.
+- **Dataset** & **Recursive**: Dataset to snapshot, with optional recursion (**Yes (All child datasets)** or **No**).
+  - **Atomic ZFS Recursion**: Uses native ZFS atomic recursion (`zfs snapshot -r`), taking snapshots across the parent and all child datasets simultaneously in milliseconds with identical timestamps. Eliminates staggered per-child cron cycles and ensures post-snapshot replication triggers execute once per scheduled interval.
+- **Automatic Child Baseline Snapshots**: When replicating recursive dataset trees, BuddyBackup automatically detects newly created child datasets that have zero snapshots (e.g. newly deployed Docker containers or VM zvols) and creates an initial baseline snapshot before replication. This prevents Syncoid from aborting with missing snapshot errors under `--no-sync-snap`.
 - **Create snapshots automatically** (`autosnap`) & **Prune snapshots automatically** (`autoprune`): Toggle automated snapshot creation and retention pruning.
 - **Snapshot retention**: Number of snapshots to retain for Hourly, Daily, Weekly, Monthly, and Yearly intervals.
-- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset.
+- **Scheduled snapshot time**: Configurable hour and minute (e.g. `04:00 AM`) specifying when daily, weekly, monthly, and yearly snapshot cycles execute. Powered by a 1-minute precision cron heartbeat (`* * * * *`). Includes a live dynamic schedule preview that explains the exact snapshot intervals and hook behavior.
+- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset. Triggered replication executes asynchronously in the background so Sanoid exits in milliseconds and releases its lock immediately.
 
 #### Snapshot Hooks (Advanced)
 
@@ -250,7 +255,7 @@ When both a post-snapshot resume hook and a **Trigger backup after snapshot** ta
 1. Workload is paused or flushed via `pre_snapshot_script`.
 2. `zfs snapshot` creates the point-in-time snapshot.
 3. Workload is **resumed immediately** via `post_snapshot_script`.
-4. BuddyBackup dispatches the triggered backup task (`send_backup`) for network replication while your application continues running with zero downtime.
+4. BuddyBackup detaches the triggered backup task (`send_backup`) asynchronously in the background for network replication while your application continues running with zero downtime. Sanoid exits in < 1 second.
 
 **Fields**:
 - **Pre-snapshot hook**: Executable script path or inline shell command (e.g. `docker pause nextcloud`) run milliseconds before `zfs snapshot`. Leave empty to disable.
@@ -259,6 +264,9 @@ When both a post-snapshot resume hook and a **Trigger backup after snapshot** ta
 - **Hook failure mode**:
   - `Abort on hook failure` (default): Aborts snapshot creation (`no_inconsistent_snapshot = 1` in Sanoid) if the pre-snapshot hook fails.
   - `Warn and proceed anyway`: Logs a warning on failure and takes the snapshot anyway.
+- **Hook execution scope**:
+  - `Daily snapshot only (Recommended)` (default): Pre/post hooks only execute during the configured daily snapshot cycle (e.g. 04:00 AM). Hourly snapshots proceed silently without interrupting workloads.
+  - `All snapshot intervals`: Pre/post hooks execute across all snapshot intervals (Hourly, Daily, Weekly...).
 
 ##### Workload Pause & Resume Recipes
 
@@ -323,7 +331,8 @@ Configures your Unraid server to receive incoming backups from buddies or extern
 - **Buddy Name**: Friendly label to identify this buddy (e.g. `Alex (Offsite)`, `Bob (TrueNAS)`).
 - **Enable**: Allow incoming connections for this buddy.
 - **Buddy's SSH public key**: Paste buddy's public SSH key (restricted to `restrict_zfs` in `authorized_keys`).
-- **Destination parent dataset**: Dedicated sub-dataset where your buddy's backups live (e.g. `disk1/buddy_backups` or `cache/appdata`).
+- **Destination parent dataset**: Dedicated parent container dataset where your buddy's backups live (e.g. `disk1/buddy_backups`, `cache/appdata`, or `cache/domains`).
+  - **Parent Container Model**: Always select an existing parent container dataset. Do not manually create child datasets on the receiver before replication; BuddyBackup delegates OpenZFS permissions (`create,mount,receive`) on the parent container so that incoming child datasets (e.g. `cache/domains/MintCinnamon`) are created automatically during the initial replication. Pre-creating an empty child dataset will cause Syncoid to reject the initial send with *"Target exists but has no snapshots matching"*.
   - Must be a dedicated sub-dataset (contains a `/`), not a bare root disk or pool. Overlapping datasets across buddies are disallowed for isolation.
 - **Immutable dataset** (default: `Yes`):
   - When enabled (`Yes`), the dataset is configured with `readonly=on`, `mountpoint=none`, `setuid=off`, and `exec=off` to keep incoming backups immutable and isolated from Unraid's VFS tree. Restoring via the Restore Wizard creates writable datasets.
@@ -343,6 +352,14 @@ Configures your Unraid server to receive incoming backups from buddies or extern
 > **Receiving from TrueNAS SCALE or Proxmox VE?**  
 > Sudo mode is not supported on Unraid (`restrict_zfs` blocks `sudo`). In TrueNAS, keep **Use Sudo For ZFS Commands** unchecked and **Snapshot Retention Policy** set to **None** (destructive `zfs destroy` is rejected on Unraid; Unraid Sanoid manages retention locally).
 
+> [!TIP]
+> **Hot-Standby & Like-for-Like Multi-Dataset Replication**:  
+> If you are setting up a hot-standby secondary server replicating multiple distinct datasets like-for-like (e.g. `cache/appdata` and `cache/domains` without a common parent dataset), you can create multiple entries under **Buddy's Backups** using the **same sender SSH public key** with **Immutable dataset** set to `No`. BuddyBackup automatically consolidates authorization in `authorized_keys`, granting the sender restricted access across all configured destination datasets while tracking telemetry independently per buddy card.
+> 
+> **How to structure hot-standby jobs:**
+> - **Replicating individual child datasets (e.g. a specific VM)**: On the receiver, select the parent container `cache/domains`. On the sender, specify `source_dataset="cache/domains/MintCinnamon"` and `destination_dataset="cache/domains/MintCinnamon"`.
+> - **Replicating all child datasets under a parent (e.g. all VMs)**: On the receiver, select the parent container `cache/domains`. On the sender, set `source_dataset="cache/domains"`, **Backup child datasets: Yes**, **Skip parent dataset: Yes**, and `destination_dataset="cache/domains"`. Syncoid will skip the parent container and replicate each child VM directly under `cache/domains`.
+
 ---
 
 ### 4. Advanced Settings
@@ -353,6 +370,7 @@ Fine-tune daemon settings, alert thresholds, and security overrides.
 
 #### General
 - **Use UTC timezone** (default: `No`): Uses UTC timestamps (`TZ=UTC`) for snapshot creation, Sanoid cron, and manual snapshot naming. Useful to align timestamps between servers in different timezones.
+- **Suggested sub-dataset delimiter** (default: `_` Underscore): Delimiter character (`_` Underscore or `-` Dash) used to replace path separators in source dataset names when suggesting destination sub-dataset paths (e.g. `cache/appdata` suggests `disk1/buddy_backups/cache_appdata` with underscore, or `disk1/buddy_backups/cache-appdata` with dash).
 
 #### Dashboard Panel & Alert Thresholds
 Configure when status indicators turn warning or alert on the dashboard and task cards (leave empty or `0` to disable):

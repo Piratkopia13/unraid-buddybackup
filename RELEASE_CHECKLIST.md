@@ -212,10 +212,12 @@ With the release candidate committed and version bumped, execute the comprehensi
 - **Configuration Migration**: Verify configuration written by older releases loads seamlessly without loss of settings.
 
 ### 3.3 Generic Host & TrueNAS SCALE Verification
-- **Generic OpenZFS host smoke**: Run the generic smoke test against `nodeC`:
+- **Generic OpenZFS host smoke (release-gate stage)**: `run-release-gate.ps1` runs the generic smoke automatically after the matrix. For the WSL/QEMU provider it first auto-provisions the local `nodeC` VM when `nodes.nodeC.host` is `127.0.0.1` (`releaseGate.genericSmoke.autoProvisionNodeC`, default `true`). Verify the stage passed in the run manifest (`summary.genericSmoke`) and the `Generic Host` column of [`testlab/release-history/README.md`](file:///y:/testlab/release-history/README.md). A missing or unreachable `nodeC` fails the gate; `-SkipGenericSmoke` records the stage as skipped and must only be used for labs without a generic host.
+- **Generic OpenZFS host smoke (standalone)**: Run the smoke directly when debugging or when using a provider without auto-provisioning:
   ```powershell
   powershell -ExecutionPolicy Bypass -File ./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute
   ```
+  The WSL/QEMU provider only boots `nodeA`/`nodeB`; provision a local throwaway `nodeC` with `./testlab/scripts/provision-nodec-wsl-qemu.ps1 -Execute` (prints the `nodes.nodeC` block to add to the lab config) or point `nodes.nodeC` at any SSH-reachable Debian-based OpenZFS host with a pool already created (default `bbpool`, non-22 forwarded localhost port for local runs). See the *Generic node and TrueNAS SCALE coverage* section of [`testlab/README.md`](file:///y:/testlab/README.md) for the config snippet and reachability rules.
 - **TrueNAS SCALE validation**: If changes touch `generic_host_setup.sh`, allowlist scoping, sudo mode, or generic host UI, complete all checks in [`testlab/MANUAL-SCALE-CHECKLIST.md`](file:///y:/testlab/MANUAL-SCALE-CHECKLIST.md):
   - Setup command generation & execution on TrueNAS SCALE.
   - Persistent allowlist location verified (`/mnt/<pool>/.buddybackup/`).
@@ -297,7 +299,7 @@ With the release candidate committed and version bumped, execute the comprehensi
 | 5 | Packaging & checksum sync | `tar`, `Get-FileHash` | `buddybackup.txz` built, `pkgMD5` matches in `.plg` |
 | 6 | Clean release candidate commit | `git commit` on `dev` | Worktree clean for release gate execution |
 | 7 | Testlab automated release gate | `run-release-gate.ps1 -Execute` | All matrix scenarios pass, history files written |
-| 8 | TrueNAS SCALE & generic smoke | `run-generic-smoke.ps1` | Raw receive & replication verify cleanly |
+| 8 | TrueNAS SCALE & generic smoke | `run-release-gate.ps1` (genericHost stage) + manual SCALE checklist | Generic host stage passes; raw receive & replication verify cleanly |
 | 9 | WebGUI Light & Dark theme review | Browser inspection | UI renders cleanly under both Unraid themes |
 | 10 | Commit testlab release history | `git commit` on `dev` | Test history recorded in repository |
 | 11 | Merge to `main` and push tag | `git merge dev` & `git tag` | `main` updated, tag pushed to GitHub |

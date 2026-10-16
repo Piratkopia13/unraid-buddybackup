@@ -9,8 +9,24 @@ $backups_config_path = "$plugin_path/backups.cfg";
 $sanoid_config_path = "$plugin_path/sanoid.conf";
 $extra_sanoid_config_path = "$plugin_path/snapshots.cfg";
 $sanoid_cron_path = "$plugin_path/sanoid.cron";
-$tmp_recv_dataset_path = "/tmp/buddybackup-recv-dest";
+$run_dir = "/var/run/buddybackup";
+$tmp_recv_dataset_path = "$run_dir/recv-dest";
+$tmp_incoming_json_path = "$run_dir/incoming.json";
 $incoming_config_path = "$plugin_path/incoming.cfg";
+
+function ensure_runtime_dir() {
+    global $run_dir;
+    if (!is_dir($run_dir)) {
+        @mkdir($run_dir, 0770, true);
+    }
+    if (is_dir($run_dir)) {
+        if (function_exists('posix_getuid') && posix_getuid() === 0) {
+            @chown($run_dir, 'root');
+            @chgrp($run_dir, 'buddybackup');
+            @chmod($run_dir, 0770);
+        }
+    }
+}
 
 $buddybackup_path = '/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin';
 $current_path = getenv('PATH') ?: '';
@@ -194,57 +210,106 @@ function normalize_hook_failure_mode($value) {
     return ((string)$value === 'warn') ? 'warn' : 'abort';
 }
 
-function read_receive_destination_dataset(&$error_message = null) {
-    global $tmp_recv_dataset_path, $incoming_config_path;
+function normalize_snapshot_time($hour, $min) {
+    if ($hour === null || $hour === '' || $min === null || $min === '') {
+        return array('', '');
+    }
+    $hour_str = trim((string)$hour);
+    $min_str = trim((string)$min);
+    if (!ctype_digit($hour_str) || !ctype_digit($min_str)) {
+        return array('', '');
+    }
+    $h = (int)$hour_str;
+    $m = (int)$min_str;
+    if ($h < 0 || $h > 23 || $m < 0 || $m > 59) {
+        return array('', '');
+    }
+    return array((string)$h, (string)$m);
+}
+
+function read_receive_destination_datasets(&$error_message = null) {
+    global $tmp_recv_dataset_path, $incoming_config_path, $tmp_incoming_json_path;
+
+    $datasets = array();
 
     // Check environment variable BUDDY_DATASET (set by restrict_zfs for current SSH connection)
     $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
     if ($env_dataset !== '') {
-        $first = trim(explode(',', $env_dataset)[0]);
-        if (is_valid_zfs_dataset_name($first)) {
-            return $first;
+        foreach (explode(',', $env_dataset) as $part) {
+            $ds = trim($part);
+            if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                $datasets[] = $ds;
+            }
+        }
+        if (!empty($datasets)) {
+            return $datasets;
         }
     }
 
-    // Check incoming.cfg
-    if (file_exists($incoming_config_path)) {
+    // Check incoming.cfg or /var/run/buddybackup/incoming.json (or fallback /tmp/buddybackup-incoming.json)
+    $incoming_cfg = null;
+    if (file_exists($incoming_config_path) && is_readable($incoming_config_path)) {
         $incoming_cfg = parse_ini_file($incoming_config_path, true);
-        if (is_array($incoming_cfg)) {
-            $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
-            if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
-                $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
-                if (is_valid_zfs_dataset_name($ds)) {
-                    return $ds;
-                }
+    } else if (file_exists($tmp_incoming_json_path) && is_readable($tmp_incoming_json_path) && !is_link($tmp_incoming_json_path)) {
+        $incoming_cfg = json_decode(file_get_contents($tmp_incoming_json_path), true);
+    } else if (file_exists("/tmp/buddybackup-incoming.json") && is_readable("/tmp/buddybackup-incoming.json") && !is_link("/tmp/buddybackup-incoming.json")) {
+        $incoming_cfg = json_decode(file_get_contents("/tmp/buddybackup-incoming.json"), true);
+    }
+    if (is_array($incoming_cfg)) {
+        $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
+        if ($env_uid !== '' && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
+            $ds = trim($incoming_cfg[$env_uid]['destination_dataset']);
+            if (is_valid_zfs_dataset_name($ds)) {
+                return array($ds);
             }
-            foreach ($incoming_cfg as $uid => $buddy) {
-                if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
-                    $ds = trim($buddy['destination_dataset']);
-                    if (is_valid_zfs_dataset_name($ds)) {
-                        return $ds;
-                    }
+        }
+        foreach ($incoming_cfg as $uid => $buddy) {
+            if (($buddy['enable'] ?? '') === 'yes' && !empty($buddy['destination_dataset'])) {
+                $ds = trim($buddy['destination_dataset']);
+                if (is_valid_zfs_dataset_name($ds) && !in_array($ds, $datasets, true)) {
+                    $datasets[] = $ds;
                 }
             }
         }
+        if (!empty($datasets)) {
+            return $datasets;
+        }
     }
 
-    if (!file_exists($tmp_recv_dataset_path)) {
-        $error_message = 'Buddy receive destination dataset is not configured.';
+    if (file_exists($tmp_recv_dataset_path) && !is_link($tmp_recv_dataset_path)) {
+        $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
+        if ($dataset !== '' && is_valid_zfs_dataset_name($dataset)) {
+            return array($dataset);
+        }
+    } else if (file_exists("/tmp/buddybackup-recv-dest") && !is_link("/tmp/buddybackup-recv-dest")) {
+        $dataset = trim((string)file_get_contents("/tmp/buddybackup-recv-dest"));
+        if ($dataset !== '' && is_valid_zfs_dataset_name($dataset)) {
+            return array($dataset);
+        }
+    }
+
+    $error_message = 'Buddy receive destination dataset is not configured.';
+    return array();
+}
+
+function read_receive_destination_dataset(&$error_message = null, $target_dataset = null) {
+    $all_datasets = read_receive_destination_datasets($error_message);
+    if (empty($all_datasets)) {
         return null;
     }
 
-    $dataset = trim((string)file_get_contents($tmp_recv_dataset_path));
-    if ($dataset === '') {
-        $error_message = 'Buddy receive destination dataset is not configured.';
+    if (!empty($target_dataset)) {
+        $target = trim($target_dataset);
+        foreach ($all_datasets as $ds) {
+            if ($target === $ds || str_starts_with($target, $ds . '/')) {
+                return $ds;
+            }
+        }
+        $error_message = "Target dataset '$target' is not in the allowed destination datasets.";
         return null;
     }
 
-    if (!is_valid_zfs_dataset_name($dataset)) {
-        $error_message = 'Buddy receive destination dataset is invalid.';
-        return null;
-    }
-
-    return $dataset;
+    return $all_datasets[0];
 }
 
 function read_zfs_property_value($dataset, $property, &$error_message = null) {
@@ -267,11 +332,15 @@ function read_zfs_property_value($dataset, $property, &$error_message = null) {
     return $value;
 }
 
-function write_probe_zfs_response($status, $dataset = null, $message = null) {
+function write_probe_zfs_response($status, $dataset = null, $message = null, $datasets = null) {
     $response = array('status' => $status);
 
     if ($dataset !== null) {
         $response['dataset'] = $dataset;
+    }
+
+    if ($datasets !== null && is_array($datasets)) {
+        $response['datasets'] = array_values($datasets);
     }
 
     if ($message !== null) {
@@ -377,6 +446,10 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
     }
 
     if ($cfg['type'] == 'remote') {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            return null;
+        }
         return build_shell_command(array(
             $rc,
             'send_backup',
@@ -387,7 +460,7 @@ function build_send_backup_command($cfg, $uid, &$error_message = null) {
             $cfg['destination_dataset'],
             $uid,
             '',
-            '',
+            $identity['port'],
             $skip_parent,
             $pre_hook,
             $post_hook,
@@ -430,7 +503,13 @@ function build_create_snapshot_and_send_command($cfg, $uid, &$error_message = nu
     $skip_parent = (($cfg['skip_parent'] ?? 'no') === 'yes' && ($cfg['recursive'] ?? '') === 'yes') ? 'yes' : 'no';
     $remote_user = '';
     $remote_port = '';
-    if ($cfg['type'] == 'remote_generic') {
+    if ($cfg['type'] == 'remote') {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            return null;
+        }
+        $remote_port = $identity['port'];
+    } else if ($cfg['type'] == 'remote_generic') {
         $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
         if ($identity === null) {
             return null;
@@ -554,7 +633,9 @@ function ensure_incoming_config_migrated() {
 }
 
 function sync_incoming_buddies() {
-    global $rc, $incoming_config_path, $empath, $tmp_recv_dataset_path;
+    global $rc, $incoming_config_path, $empath, $tmp_recv_dataset_path, $tmp_incoming_json_path;
+
+    ensure_runtime_dir();
 
     ensure_incoming_config_migrated();
 
@@ -579,13 +660,22 @@ function sync_incoming_buddies() {
         if (file_exists($tmp_recv_dataset_path)) {
             @unlink($tmp_recv_dataset_path);
         }
+        if (file_exists($tmp_incoming_json_path)) {
+            @unlink($tmp_incoming_json_path);
+        }
+        if (file_exists("/tmp/buddybackup-recv-dest")) {
+            @unlink("/tmp/buddybackup-recv-dest");
+        }
+        if (file_exists("/tmp/buddybackup-incoming.json")) {
+            @unlink("/tmp/buddybackup-incoming.json");
+        }
         return;
     }
 
     passthru($rc . ' setup_buddy_user');
 
-    $authorized_keys = "";
     $first_dataset = null;
+    $key_groups = array();
 
     foreach ($enabled_buddies as $uid => $buddy) {
         $dataset = trim($buddy['destination_dataset']);
@@ -620,7 +710,26 @@ function sync_incoming_buddies() {
         $trimmed_key = trim($first_line ?: '');
         if ($trimmed_key === '') continue;
 
-        $cmd_line = "$empath/deps/restrict_zfs --dataset " . escapeshellarg($dataset) . " --uid " . escapeshellarg($uid);
+        if (!isset($key_groups[$trimmed_key])) {
+            $key_groups[$trimmed_key] = array(
+                'uids' => array(),
+                'datasets' => array(),
+            );
+        }
+        $key_groups[$trimmed_key]['uids'][] = $uid;
+        if (!in_array($dataset, $key_groups[$trimmed_key]['datasets'], true)) {
+            $key_groups[$trimmed_key]['datasets'][] = $dataset;
+        }
+    }
+
+    $authorized_keys = "";
+    foreach ($key_groups as $trimmed_key => $group) {
+        $primary_uid = $group['uids'][0];
+        $dataset_flags = "";
+        foreach ($group['datasets'] as $ds) {
+            $dataset_flags .= " --dataset " . escapeshellarg($ds);
+        }
+        $cmd_line = "$empath/deps/restrict_zfs" . $dataset_flags . " --uid " . escapeshellarg($primary_uid);
         $authorized_keys .= 'restrict,command="' . str_replace('"', '\"', $cmd_line) . '" ' . $trimmed_key . "\n";
     }
 
@@ -633,10 +742,36 @@ function sync_incoming_buddies() {
     }
 
     if ($first_dataset !== null) {
+        if (is_link($tmp_recv_dataset_path)) {
+            @unlink($tmp_recv_dataset_path);
+        }
         file_put_contents($tmp_recv_dataset_path, $first_dataset);
+        @chmod($tmp_recv_dataset_path, 0640);
+        if (function_exists('posix_getuid') && posix_getuid() === 0) {
+            @chown($tmp_recv_dataset_path, 'root');
+            @chgrp($tmp_recv_dataset_path, 'buddybackup');
+        }
     }
 
-    if (file_exists("/tmp/buddybackup-buddy")) {
+    $incoming_map = array();
+    foreach ($enabled_buddies as $uid => $buddy) {
+        $incoming_map[$uid] = array(
+            'name' => $buddy['name'] ?? 'Buddy',
+            'enable' => $buddy['enable'] ?? 'yes',
+            'destination_dataset' => trim($buddy['destination_dataset']),
+        );
+    }
+    if (is_link($tmp_incoming_json_path)) {
+        @unlink($tmp_incoming_json_path);
+    }
+    file_put_contents($tmp_incoming_json_path, json_encode($incoming_map, JSON_PRETTY_PRINT));
+    @chmod($tmp_incoming_json_path, 0640);
+    if (function_exists('posix_getuid') && posix_getuid() === 0) {
+        @chown($tmp_incoming_json_path, 'root');
+        @chgrp($tmp_incoming_json_path, 'buddybackup');
+    }
+
+    if (file_exists("/tmp/buddybackup-buddy") && !is_link("/tmp/buddybackup-buddy")) {
         @unlink("/tmp/buddybackup-buddy");
     }
 }
@@ -785,19 +920,42 @@ function update_sanoid_conf() {
             $post_hook = str_replace(array("\r", "\n"), '', trim((string)($section['post_snapshot_script'] ?? '')));
             $hook_timeout = normalize_hook_timeout($section['hook_timeout'] ?? '');
             $hook_failure_mode = normalize_hook_failure_mode($section['hook_failure_mode'] ?? '');
+            $hook_scope = trim((string)($section['hook_scope'] ?? ''));
             $trigger = trim((string)($section['trigger'] ?? ''));
-            if ($trigger === 'no') {
+            if ($trigger === 'no' || !preg_match('/^[A-Za-z0-9_-]+$/', $trigger)) {
                 $trigger = '';
             }
 
             foreach ($section as $key => $value) {
-                if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode'), true)) {
+                if (in_array($key, array('dataset', 'trigger', 'pre_snapshot_script', 'post_snapshot_script', 'hook_timeout', 'hook_failure_mode', 'hook_scope', 'daily_hour', 'daily_min', 'weekly_hour', 'weekly_min', 'monthly_hour', 'monthly_min', 'yearly_hour', 'yearly_min'), true)) {
+                    continue;
+                }
+                if ($key === 'recursive') {
+                    $recursive_mode = ($value === 'yes' || $value === 'zfs') ? 'zfs' : 'no';
+                    $sanoid_conf_content .= "    recursive = $recursive_mode\n";
                     continue;
                 }
                 $sanoid_conf_content .= "    $key = $value\n";
             }
 
+            list($daily_hour, $daily_min) = normalize_snapshot_time($section['daily_hour'] ?? '', $section['daily_min'] ?? '');
+            if ($daily_hour !== '' && $daily_min !== '') {
+                $sanoid_conf_content .= "    daily_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    daily_min = $daily_min\n";
+                $sanoid_conf_content .= "    weekly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    weekly_min = $daily_min\n";
+                $sanoid_conf_content .= "    monthly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    monthly_min = $daily_min\n";
+                $sanoid_conf_content .= "    yearly_hour = $daily_hour\n";
+                $sanoid_conf_content .= "    yearly_min = $daily_min\n";
+            }
+
+            $daily_filter = '[ -n "${SANOID_TYPES:-}" ] && case "${SANOID_TYPES}" in *daily*) ;; *) exit 0;; esac; ';
+
             if ($pre_hook !== '') {
+                if ($hook_scope === 'daily') {
+                    $pre_hook = $daily_filter . $pre_hook;
+                }
                 $sanoid_conf_content .= "    pre_snapshot_script = $pre_hook\n";
                 if ($hook_failure_mode === 'abort') {
                     $sanoid_conf_content .= "    no_inconsistent_snapshot = 1\n";
@@ -810,15 +968,21 @@ function update_sanoid_conf() {
 
             if ($post_hook !== '' && $trigger !== '') {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
-                $escaped_post_hook = addcslashes($post_hook, "\\\"$");
+                $escaped_post_hook = addcslashes($post_hook, "\\\"$`");
                 $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
+                if ($hook_scope === 'daily') {
+                    $post_cmd .= " \"daily\"";
+                }
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             } else if ($post_hook !== '') {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                if ($hook_scope === 'daily') {
+                    $post_hook = $daily_filter . $post_hook;
+                }
                 $sanoid_conf_content .= "    post_snapshot_script = $post_hook\n";
             } else if ($trigger !== '') {
-                $cmd = "$empath/scripts/rc.buddybackup.php send_backup \"$trigger\" 2>&1 | $log_script";
-                $sanoid_conf_content .= "    post_snapshot_script = $cmd\n";
+                $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"\" \"30\" \"$trigger\"";
+                $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             }
         }
     }
@@ -840,7 +1004,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
@@ -855,6 +1019,70 @@ function add_backup_cron_file($uid, $cfg) {
     $cron_content .= $cfg["backup_cron"] . " flock -n \"/var/lock/buddybackup-$uid\" -c \"$empath/scripts/rc.buddybackup.php send_backup $uid\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents("$plugin_path/backup-$uid.cron", $cron_content)!==false);
     BB_VERBOSE("Created $plugin_path/backup-$uid.cron");
+}
+
+function scan_remote_known_hosts($host, $port) {
+    $command = 'ssh-keyscan -T 5';
+    if ((string)$port !== '' && (string)$port !== '22') {
+        $command .= ' -p '.escapeshellarg($port);
+    }
+    $command .= ' '.escapeshellarg($host).' 2>/dev/null';
+
+    $keys = [];
+    $key_types = [];
+    $standard_types = ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ssh-rsa'];
+    $standard_types_found = 0;
+    $empty_scans = 0;
+    // ssh-keyscan can return only a subset of the offered host key types while
+    // the peer is busy. Scan a few times and merge the results (deduplicated by
+    // key material), so a partial scan cannot replace a complete known_hosts
+    // entry and break host key verification later. Stop early once every
+    // common key type has been seen, or once the peer is consistently
+    // unreachable.
+    for ($attempt = 0; $attempt < 5; $attempt++) {
+        $scan = shell_exec($command);
+        if (!is_string($scan) || trim($scan) === '') {
+            $empty_scans++;
+            if ($empty_scans >= 2) {
+                break;
+            }
+            continue;
+        }
+        $empty_scans = 0;
+
+        foreach (preg_split('/\r?\n/', $scan) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            $parts = preg_split('/\s+/', $line);
+            if (!is_array($parts) || count($parts) < 3) {
+                continue;
+            }
+            $material = $parts[1].' '.$parts[2];
+            if (!isset($keys[$material])) {
+                $keys[$material] = $line;
+            }
+            $key_type = $parts[1];
+            if (!isset($key_types[$key_type])) {
+                $key_types[$key_type] = true;
+                if (in_array($key_type, $standard_types, true)) {
+                    $standard_types_found++;
+                }
+            }
+        }
+
+        if ($standard_types_found >= count($standard_types)) {
+            break;
+        }
+    }
+
+    if (empty($keys)) {
+        return null;
+    }
+
+    sort($keys, SORT_STRING);
+    return implode("\n", $keys);
 }
 
 function update_backups_from_config() {
@@ -924,6 +1152,11 @@ function update_backups_from_config() {
                 if ($identity !== null) {
                     $port = $identity['port'];
                 }
+            } else if ($type == 'remote') {
+                $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '');
+                if ($identity !== null) {
+                    $port = $identity['port'];
+                }
             }
             $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
         }
@@ -933,6 +1166,8 @@ function update_backups_from_config() {
             $allow_empty = array('destination_host');
         } else if ($type == 'remote_generic') {
             $allow_empty = array('destination_user', 'destination_port');
+        } else if ($type == 'remote') {
+            $allow_empty = array('destination_port');
         }
 
         $any_empty = false;
@@ -958,13 +1193,9 @@ function update_backups_from_config() {
 
     foreach ($destination_host_keys as $destination_host_key) {
         $entry = $destination_hosts[$destination_host_key];
-        $command = 'ssh-keyscan';
-        if ($entry['port'] != '22') {
-            $command .= ' -p '.escapeshellarg($entry['port']);
-        }
-        $command .= ' '.escapeshellarg($entry['host']).' 2>/dev/null';
-        if ($key = shell_exec($command)) {
-            $known_hosts_content .= rtrim($key, "\r\n") . "\n";
+        $scanned_keys = scan_remote_known_hosts($entry['host'], $entry['port']);
+        if ($scanned_keys !== null) {
+            $known_hosts_content .= $scanned_keys . "\n";
         }
     }
 
@@ -1000,6 +1231,11 @@ function restore_snapshot($argv) {
     BB_LOG("restore_snapshot ".$uid);
 
     if ($cfg["type"] == "remote") {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
         $cmd = build_shell_command(array(
             $GLOBALS['rc'],
             'restore_snapshot',
@@ -1010,6 +1246,8 @@ function restore_snapshot($argv) {
             $argv[5],
             $argv[6],
             $argv[7],
+            $identity['user'],
+            $identity['port'],
         ));
         BB_LOG("remote cmd ".$cmd);
         start_long_running_task_echo_pid($cmd);
@@ -1075,12 +1313,19 @@ function get_available_snapshots($uid) {
         return;
     }
     if ($cfg["type"] == "remote") {
+        $identity = normalize_remote_identity('buddybackup', $cfg['destination_port'] ?? '', $error_message);
+        if ($identity === null) {
+            echo $error_message;
+            return;
+        }
         passthru(build_shell_command(array(
             $rc,
             'get_available_snapshots',
             'remote',
             $cfg["destination_host"],
             $cfg["destination_dataset"],
+            $identity['user'],
+            $identity['port'],
         )));
     } else if ($cfg["type"] == "remote_generic") {
         $identity = resolve_remote_identity_from_cfg($cfg, 'destination', $error_message);
@@ -1109,44 +1354,85 @@ function get_available_snapshots($uid) {
     }
 }
 
-// Write tmp file with timestamp and size of destination dataset. Used in Unraid dashboard.
+// Write runtime telemetry file with timestamp and size of destination dataset. Used in Unraid dashboard.
 function mark_received_backup($target_dataset = null) {
-    global $incoming_config_path, $tmp_recv_dataset_path;
+    global $incoming_config_path, $tmp_recv_dataset_path, $tmp_incoming_json_path, $run_dir;
+
+    ensure_runtime_dir();
 
     $env_uid = getenv('BUDDY_UID') ?: ($_ENV['BUDDY_UID'] ?? '');
     $env_dataset = getenv('BUDDY_DATASET') ?: ($_ENV['BUDDY_DATASET'] ?? '');
 
-    $matched_uid = !empty($env_uid) ? $env_uid : null;
+    $matched_uids = array();
     $dataset = !empty($target_dataset) ? trim($target_dataset) : null;
 
     if ($dataset === null && !empty($env_dataset)) {
         $dataset = trim(explode(',', $env_dataset)[0]);
     }
 
-    if (file_exists($incoming_config_path)) {
+    $incoming_cfg = null;
+    $has_incoming_config = false;
+    if (file_exists($incoming_config_path) && is_readable($incoming_config_path)) {
         $incoming_cfg = parse_ini_file($incoming_config_path, true);
-        if (is_array($incoming_cfg)) {
-            if ($matched_uid !== null && empty($dataset) && isset($incoming_cfg[$matched_uid]['destination_dataset'])) {
-                $dataset = trim($incoming_cfg[$matched_uid]['destination_dataset']);
+        $has_incoming_config = true;
+    } else if (file_exists($tmp_incoming_json_path) && is_readable($tmp_incoming_json_path) && !is_link($tmp_incoming_json_path)) {
+        $incoming_cfg = json_decode(file_get_contents($tmp_incoming_json_path), true);
+        $has_incoming_config = true;
+    } else if (file_exists("/tmp/buddybackup-incoming.json") && is_readable("/tmp/buddybackup-incoming.json") && !is_link("/tmp/buddybackup-incoming.json")) {
+        $incoming_cfg = json_decode(file_get_contents("/tmp/buddybackup-incoming.json"), true);
+        $has_incoming_config = true;
+    }
+
+    if (is_array($incoming_cfg)) {
+        // Prioritize matching dataset against incoming entries
+        if (!empty($dataset)) {
+            // 1. Exact match
+            foreach ($incoming_cfg as $uid => $buddy) {
+                $b_ds = trim($buddy['destination_dataset'] ?? '');
+                if ($b_ds !== '' && $dataset === $b_ds) {
+                    $matched_uids[] = $uid;
+                }
             }
-            if ($matched_uid === null && !empty($dataset)) {
+            // 2. Longest prefix match if no exact match
+            if (empty($matched_uids)) {
+                $best_prefix_len = -1;
+                $prefix_matches = array();
                 foreach ($incoming_cfg as $uid => $buddy) {
                     $b_ds = trim($buddy['destination_dataset'] ?? '');
-                    if ($b_ds !== '' && ($dataset === $b_ds || str_starts_with($dataset, $b_ds . '/'))) {
-                        $matched_uid = $uid;
-                        $dataset = $b_ds;
-                        break;
+                    if ($b_ds !== '' && str_starts_with($dataset, $b_ds . '/')) {
+                        $len = strlen($b_ds);
+                        if ($len > $best_prefix_len) {
+                            $best_prefix_len = $len;
+                            $prefix_matches = array($uid);
+                        } else if ($len === $best_prefix_len) {
+                            $prefix_matches[] = $uid;
+                        }
                     }
                 }
+                $matched_uids = $prefix_matches;
             }
-            if (empty($dataset) && $matched_uid === null) {
-                $enabled_buddies = array_filter($incoming_cfg, function($b) {
-                    return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
-                });
-                if (count($enabled_buddies) === 1) {
-                    $matched_uid = array_key_first($enabled_buddies);
-                    $dataset = trim($enabled_buddies[$matched_uid]['destination_dataset']);
-                }
+            if (!empty($matched_uids)) {
+                $primary = $matched_uids[0];
+                $dataset = trim($incoming_cfg[$primary]['destination_dataset'] ?? $dataset);
+            }
+        }
+
+        // Fall back to environment UID if no dataset match
+        if (empty($matched_uids) && !empty($env_uid) && isset($incoming_cfg[$env_uid])) {
+            $matched_uids[] = $env_uid;
+            if (empty($dataset) && isset($incoming_cfg[$env_uid]['destination_dataset'])) {
+                $dataset = trim($incoming_cfg[$env_uid]['destination_dataset']);
+            }
+        }
+
+        // Fallback for single enabled buddy
+        if (empty($dataset) && empty($matched_uids)) {
+            $enabled_buddies = array_filter($incoming_cfg, function($b) {
+                return ($b['enable'] ?? '') === 'yes' && !empty($b['destination_dataset']);
+            });
+            if (count($enabled_buddies) === 1) {
+                $matched_uids[] = array_key_first($enabled_buddies);
+                $dataset = trim($enabled_buddies[$matched_uids[0]]['destination_dataset']);
             }
         }
     }
@@ -1161,6 +1447,11 @@ function mark_received_backup($target_dataset = null) {
         return;
     }
 
+    // Strip snapshot suffix if present before querying used property
+    if (strpos($dataset, '@') !== false) {
+        $dataset = explode('@', $dataset)[0];
+    }
+
     $error_message = null;
     $dest_size = read_zfs_property_value($dataset, 'used', $error_message);
     if ($dest_size === null) {
@@ -1169,29 +1460,72 @@ function mark_received_backup($target_dataset = null) {
     }
 
     $info = "last_ran=".time()."\ndest_size=$dest_size";
-    if ($matched_uid !== null && $matched_uid !== '') {
-        file_put_contents("/tmp/buddybackup-buddy-$matched_uid", $info);
+    if (!empty($matched_uids)) {
+        foreach ($matched_uids as $matched_uid) {
+            if ($matched_uid !== '') {
+                $buddy_file = "$run_dir/buddy-$matched_uid";
+                if (is_link($buddy_file)) {
+                    @unlink($buddy_file);
+                }
+                file_put_contents($buddy_file, $info);
+                @chmod($buddy_file, 0660);
+            }
+        }
     }
-    if (!file_exists($incoming_config_path)) {
-        file_put_contents("/tmp/buddybackup-buddy", $info);
-    } else if (file_exists("/tmp/buddybackup-buddy")) {
+    if (!$has_incoming_config) {
+        $fallback_file = "$run_dir/buddy";
+        if (is_link($fallback_file)) {
+            @unlink($fallback_file);
+        }
+        file_put_contents($fallback_file, $info);
+        @chmod($fallback_file, 0660);
+    } else if (file_exists("$run_dir/buddy")) {
+        @unlink("$run_dir/buddy");
+    }
+    if (file_exists("/tmp/buddybackup-buddy") && !is_link("/tmp/buddybackup-buddy")) {
         @unlink("/tmp/buddybackup-buddy");
     }
 }
 
 function probe_zfs($target_dataset = null) {
     $error_message = null;
-    $dataset = $target_dataset;
-    if (empty($dataset)) {
-        $dataset = read_receive_destination_dataset($error_message);
-    }
-    if ($dataset === null) {
+    $all_datasets = read_receive_destination_datasets($error_message);
+    if (empty($all_datasets)) {
         write_probe_zfs_response('error', null, $error_message);
         exit(1);
     }
 
-    if (read_zfs_property_value($dataset, 'used', $error_message) !== null) {
-        write_probe_zfs_response('ok', $dataset, null);
+    if (!empty($target_dataset)) {
+        $target = trim($target_dataset);
+        $matched_ds = null;
+        foreach ($all_datasets as $ds) {
+            if ($target === $ds || str_starts_with($target, $ds . '/')) {
+                $matched_ds = $ds;
+                break;
+            }
+        }
+        if ($matched_ds === null) {
+            write_probe_zfs_response('error', null, "Target dataset '$target' is not within the receiver's configured datasets.");
+            exit(1);
+        }
+
+        $probe_ds = $target;
+        if (read_zfs_property_value($probe_ds, 'used', $error_message) === null) {
+            if ($probe_ds !== $matched_ds && read_zfs_property_value($matched_ds, 'used', $error_message) !== null) {
+                $probe_ds = $matched_ds;
+            } else {
+                write_probe_zfs_response('error', null, $error_message);
+                exit(1);
+            }
+        }
+
+        write_probe_zfs_response('ok', $target, null, $all_datasets);
+        return;
+    }
+
+    $first_dataset = $all_datasets[0];
+    if (read_zfs_property_value($first_dataset, 'used', $error_message) !== null) {
+        write_probe_zfs_response('ok', $first_dataset, null, $all_datasets);
         return;
     }
 
@@ -1277,9 +1611,18 @@ switch ($argv[1] ?? '') {
                 'push',
             )));
         } else {
-            $host = escapeshellarg($argv[2] ?? '');
-            $destination_dataset = escapeshellarg($argv[3] ?? '');
-            passthru($rc.' test_connection '.$host.' '.$destination_dataset);
+            $identity = normalize_remote_identity('buddybackup', $port, $error_message);
+            if ($identity === null) {
+                echo $error_message;
+                break;
+            }
+            passthru(build_shell_command(array(
+                $rc,
+                'test_connection',
+                $argv[2] ?? '',
+                $argv[3] ?? '',
+                $identity['port'],
+            )));
         }
         break;
     case 'get_available_snapshots':

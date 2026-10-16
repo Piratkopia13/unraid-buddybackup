@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.10.04">
+  <!ENTITY version      "2026.10.16">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "871274730611e1aa7fcd204ce0440eb1">
+  <!ENTITY pkgMD5        "379190ea3d60e82e2eaf3bb26dcfaac1">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,14 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.10.16
+- Support multi-dataset replication using a single shared SSH key across multiple destination datasets [#38](https://github.com/Piratkopia13/unraid-buddybackup/issues/38)
+- Support custom SSH ports for remote BuddyBackup destinations
+- Configurable daily snapshot time with 1-minute cron heartbeat and asynchronous backup triggers [#25](https://github.com/Piratkopia13/unraid-buddybackup/issues/25)
+- Native atomic ZFS recursion and automatic baseline snapshots for newly created child datasets [#36](https://github.com/Piratkopia13/unraid-buddybackup/issues/36)
+- Automatically restore receiver user and group configuration across server reboots [#37](https://github.com/Piratkopia13/unraid-buddybackup/issues/37)
+- Auto-suggest destination sub-dataset paths from source dataset and detect duplicate destinations [#26](https://github.com/Piratkopia13/unraid-buddybackup/issues/26)
 
 ###2026.10.04
 - Add pre/post snapshot hooks to safely pause and resume VMs, containers, or databases around snapshot creation [#33](https://github.com/Piratkopia13/unraid-buddybackup/issues/33)

@@ -186,6 +186,14 @@ subtest 'current receiver command surface accepted by previously released allowl
         qr/^\Qblocked command: $blocked_cmd\E\r?\n?$/,
         '2026.05.29 buddy blocks parameterized mark_received_backup (necessitating fallback)',
     );
+
+    my $blocked_probe_cmd = qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $dataset};
+    my $blocked_probe_res = run_restrict($previous_release_script, $blocked_probe_cmd);
+    like(
+        $blocked_probe_res->{stderr},
+        qr/^\Qblocked command: $blocked_probe_cmd\E\r?\n?$/,
+        '2026.05.29 buddy blocks parameterized probe_zfs (necessitating fallback)',
+    );
 };
 
 subtest 'older releases still send commands the current allowlist accepts' => sub {
@@ -198,6 +206,7 @@ subtest 'older releases still send commands the current allowlist accepts' => su
         $current_script,
         receiver_command_inventory(0),
         qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php mark_received_backup $dataset},
+        qq{/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $dataset},
     );
 };
 
@@ -305,6 +314,213 @@ BASH_POST
 
     is($? >> 8, 0, 'send_mark_received_backup fallback test exited with 0') or diag("stderr: $err\nstdout: $out");
     like($out, qr/ALL_BASH_TESTS_PASSED/, 'all fallback test scenarios passed');
+};
+
+subtest 'test_connection probe fallback logic' => sub {
+    my $bash_test = <<'BASH';
+set -e
+calls_file=$(mktemp)
+trap 'rm -f "$calls_file"' EXIT
+
+fail_param=0
+fail_base=0
+
+shell_single_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+run_remote_ssh() {
+    local host="$1"
+    local cmd="$2"
+    echo "$cmd" >> "$calls_file"
+    if [[ "$cmd" == *" probe_zfs '"* ]]; then
+        if [[ $fail_param -eq 1 ]]; then
+            return 1
+        fi
+        echo '{"status":"ok","dataset":"cache/domains/MintCinnamon","datasets":["cache/appdata","cache/domains/MintCinnamon"]}'
+        return 0
+    elif [[ "$cmd" == *" probe_zfs" ]]; then
+        if [[ $fail_base -eq 1 ]]; then
+            return 1
+        fi
+        echo '{"status":"ok","dataset":"cache/appdata"}'
+        return 0
+    fi
+    return 1
+}
+
+run_probe_with_fallback() {
+    local host="$1"
+    local destination_dataset="$2"
+
+    local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+    if [[ -n "${destination_dataset}" ]]; then
+        zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $(shell_single_quote "${destination_dataset}")"
+    fi
+    local zfs_probe_result
+    zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" 2>&1)
+    local zfs_probe_status=$?
+
+    if [[ -n "${destination_dataset}" ]] && [[ $zfs_probe_status -ne 0 ]]; then
+        local fallback_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+        local fallback_probe_result
+        fallback_probe_result=$(run_remote_ssh "${host}" "${fallback_probe_cmd}" 2>&1)
+        local fallback_probe_status=$?
+        if [[ $fallback_probe_status -eq 0 ]] && [[ "${fallback_probe_result}" == \{* ]]; then
+            zfs_probe_cmd="${fallback_probe_cmd}"
+            zfs_probe_result="${fallback_probe_result}"
+            zfs_probe_status=0
+        fi
+    fi
+
+    echo "${zfs_probe_result}"
+    return $zfs_probe_status
+}
+
+# Test 1: Modern receiver (parameterized probe succeeds on first try)
+: > "$calls_file"
+fail_param=0
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "cache/domains/MintCinnamon")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 1 failed: expected 1 call, got ${#calls[@]}"; exit 1; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs 'cache/domains/MintCinnamon'" ]] || { echo "Test 1 cmd mismatch: ${calls[0]}"; exit 1; }
+[[ "$res" == *"MintCinnamon"* ]] || { echo "Test 1 res mismatch: $res"; exit 1; }
+
+# Test 2: Legacy receiver (parameterized probe blocked, fallback succeeds)
+: > "$calls_file"
+fail_param=1
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "cache/domains/MintCinnamon")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 2 ]] || { echo "Test 2 failed: expected 2 calls, got ${#calls[@]}"; exit 2; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs 'cache/domains/MintCinnamon'" ]] || { echo "Test 2 call 0 mismatch: ${calls[0]}"; exit 2; }
+[[ "${calls[1]}" == *"/rc.buddybackup.php probe_zfs" ]] || { echo "Test 2 call 1 mismatch: ${calls[1]}"; exit 2; }
+[[ "$res" == *'"dataset":"cache/appdata"'* ]] || { echo "Test 2 res mismatch: $res"; exit 2; }
+
+# Test 3: Unparameterized probe when destination_dataset is empty
+: > "$calls_file"
+fail_param=0
+fail_base=0
+res=$(run_probe_with_fallback "buddy.example" "")
+readarray -t calls < "$calls_file"
+[[ ${#calls[@]} -eq 1 ]] || { echo "Test 3 failed: expected 1 call, got ${#calls[@]}"; exit 3; }
+[[ "${calls[0]}" == *"/rc.buddybackup.php probe_zfs" ]] || { echo "Test 3 cmd mismatch: ${calls[0]}"; exit 3; }
+
+echo "ALL_PROBE_FALLBACK_TESTS_PASSED"
+BASH
+
+    my $stdin;
+    my $stdout = gensym;
+    my $stderr = gensym;
+    my $pid = open3($stdin, $stdout, $stderr, 'bash', '-s');
+    binmode($stdin, ':raw');
+    print $stdin $bash_test;
+    close $stdin;
+
+    my $out = do { local $/; <$stdout> // '' };
+    my $err = do { local $/; <$stderr> // '' };
+    waitpid($pid, 0);
+
+    is($? >> 8, 0, 'test_connection probe fallback test exited with 0') or diag("stderr: $err\nstdout: $out");
+    like($out, qr/ALL_PROBE_FALLBACK_TESTS_PASSED/, 'all probe fallback test scenarios passed');
+};
+
+# ---------------------------------------------------------------------------
+# Backward compatibility: legacy snapshots.cfg without time directives
+# ---------------------------------------------------------------------------
+subtest 'legacy snapshots.cfg and 15-minute cron upgrade compatibility' => sub {
+    my $rc_php = File::Spec->catfile(
+        $repo_root, 'src', 'usr', 'local', 'emhttp', 'plugins', 'buddybackup', 'scripts', 'rc.buddybackup.php'
+    );
+    plan skip_all => 'rc.buddybackup.php not found' if !-f $rc_php;
+
+    my $workdir = tempdir(CLEANUP => 1);
+    my $plugin_cfg = File::Spec->catfile($workdir, 'plugin.cfg');
+    my $extra_cfg  = File::Spec->catfile($workdir, 'extra_sanoid.cfg');
+    my $incoming_cfg = File::Spec->catfile($workdir, 'buddys.cfg');
+    my $sanoid_cfg = File::Spec->catfile($workdir, 'sanoid.conf');
+    my $cron_file  = File::Spec->catfile($workdir, 'sanoid.cron');
+    my $test_php   = File::Spec->catfile($workdir, 'test_compat.php');
+
+    # 1. Plugin cfg
+    open my $pfh, '>', $plugin_cfg or die "Cannot write $plugin_cfg: $!";
+    print $pfh "ReceiveBackups=\"disable\"\nUtcTimezone=\"no\"\n";
+    close $pfh;
+
+    # 2. Legacy extra_sanoid.cfg (snapshots.cfg) without any time or scope keys
+    open my $efh, '>', $extra_cfg or die "Cannot write $extra_cfg: $!";
+    print $efh <<'CFG';
+[legacy_snap_task]
+dataset="tank/legacy_appdata"
+autosnap="yes"
+autoprune="yes"
+hourly="24"
+daily="7"
+weekly="4"
+monthly="3"
+yearly="0"
+recursive="yes"
+trigger="no"
+CFG
+    close $efh;
+
+    # 3. Simulate existing legacy 15-minute sanoid.cron file from previous version
+    open my $cfh, '>', $cron_file or die "Cannot write $cron_file: $!";
+    print $cfh "*/15 * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"PATH=/usr/local/emhttp/plugins/buddybackup /usr/local/emhttp/plugins/buddybackup/deps/sanoid --configdir=/boot/config/plugins/buddybackup --cron\" 2>&1 | /usr/local/emhttp/plugins/buddybackup/scripts/log.sh\n";
+    close $cfh;
+
+    # 4. PHP test script executing update_sanoid_conf() and enable_sanoid_cron()
+    open my $tfh, '>', $test_php or die "Cannot write $test_php: $!";
+    print $tfh <<"PHP";
+<?php
+\$argv = array('test_compat.php', 'noop');
+require_once '$rc_php';
+
+\$plugin_config_path = '$plugin_cfg';
+\$extra_sanoid_config_path = '$extra_cfg';
+\$incoming_config_path = '$incoming_cfg';
+\$sanoid_config_path = '$sanoid_cfg';
+\$sanoid_cron_path = '$cron_file';
+\$sanoid_bin = '/usr/local/emhttp/plugins/buddybackup/deps/sanoid';
+\$buddybackup_path = '/usr/local/emhttp/plugins/buddybackup';
+\$plugin_path = '$workdir';
+\$log_script = '/usr/local/emhttp/plugins/buddybackup/scripts/log.sh';
+\$rc = '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup';
+
+update_sanoid_conf();
+
+ob_start();
+enable_sanoid_cron();
+ob_end_clean();
+
+echo "SANOID_CONF_START\\n";
+echo file_get_contents('$sanoid_cfg');
+echo "SANOID_CONF_END\\n";
+echo "SANOID_CRON_START\\n";
+echo file_get_contents('$cron_file');
+echo "SANOID_CRON_END\\n";
+PHP
+    close $tfh;
+
+    my $out = `php "$test_php" 2>&1`;
+    is($? >> 8, 0, 'php compat runner exited cleanly');
+
+    my ($conf) = $out =~ /SANOID_CONF_START\n(.*?)\nSANOID_CONF_END/s;
+    ok(defined $conf, 'sanoid.conf generated from legacy config');
+    like($conf, qr/\[tank\/legacy_appdata\]/, 'legacy section generated');
+    like($conf, qr/hourly = 24/, 'hourly retention preserved');
+    like($conf, qr/daily = 7/, 'daily retention preserved');
+    like($conf, qr/recursive = zfs/, 'recursive mode normalized to zfs');
+    unlike($conf, qr/daily_hour/, 'daily_hour cleanly omitted for default fallback');
+    unlike($conf, qr/daily_min/, 'daily_min cleanly omitted for default fallback');
+    unlike($conf, qr/hook_scope/, 'hook_scope not present');
+
+    my ($cron) = $out =~ /SANOID_CRON_START\n(.*?)\nSANOID_CRON_END/s;
+    ok(defined $cron, 'sanoid.cron upgraded successfully');
+    like($cron, qr/^\* \* \* \* \* flock -n \/var\/lock\/buddybackup-sanoid-cron/m, 'upgraded to 1-minute ticker');
+    like($cron, qr/--cache-ttl=60/, 'includes --cache-ttl=60 in upgraded cron');
+    unlike($cron, qr/\*\/15/, 'legacy */15 ticker was removed');
 };
 
 done_testing();

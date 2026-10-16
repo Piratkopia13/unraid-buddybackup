@@ -231,7 +231,11 @@ PHP
         # Permutation 4: snap_trigger_only (trigger only, no hooks)
         my ($trig_sec) = $generated =~ /\[tank\/workload_trigger_only\](.*?)(?=\n\[|\z)/s;
         ok(defined $trig_sec, 'section [tank/workload_trigger_only] exists');
-        like($trig_sec, qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup\.php send_backup "uid_trig_99"/, 'trigger only sec dispatches send_backup');
+        like(
+            $trig_sec,
+            qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_trigger_only" "" "30" "uid_trig_99"/,
+            'trigger only sec dispatches asynchronously via run_snapshot_post_hook_and_trigger'
+        );
         unlike($trig_sec, qr/force_post_snapshot_script/, 'trigger only sec does NOT have force_post_snapshot_script');
         unlike($trig_sec, qr/script_timeout/, 'trigger only sec does NOT set script_timeout');
 
@@ -289,6 +293,9 @@ SH
     $write_script->($mock_php, <<'SH');
 #!/bin/bash
 if [[ "$1" == "send_backup" ]]; then
+    if [[ -n "${SIMULATED_BACKUP_DELAY:-}" && "${SIMULATED_BACKUP_DELAY}" -gt 0 ]]; then
+        sleep "${SIMULATED_BACKUP_DELAY}"
+    fi
     echo "trigger_dispatched uid=$2" >> "$CHAIN_EVENT_LOG"
 fi
 exit 0
@@ -313,19 +320,27 @@ source "$FUNCTIONS_FILE"
 logger() { :; }
 write() { :; }
 
+t_start=$(date +%s)
 run_snapshot_post_hook_and_trigger "$DATASET" "$THAW_HOOK" "30" "$TRIGGER_UID"
+ret=$?
+t_returned=$(date +%s)
+duration=$(( t_returned - t_start ))
+echo "DISPATCH_DURATION=$duration"
+echo "RUN_STATUS=$ret"
+wait
 SH
     $write_script->($harness, $harness_body);
 
     my $run_harness = sub {
         my (%env) = @_;
-        local $ENV{CHAIN_EVENT_LOG}     = $log_file;
-        local $ENV{MOCK_EMPATH}         = $mock_empath;
-        local $ENV{FUNCTIONS_FILE}      = $functions_file;
-        local $ENV{DATASET}             = $env{dataset} // 'tank/appdata';
-        local $ENV{THAW_HOOK}           = $thaw_hook;
-        local $ENV{TRIGGER_UID}         = $env{trigger} // 'trig_abc123';
-        local $ENV{SIMULATED_THAW_EXIT} = $env{thaw_exit} // '0';
+        local $ENV{CHAIN_EVENT_LOG}         = $log_file;
+        local $ENV{MOCK_EMPATH}             = $mock_empath;
+        local $ENV{FUNCTIONS_FILE}          = $functions_file;
+        local $ENV{DATASET}                 = $env{dataset} // 'tank/appdata';
+        local $ENV{THAW_HOOK}               = $thaw_hook;
+        local $ENV{TRIGGER_UID}             = $env{trigger} // 'trig_abc123';
+        local $ENV{SIMULATED_THAW_EXIT}     = $env{thaw_exit} // '0';
+        local $ENV{SIMULATED_BACKUP_DELAY}  = $env{backup_delay} // '0';
         unlink $log_file if -e $log_file;
         my $out = `bash "$harness" 2>&1`;
         my $log = -e $log_file ? slurp($log_file) : '';
@@ -346,6 +361,16 @@ SH
         is(scalar(@lines), 2, 'two events logged even on thaw failure');
         is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed first');
         is($lines[1], 'trigger_dispatched uid=trig_abc123', 'trigger backup dispatched second to avoid deadlock');
+    };
+
+    subtest 'trigger dispatches asynchronously in background without blocking' => sub {
+        my ($log, $out) = $run_harness->(thaw_exit => 0, backup_delay => 2);
+        like($out, qr/RUN_STATUS=0/, 'run_snapshot_post_hook_and_trigger returned 0');
+        like($out, qr/DISPATCH_DURATION=[01]/, 'run_snapshot_post_hook_and_trigger detached trigger without blocking caller');
+        my @lines = grep { length } split /\n/, $log;
+        is(scalar(@lines), 2, 'two events logged after background replication completed');
+        is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed first');
+        is($lines[1], 'trigger_dispatched uid=trig_abc123', 'trigger backup completed in background');
     };
 };
 

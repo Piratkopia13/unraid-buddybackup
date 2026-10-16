@@ -146,6 +146,7 @@ This initial implementation provides:
 - For release-tag-only matrices, dirty worktrees now warn instead of blocking because the installed BuddyBackup artifacts come from published release URLs. Successful execute runs in that mode still publish repository history. `-AllowDirtyWorktree` remains available as an explicit override when you want to suppress the workspace-build cleanliness guard during harness development.
 - `run-release-gate.ps1` only publishes repository history for successful execute runs that do not use `-AllowDirtyWorktree` and either have a clean worktree or install published BuddyBackup releases only. Dry-runs and dirty-worktree override runs still write local durable manifests, but they do not update `testlab/release-history`.
 - Release-gate manifests now include `categoryRollups`, and published repository history shows per-category pass/fail columns such as `pluginCompatibility` and `unraidCompatibility` when the selected matrix defines categories.
+- `run-release-gate.ps1` also runs the generic host smoke as a stage after the matrix, recorded as `summary.genericSmoke` and a `genericHost` category rollup. For `windows-local` labs it auto-provisions the local `nodeC` VM first when `nodes.nodeC.host` is `127.0.0.1`. Pass `-SkipGenericSmoke` to skip the stage, or configure `releaseGate.genericSmoke` (`enabled`, `required`, `autoProvisionNodeC`).
 
 ## Test catalog
 
@@ -157,6 +158,7 @@ This initial implementation provides:
 - `restore-smoke`: also delegates to the functional smoke workflow and reports whether the restore-oriented actions succeeded. If `backup-smoke` already ran in the same cell, the runner reuses the cached functional smoke result instead of re-running the full smoke workflow.
 - `run-functional-smoke.ps1`: can also be run directly against a live provisioned lab. It validates connectivity on both nodes, creates source snapshots on both nodes, runs remote and local backup flows on both nodes, lists available snapshots, restores selected snapshots, and verifies the restored datasets.
 - `run-generic-smoke.ps1`: standalone push smoke against a generic OpenZFS host (Debian-based, same path as Proxmox). It prepares a dataset on the generic node, runs `generic_host_setup.sh` as receiver plus its `--verify` checklist, seeds a `remote_generic` entry on nodeA, runs the connection test (verifying `ZFS receive permissions verified`), pushes real syncoid replication flows through the allowlist, verifies the pushed dataset on the generic node, lists snapshots through the remote_generic path, and restores a pushed snapshot back to nodeA. It also runs negative checks: a dataset that exists on the generic node but was never passed to `--dataset` is rejected by the connection test ("Neither dataset ... nor its parent exists" and no `ZFS receive permissions verified`).
+- `scenario-multi-dataset.ps1` (`multi-dataset`): validates multi-dataset hot-standby replication where the sender replicates child datasets under parent container destinations (e.g. `bbpool/domains/MintCinnamon` under `bbpool/domains`), verifies single consolidated `authorized_keys` emission with multiple `--dataset` options for shared sender keys, verifies OpenZFS permission delegation, and confirms telemetry is accurately attributed to the specific target card while keeping sibling cards isolated.
 
 ## Default matrix
 
@@ -202,10 +204,33 @@ This initial implementation provides:
 
 ## Generic node and TrueNAS SCALE coverage
 
-- The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created, then run the generic smoke directly:
+- The lab config defines a third slot `nodes.nodeC` for a generic OpenZFS host (Debian-based; the same path Proxmox uses). Unlike nodeA/nodeB, the local WSL/QEMU provider does not provision nodeC automatically - point it at any SSH-reachable host that already has OpenZFS installed and a pool created. The release gate runs the generic smoke as a stage after the matrix (auto-provisioning the local nodeC VM when `nodes.nodeC.host` is `127.0.0.1`); to run the generic smoke directly instead:
   - Dry-run: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json`
   - Execute: `./testlab/scripts/run-generic-smoke.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+- For local runs, `provision-nodec-wsl-qemu.ps1` provisions a reusable throwaway generic host inside WSL/QEMU instead of pointing at an external machine:
+  - Provision or health-check: `./testlab/scripts/provision-nodec-wsl-qemu.ps1 -LabConfig testlab/config/lab.local.json -Execute`
+  - Stop the VM: add `-Teardown -Execute`; also delete its disks: add `-RemoveDisks`; rebuild from scratch on the next provision: add `-Recreate`.
+  - It boots an Ubuntu 24.04 cloud image (`-ImageUrl` accepts Debian cloud images too), forwards SSH to `127.0.0.1:2224` (`-SshPort`), installs OpenZFS, creates the pool (`bbpool` by default) on a dedicated data disk, and injects the lab public key for root. VM state lives in `/var/lib/buddybackup-nodec` inside the WSL distro (`-VmRoot`), and reports are written to `.testlab/logs/nodec-*.json`.
+  - The `nodes.nodeC` block below matches these defaults, so no extra values are needed for the local path.
+- Before this smoke can run, `nodes.nodeC` must exist in the lab config; if it is missing, the script stops with `Missing lab.nodes.nodeC.host`. Minimum requirements for the host you point it at:
+  - Debian-based OpenZFS host (Proxmox, Debian, or Ubuntu) reachable over SSH, with `zfs`/`zpool` working and a pool already created. The smoke does not create the pool.
+  - SSH login as `root` with the lab identity file (`lab.ssh.identityFile`, default `.testlab/lab_key`), or set `nodes.nodeC.user` / `nodes.nodeC.identityFile` for a different account or key.
+  - A config block like this (inserted into `nodes`):
+    ```json
+    "nodeC": {
+      "name": "buddybackup-node-c-generic",
+      "host": "127.0.0.1",
+      "port": 2224,
+      "platform": "generic-debian",
+      "zfsPool": "bbpool",
+      "datasetRoot": "buddybackup"
+    }
+    ```
+    `zfsPool` defaults to `setup.zfs.poolName` and `datasetRoot` defaults to `buddybackup`; the values above match the local lab defaults.
+  - A non-22 SSH port forwarded from the WSL/QEMU host (the example uses `127.0.0.1:2224`). nodeA cannot reach nodeC's SSH directly, so the smoke installs a `nodeCAliasIp:22 -> hostGatewayIp:<port>` DNAT rule on nodeA; that rule is skipped when the configured port is 22, which means port 22 does not work for the local WSL/QEMU lab. For a remote host on the LAN, terminate the forward on the WSL side (for example `socat` or `ssh -L 127.0.0.1:2224:<nodeC>:22`).
+  - Dry-runs only validate config parsing; SSH reachability is exercised when you pass `-Execute`.
 - The generic smoke reaches nodeC from nodeA through the same host-gateway DNAT pattern the functional smoke uses, so the Unraid backup entries connect to `setup.functionalTests.nodeCAliasIp` on port 22.
+- The smoke runs `generic_host_setup.sh` as receiver plus its `--verify` checklist on nodeC itself, so no manual setup-script run is required up front.
 - TrueNAS SCALE is validated manually; `testlab/MANUAL-SCALE-CHECKLIST.md` documents the full setup, Unraid push to TrueNAS, TrueNAS replication to Unraid, negative checks and pass criteria.
 
 ## Backup direction coverage

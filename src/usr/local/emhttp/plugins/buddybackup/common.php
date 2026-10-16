@@ -11,6 +11,7 @@
     $_SERVER['PATH'] = $normalized_path;
 
     $cfg = parse_plugin_cfg($plugin, true);
+    $cfg['DestinationSubdatasetDelimiter'] = $cfg['DestinationSubdatasetDelimiter'] ?? '_';
     $rc_name = "rc.$plugin.php";
     $rc_script = "/plugins/$plugin/scripts/$rc_name";
 
@@ -107,8 +108,13 @@
     $snapshot_cfg = my_parse_ini_file($snapshot_cfg_file, true);
     $backup_cfg = my_parse_ini_file($backup_cfg_file, true);
     $incoming_cfg = my_parse_ini_file($incoming_cfg_file, true);
-    if (!empty($incoming_cfg) && file_exists("/tmp/buddybackup-buddy")) {
-        @unlink("/tmp/buddybackup-buddy");
+    if (!empty($incoming_cfg)) {
+        if (file_exists("/var/run/buddybackup/buddy") && !is_link("/var/run/buddybackup/buddy")) {
+            @unlink("/var/run/buddybackup/buddy");
+        }
+        if (file_exists("/tmp/buddybackup-buddy") && !is_link("/tmp/buddybackup-buddy")) {
+            @unlink("/tmp/buddybackup-buddy");
+        }
     }
 
     function bb_is_dataset_overlapping($dataset, $existing_datasets) {
@@ -189,9 +195,25 @@
         }
 
         if ($buddy) {
-            $file = (!empty($uid)) ? "/tmp/buddybackup-buddy-$uid" : "/tmp/buddybackup-buddy";
+            $run_file = (!empty($uid)) ? "/var/run/buddybackup/buddy-$uid" : "/var/run/buddybackup/buddy";
+            $tmp_file = (!empty($uid)) ? "/tmp/buddybackup-buddy-$uid" : "/tmp/buddybackup-buddy";
+            if (file_exists($run_file) && !is_link($run_file)) {
+                $file = $run_file;
+            } else if (file_exists($tmp_file) && !is_link($tmp_file)) {
+                $file = $tmp_file;
+            } else {
+                $file = $run_file;
+            }
         } else {
-            $file = "/tmp/buddybackup-$uid";
+            $run_file = (!empty($uid)) ? "/var/run/buddybackup/$uid" : "/var/run/buddybackup/backup";
+            $tmp_file = (!empty($uid)) ? "/tmp/buddybackup-$uid" : "/tmp/buddybackup";
+            if (file_exists($run_file) && !is_link($run_file)) {
+                $file = $run_file;
+            } else if (file_exists($tmp_file) && !is_link($tmp_file)) {
+                $file = $tmp_file;
+            } else {
+                $file = $run_file;
+            }
         }
 
         $ret = array(
@@ -210,7 +232,7 @@
             "days_overdue" => 0
         );
 
-        if (file_exists($file)) {
+        if (file_exists($file) && !is_link($file)) {
             $info = @parse_ini_file($file);
             if (isset($info["last_status"])) {
                 $ret["last_status"] = $info["last_status"];

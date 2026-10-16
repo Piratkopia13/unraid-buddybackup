@@ -461,4 +461,33 @@ subtest "Overdue alert message formatting" => sub {
     like($backups_content, qr/sprintf\(_\('This backup has not successfully completed in over %s days\. Last successful run: %s'\)/, "Backups.page formats overdue warning with sprintf and proper spaces");
 };
 
+subtest "SSH port support for BuddyBackup remote host type" => sub {
+    my $backups_page = File::Spec->catfile($plugin_dir, "Backups.page");
+    open my $bfh, "<", $backups_page or die "Cannot open $backups_page: $!";
+    my $backups_content = do { local $/; <$bfh> };
+    close $bfh;
+
+    like($backups_content, qr/buddybackup-type-remote.*?<dt>_\(SSH port\)_:<\/dt>/s, "Backups.page classifies SSH port as buddybackup-type-remote to show for both remote types");
+    like($backups_content, qr/test_connection.*?'\<\?=\$rc_name\?\> test_connection "\'\+ip\+\'" "\'\+destination_dataset\+\'" remote "buddybackup" "\'\+remote_port\+\'"/s, "Backups.page passes remote_port in test_connection for remote buddybackup type");
+    like($backups_content, qr/Invalid SSH Port/, "Backups.page validates destination_port range (1-65535)");
+
+    my $rc_php = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup.php");
+    open my $rfh, "<", $rc_php or die "Cannot open $rc_php: $!";
+    my $rc_content = do { local $/; <$rfh> };
+    close $rfh;
+
+    like($rc_content, qr/if\s*\(\$cfg\['type'\]\s*==\s*'remote'\)\s*\{\s*\$identity\s*=\s*normalize_remote_identity\('buddybackup',\s*\$cfg\['destination_port'\]/s, "rc.buddybackup.php normalizes destination_port for remote send_backup");
+    like($rc_content, qr/else\s*if\s*\(\$type\s*==\s*'remote'\)\s*\{\s*\$identity\s*=\s*normalize_remote_identity\('buddybackup',\s*\$cfg\['destination_port'\]/s, "rc.buddybackup.php resolves destination_port for remote known_hosts during update");
+    like($rc_content, qr/else\s*if\s*\(\$type\s*==\s*'remote'\)\s*\{\s*\$allow_empty\s*=\s*array\('destination_port'\);/s, "rc.buddybackup.php allows empty destination_port for remote type in update");
+
+    my $rc_sh = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup");
+    open my $sfh, "<", $rc_sh or die "Cannot open $rc_sh: $!";
+    my $sh_content = do { local $/; <$sfh> };
+    close $sfh;
+
+    like($sh_content, qr/if\s*\[\[\s*\(\s*"\$\{type\}"\s*==\s*"remote"\s*\|\|\s*"\$\{type\}"\s*==\s*"remote_generic"\s*\)\s*\]\]\s*&&\s*\[\[\s*-n\s*"\$\{remote_port\}"\s*&&\s*"\$\{remote_port\}"\s*!=\s*"22"\s*\]\];\s*then\s*port_flag="--sshport=\$\{remote_port\}"/s, "rc.buddybackup sets --sshport flag for remote type when remote_port != 22");
+    like($sh_content, qr/test_connection_cmd\s*\(\)\s*\{\s*local host=\$1\s*local destination_dataset=\$2\s*local remote_port="\$\{3:-22\}"/s, "rc.buddybackup test_connection_cmd accepts remote_port parameter");
+    like($sh_content, qr/\('test_connection'\)\s*test_connection_cmd "\$\{2\}" "\$\{3\}" "\$\{4:-22\}"/s, "rc.buddybackup dispatches remote_port to test_connection_cmd");
+};
+
 done_testing();

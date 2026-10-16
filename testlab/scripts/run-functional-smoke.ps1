@@ -254,6 +254,8 @@ function Invoke-NodeSshCommand {
         "-F", "NUL",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=8",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
         "-o", "IdentitiesOnly=yes",
         "-o", "LogLevel=ERROR",
         "-o", "StrictHostKeyChecking=no",
@@ -325,8 +327,8 @@ function Invoke-NodeBashScriptWithRetry {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
-        [int]$MaxAttempts = 4,
-        [int]$RetryDelaySeconds = 10,
+        [int]$MaxAttempts = 6,
+        [int]$RetryDelaySeconds = 8,
         [switch]$DoExecute
     )
 
@@ -335,6 +337,41 @@ function Invoke-NodeBashScriptWithRetry {
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.success) {
+            break
+        }
+
+        if (-not $DoExecute -or -not (Test-IsTransientSshFailure -Result $result) -or $attempt -ge $MaxAttempts) {
+            break
+        }
+
+        Start-Sleep -Seconds $RetryDelaySeconds
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
+}
+
+function Invoke-NodeSshCommandWithRetry {
+    param(
+        $NodeConnection,
+        [string]$Command,
+        [string]$Label,
+        [int]$MaxAttempts = 12,
+        [int]$RetryDelaySeconds = 4,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $Command -Label $Label -DoExecute:$DoExecute
         $attempts += $result
         if ($result.success) {
             break
@@ -445,16 +482,21 @@ function Test-IsTransientSshFailure {
         return $false
     }
 
+    $outputText = (@($Result.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    $transientPattern = '(?i)connection closed by|connection reset by peer|connection refused|operation timed out|connection timed out|broken pipe|kex_exchange_identification|no route to host|network is unreachable'
+
     if ([int]$Result.exitCode -notin @(255, -1)) {
-        return $false
+        # Remote BuddyBackup commands can exit with a regular failure code while
+        # the output still shows a transient connection problem, for example
+        # syncoid failing because the buddy's sshd restarted mid-transfer.
+        return (-not [string]::IsNullOrWhiteSpace($outputText)) -and ($outputText -match $transientPattern)
     }
 
-    $outputText = (@($Result.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
     if ([string]::IsNullOrWhiteSpace($outputText)) {
         return $true
     }
 
-    return $outputText -match '(?i)connection closed by remote host|connection refused|operation timed out|connection timed out|broken pipe'
+    return $outputText -match $transientPattern
 }
 
 function Get-ResultOutputText {
@@ -479,7 +521,32 @@ function Test-IsRetryableTestConnectionFailure {
         return [int]$Result.exitCode -in @(255, -1)
     }
 
-    return $outputText -match '(?i)Host key verification failed|SSH security validation failed'
+    return $outputText -match '(?i)Host key verification failed|SSH security validation failed|connection closed by|connection reset by peer|connection refused|connection timed out|operation timed out|kex_exchange_identification|no route to host|network is unreachable'
+}
+
+function Test-IsHostKeyVerificationFailure {
+    param($Result)
+
+    if ($null -eq $Result) {
+        return $false
+    }
+
+    $outputText = Get-ResultOutputText -Result $Result
+    return $outputText -match '(?i)Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED'
+}
+
+function Invoke-BuddyBackupRefreshKnownHosts {
+    param(
+        $NodeConnection,
+        [switch]$DoExecute
+    )
+
+    if (-not $DoExecute) {
+        return
+    }
+
+    Write-Host "[testlab] Refreshing BuddyBackup known_hosts on $($NodeConnection.NodeName) after a host key verification failure"
+    Invoke-BuddyBackupPhpCommandWithRetry -NodeConnection $NodeConnection -Action "update" -Label "$($NodeConnection.NodeName)-known-hosts-refresh" -MaxAttempts 3 -DoExecute:$DoExecute | Out-Null
 }
 
 function Invoke-BuddyBackupShellCommandWithRetry {
@@ -488,8 +555,9 @@ function Invoke-BuddyBackupShellCommandWithRetry {
         [string]$Action,
         [string[]]$Arguments,
         [string]$Label,
-        [int]$MaxAttempts = 2,
+        [int]$MaxAttempts = 10,
         [switch]$RetryTransientSshFailure,
+        [switch]$RetryHostKeyFailure,
         [switch]$DoExecute
     )
 
@@ -499,15 +567,60 @@ function Invoke-BuddyBackupShellCommandWithRetry {
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         $result = Invoke-BuddyBackupShellCommand -NodeConnection $NodeConnection -Action $Action -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
         $attempts += $result
-        if ($result.success) {
+
+        $hostKeyFailure = $RetryHostKeyFailure -and (Test-IsHostKeyVerificationFailure -Result $result)
+        if ($result.success -and -not $hostKeyFailure) {
             break
+        }
+
+        if ($DoExecute -and $hostKeyFailure -and $attempt -lt $MaxAttempts) {
+            # Remote commands can exit 0 while reporting a host key failure.
+            # Refresh the managed known_hosts and retry against the new keys.
+            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -DoExecute:$DoExecute
+            Start-Sleep -Seconds 2
+            continue
         }
 
         if (-not $DoExecute -or -not $RetryTransientSshFailure -or -not (Test-IsTransientSshFailure -Result $result) -or $attempt -ge $MaxAttempts) {
             break
         }
 
-        Start-Sleep -Seconds 5
+        Start-Sleep -Seconds 4
+    }
+
+    if ($result -and $attempts.Count -gt 1) {
+        $result | Add-Member -NotePropertyName AttemptCount -NotePropertyValue $attempts.Count -Force
+        $result | Add-Member -NotePropertyName Attempts -NotePropertyValue @($attempts) -Force
+    }
+
+    return $result
+}
+
+function Invoke-BuddyBackupPhpCommandWithRetry {
+    param(
+        $NodeConnection,
+        [string]$Action,
+        [string[]]$Arguments,
+        [string]$Label,
+        [int]$MaxAttempts = 10,
+        [switch]$DoExecute
+    )
+
+    $attempts = @()
+    $result = $null
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $result = Invoke-BuddyBackupPhpCommand -NodeConnection $NodeConnection -Action $Action -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $attempts += $result
+        if ($result.success) {
+            break
+        }
+
+        if (-not $DoExecute -or -not (Test-IsTransientSshFailure -Result $result) -or $attempt -ge $MaxAttempts) {
+            break
+        }
+
+        Start-Sleep -Seconds 4
     }
 
     if ($result -and $attempts.Count -gt 1) {
@@ -523,7 +636,8 @@ function Invoke-BuddyBackupTestConnectionWithRetry {
         $NodeConnection,
         [string[]]$Arguments,
         [string]$Label,
-        [int]$MaxAttempts = 2,
+        [int]$MaxAttempts = 12,
+        [int]$RetryDelaySeconds = 4,
         [switch]$DoExecute
     )
 
@@ -540,9 +654,17 @@ function Invoke-BuddyBackupTestConnectionWithRetry {
             break
         }
 
-        $shouldRetry = $DoExecute -and $attempt -lt $MaxAttempts -and ((Test-IsTransientSshFailure -Result $result) -or (Test-IsRetryableTestConnectionFailure -Result $result))
+        $hostKeyFailure = Test-IsHostKeyVerificationFailure -Result $result
+        $shouldRetry = $DoExecute -and $attempt -lt $MaxAttempts -and ($hostKeyFailure -or (Test-IsTransientSshFailure -Result $result) -or (Test-IsRetryableTestConnectionFailure -Result $result))
         if (-not $shouldRetry) {
             break
+        }
+
+        if ($hostKeyFailure) {
+            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -DoExecute:$DoExecute
+            Start-Sleep -Seconds 2
+        } else {
+            Start-Sleep -Seconds $RetryDelaySeconds
         }
     }
 
@@ -560,7 +682,7 @@ function Get-NodeBuddyBackupPublicKey {
         [switch]$DoExecute
     )
 
-    $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command "cat /boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "read-buddybackup-public-key" -DoExecute:$DoExecute
+    $result = Invoke-NodeSshCommandWithRetry -NodeConnection $NodeConnection -Command "cat /boot/config/plugins/buddybackup/buddybackup_sender_key.pub" -Label "read-buddybackup-public-key" -DoExecute:$DoExecute
     Assert-CommandSucceeded -Result $result -FailureMessage "Failed to read BuddyBackup public key on node '$($NodeConnection.NodeName)'."
     return (($result.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
 }
@@ -780,6 +902,8 @@ prime_legacy_known_hosts() {
     local begin_marker="# buddybackup start"
     local end_marker="# buddybackup end"
     local scanned_keys=""
+    local attempt_keys=""
+    local attempt
     local tmp_known_hosts=""
     local next_known_hosts=""
 
@@ -788,7 +912,34 @@ prime_legacy_known_hosts() {
     touch "$known_hosts_file"
     chmod 600 "$known_hosts_file"
 
-    scanned_keys=$(ssh-keyscan -H "$remote_host" 2>/dev/null || true)
+    # ssh-keyscan can return partial results when the peer is busy; merge several
+    # scans so the primed known_hosts stays stable and doesn't lose key types.
+    # Hash-based (-H) host names differ between scans, so dedupe key lines by key material.
+    for attempt in 1 2 3; do
+        attempt_keys=$(ssh-keyscan -T 3 -H "$remote_host" 2>/dev/null || true)
+        if [[ -n "$attempt_keys" ]]; then
+            if [[ -n "$scanned_keys" ]]; then
+                scanned_keys=$(printf '%s\n%s\n' "$scanned_keys" "$attempt_keys" | sed '/^[[:space:]]*$/d' | awk '
+                    /^[[:space:]]*#/ { if (!comment[$0]++) print; next }
+                    NF >= 3 { key = $2 " " $3; if (!material[key]++) print; next }
+                    { print }
+                ')
+            else
+                scanned_keys=$(printf '%s\n' "$attempt_keys" | sed '/^[[:space:]]*$/d')
+            fi
+
+            if printf '%s\n' "$scanned_keys" | grep -q 'ssh-ed25519' && \
+               printf '%s\n' "$scanned_keys" | grep -q 'ecdsa-sha2-nistp256' && \
+               printf '%s\n' "$scanned_keys" | grep -q 'ssh-rsa'; then
+                break
+            fi
+        fi
+
+        if [[ "$attempt" -lt 3 ]]; then
+            sleep 1
+        fi
+    done
+
     if [[ -z "$scanned_keys" ]]; then
         return 0
     fi
@@ -981,7 +1132,7 @@ try {
         $functionalCfg.hostGatewayIp,
         [string]$receiverConnection.Port,
         $senderPlan.peerAliasIp
-    ) -Label "functional-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
+    ) -Label "functional-setup" -MaxAttempts 6 -RetryDelaySeconds 8 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $senderSetup
     Assert-CommandSucceeded -Result $senderSetup -FailureMessage "Functional setup failed on nodeA."
 
@@ -1003,7 +1154,7 @@ try {
         $functionalCfg.hostGatewayIp,
         [string]$senderConnection.Port,
         $receiverPlan.peerAliasIp
-    ) -Label "functional-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
+    ) -Label "functional-setup" -MaxAttempts 6 -RetryDelaySeconds 8 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $receiverSetup
     Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "Functional setup failed on nodeB."
 
@@ -1013,7 +1164,7 @@ try {
         @{ Connection = $receiverConnection; NodeName = "nodeB" }
     )) {
         $probeManagedCmd = "grep -q 'ssh_known_hosts_path' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'managed' || echo 'legacy'"
-        $probeManagedResult = Invoke-NodeSshCommand -NodeConnection $refresh.Connection -Command $probeManagedCmd -Label "$($refresh.NodeName)-probe-managed-known-hosts" -DoExecute:$Execute
+        $probeManagedResult = Invoke-NodeSshCommandWithRetry -NodeConnection $refresh.Connection -Command $probeManagedCmd -Label "$($refresh.NodeName)-probe-managed-known-hosts" -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $probeManagedResult
 
         $isManaged = $true
@@ -1025,11 +1176,11 @@ try {
         }
 
         if ($isManaged) {
-            $clearKnownHostsResult = Invoke-BuddyBackupShellCommand -NodeConnection $refresh.Connection -Action "clear_known_hosts" -Label "$($refresh.NodeName)-clear-known-hosts" -DoExecute:$Execute
+            $clearKnownHostsResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $refresh.Connection -Action "clear_known_hosts" -Label "$($refresh.NodeName)-clear-known-hosts" -RetryTransientSshFailure -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $clearKnownHostsResult
             Assert-CommandSucceeded -Result $clearKnownHostsResult -FailureMessage "Failed to clear BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
 
-            $refreshUpdateResult = Invoke-BuddyBackupPhpCommand -NodeConnection $refresh.Connection -Action "update" -Label "$($refresh.NodeName)-refresh-config" -DoExecute:$Execute
+            $refreshUpdateResult = Invoke-BuddyBackupPhpCommandWithRetry -NodeConnection $refresh.Connection -Action "update" -Label "$($refresh.NodeName)-refresh-config" -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $refreshUpdateResult
             Assert-CommandSucceeded -Result $refreshUpdateResult -FailureMessage "Failed to rebuild BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
         } else {
@@ -1056,7 +1207,7 @@ try {
         @{ Connection = $senderConnection; Snapshot = $senderPlan.sourceSnapshot; Label = "nodeA-create-source-snapshot" },
         @{ Connection = $receiverConnection; Snapshot = $receiverPlan.sourceSnapshot; Label = "nodeB-create-source-snapshot" }
     )) {
-        $snapshotResult = Invoke-NodeSshCommand -NodeConnection $snapshot.Connection -Command ("zfs snapshot {0}" -f (Convert-ToShellSingleQuoted -Value $snapshot.Snapshot)) -Label $snapshot.Label -DoExecute:$Execute
+        $snapshotResult = Invoke-NodeSshCommandWithRetry -NodeConnection $snapshot.Connection -Command ("zfs snapshot {0}" -f (Convert-ToShellSingleQuoted -Value $snapshot.Snapshot)) -Label $snapshot.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $snapshotResult
         Assert-CommandSucceeded -Result $snapshotResult -FailureMessage "Failed to create source snapshot '$($snapshot.Snapshot)' on node '$($snapshot.Connection.NodeName)'."
     }
@@ -1073,7 +1224,7 @@ try {
             $nodeName = $pair.Connection.NodeName
             if (-not $nodeSupportsTypedSendBackup.ContainsKey($nodeName)) {
                 $probeCmd = "sed -n '/^send_backup()/,/^}/p' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup | grep -q 'local type=' && echo 'typed' || echo 'legacy'"
-                $probeResult = Invoke-NodeSshCommand -NodeConnection $pair.Connection -Command $probeCmd -Label "$nodeName-probe-send-signature" -DoExecute:$Execute
+                $probeResult = Invoke-NodeSshCommandWithRetry -NodeConnection $pair.Connection -Command $probeCmd -Label "$nodeName-probe-send-signature" -DoExecute:$Execute
                 Add-ReportAction -Report $report -Result $probeResult
                 $isTyped = $true
                 if ($Execute -and $probeResult.success) {
@@ -1093,7 +1244,7 @@ try {
         } else {
             @($pair.SourceDataset, $pair.Recursive, $pair.DestinationDataset, $pair.Uid)
         }
-        $sendResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $pair.Connection -Action $pair.Action -Arguments $sendArgs -Label $pair.Label -RetryTransientSshFailure:($pair.Type -eq "remote") -DoExecute:$Execute
+        $sendResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $pair.Connection -Action $pair.Action -Arguments $sendArgs -Label $pair.Label -RetryTransientSshFailure:($pair.Type -eq "remote") -RetryHostKeyFailure:($pair.Type -eq "remote") -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $sendResult
         Assert-CommandSucceeded -Result $sendResult -FailureMessage "BuddyBackup $($pair.Action) failed for uid '$($pair.Uid)' on node '$($pair.Connection.NodeName)'."
         if ($Execute) {
@@ -1108,7 +1259,7 @@ try {
         @{ Connection = $receiverConnection; Dataset = $receiverPlan.localBackupDataset; Label = "nodeB-local-backup-dataset-check" },
         @{ Connection = $receiverConnection; Dataset = $receiverPlan.inboundRemoteDataset; Label = "nodeB-remote-backup-dataset-check" }
     )) {
-        $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
+        $datasetCheck = Invoke-NodeSshCommandWithRetry -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $datasetCheck
         Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected dataset '$($check.Dataset)' was not found on node '$($check.Connection.NodeName)'."
     }
@@ -1122,7 +1273,7 @@ try {
         @{ Connection = $receiverConnection; Uid = $receiverPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Key = "nodeB-local-snapshots" }
     )) {
         $snapshotArgs = if ($query.Type -eq "remote") { @($query.Type, $query.DestinationHost, $query.DestinationDataset) } else { @($query.Type, $query.DestinationDataset) }
-        $snapshotResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -RetryTransientSshFailure:($query.Type -eq "remote") -DoExecute:$Execute
+        $snapshotResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -RetryTransientSshFailure:($query.Type -eq "remote") -RetryHostKeyFailure:($query.Type -eq "remote") -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $snapshotResult
         Assert-CommandSucceeded -Result $snapshotResult -FailureMessage "Snapshot query failed for uid '$($query.Uid)' on node '$($query.Connection.NodeName)'."
         if ($Execute) {
@@ -1142,7 +1293,7 @@ try {
         } else {
             @($restore.Type, "selected", $restore.Selection.snapshot, $restore.Selection.dataset, $restore.Destination)
         }
-        $restoreResult = Invoke-BuddyBackupShellCommand -NodeConnection $restore.Connection -Action "restore_snapshot" -Arguments $restoreArgs -Label $restore.Label -DoExecute:$Execute
+        $restoreResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $restore.Connection -Action "restore_snapshot" -Arguments $restoreArgs -Label $restore.Label -RetryTransientSshFailure:($restore.Type -eq "remote") -RetryHostKeyFailure:($restore.Type -eq "remote") -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $restoreResult
         Assert-CommandSucceeded -Result $restoreResult -FailureMessage "Restore failed for label '$($restore.Label)' on node '$($restore.Connection.NodeName)'."
     }
@@ -1154,7 +1305,7 @@ try {
         @{ Connection = $receiverConnection; Dataset = $receiverPlan.localRestoreDataset; Label = "nodeB-local-restore-dataset-check" },
         @{ Connection = $receiverConnection; Dataset = $receiverPlan.remoteRestoreDataset; Label = "nodeB-remote-restore-dataset-check" }
     )) {
-        $datasetCheck = Invoke-NodeSshCommand -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
+        $datasetCheck = Invoke-NodeSshCommandWithRetry -NodeConnection $check.Connection -Command ("zfs list -H -o name {0}" -f (Convert-ToShellSingleQuoted -Value $check.Dataset)) -Label $check.Label -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $datasetCheck
         Assert-CommandSucceeded -Result $datasetCheck -FailureMessage "Expected restore dataset '$($check.Dataset)' was not found on node '$($check.Connection.NodeName)'."
     }
@@ -1169,7 +1320,7 @@ try {
         @{ Connection = $receiverConnection; Plan = $receiverPlan; NodeName = "nodeB" }
     )) {
         $probeHooksCmd = "grep -q 'run_hook' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'supported' || echo 'legacy'"
-        $probeHooksResult = Invoke-NodeSshCommand -NodeConnection $candidate.Connection -Command $probeHooksCmd -Label "$($candidate.NodeName)-probe-hooks-support" -DoExecute:$Execute
+        $probeHooksResult = Invoke-NodeSshCommandWithRetry -NodeConnection $candidate.Connection -Command $probeHooksCmd -Label "$($candidate.NodeName)-probe-hooks-support" -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $probeHooksResult
 
         $supportsHooks = $true
@@ -1217,19 +1368,19 @@ chmod 755 '$testPreHook' '$testPostHook' '$testAbortHook'
 rm -f '$hookLog'
 "@
 
-        $setupHooksResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command $setupHooksCmd -Label "$hookTargetNode-setup-test-hooks" -DoExecute:$Execute
+        $setupHooksResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command $setupHooksCmd -Label "$hookTargetNode-setup-test-hooks" -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $setupHooksResult
         Assert-CommandSucceeded -Result $setupHooksResult -FailureMessage "Failed to stage test hooks on $hookTargetNode."
 
         try {
             # 1. Success lifecycle: pre-hook runs, syncoid runs, post-hook receives success context
             $hookSuccessArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testPreHook, $testPostHook, "30", "abort")
-            $hookSuccessResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookSuccessArgs -Label "$hookTargetNode-hook-success-test" -DoExecute:$Execute
+            $hookSuccessResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookSuccessArgs -Label "$hookTargetNode-hook-success-test" -RetryTransientSshFailure -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $hookSuccessResult
             Assert-CommandSucceeded -Result $hookSuccessResult -FailureMessage "BuddyBackup send_local_backup with hooks failed on $hookTargetNode."
 
             if ($Execute) {
-                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-success-log" -DoExecute:$Execute
+                $readLogResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-success-log" -DoExecute:$Execute
                 Add-ReportAction -Report $report -Result $readLogResult
                 $logText = Get-ResultOutputText -Result $readLogResult
                 if ($logText -notmatch 'pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
@@ -1239,14 +1390,14 @@ rm -f '$hookLog'
 
             # 2. Abort failure mode: failing pre-hook aborts syncoid, post-hook receives failed status and pre-hook exit code
             $hookAbortArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "abort")
-            $hookAbortResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookAbortArgs -Label "$hookTargetNode-hook-abort-test" -DoExecute:$Execute
+            $hookAbortResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookAbortArgs -Label "$hookTargetNode-hook-abort-test" -RetryTransientSshFailure -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $hookAbortResult
 
             if ($Execute) {
                 if ($hookAbortResult.exitCode -eq 0) {
                     throw "Hook abort test failed: send_local_backup unexpectedly succeeded when pre-hook exited 42 with abort mode."
                 }
-                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-abort-log" -DoExecute:$Execute
+                $readLogResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-abort-log" -DoExecute:$Execute
                 Add-ReportAction -Report $report -Result $readLogResult
                 $logText = Get-ResultOutputText -Result $readLogResult
                 if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=failed exit=42') {
@@ -1256,12 +1407,12 @@ rm -f '$hookLog'
 
             # 3. Warn failure mode: failing pre-hook logs warning, syncoid proceeds, post-hook receives success context
             $hookWarnArgs = @($hookTargetPlan.sourceDataset, "no", $hookTargetPlan.localBackupDataset, $hookTargetPlan.localBackupUid, "no", $testAbortHook, $testPostHook, "30", "warn")
-            $hookWarnResult = Invoke-BuddyBackupShellCommand -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookWarnArgs -Label "$hookTargetNode-hook-warn-test" -DoExecute:$Execute
+            $hookWarnResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $hookTargetConnection -Action "send_local_backup" -Arguments $hookWarnArgs -Label "$hookTargetNode-hook-warn-test" -RetryTransientSshFailure -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $hookWarnResult
             Assert-CommandSucceeded -Result $hookWarnResult -FailureMessage "BuddyBackup send_local_backup in warn mode failed on $hookTargetNode."
 
             if ($Execute) {
-                $readLogResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-warn-log" -DoExecute:$Execute
+                $readLogResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command "cat '$hookLog' && rm -f '$hookLog'" -Label "$hookTargetNode-check-hook-warn-log" -DoExecute:$Execute
                 Add-ReportAction -Report $report -Result $readLogResult
                 $logText = Get-ResultOutputText -Result $readLogResult
                 if ($logText -notmatch 'abort_pre_ran' -or $logText -notmatch 'post_ran status=success exit=0') {
@@ -1269,7 +1420,7 @@ rm -f '$hookLog'
                 }
             }
         } finally {
-            $cleanupHooksResult = Invoke-NodeSshCommand -NodeConnection $hookTargetConnection -Command "rm -f '$testPreHook' '$testPostHook' '$testAbortHook' '$hookLog'" -Label "$hookTargetNode-cleanup-test-hooks" -DoExecute:$Execute
+            $cleanupHooksResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command "rm -f '$testPreHook' '$testPostHook' '$testAbortHook' '$hookLog'" -Label "$hookTargetNode-cleanup-test-hooks" -DoExecute:$Execute
             Add-ReportAction -Report $report -Result $cleanupHooksResult
         }
     } else {

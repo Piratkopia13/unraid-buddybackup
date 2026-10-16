@@ -124,6 +124,18 @@ zfs_error_indicates_missing_dataset() {
     [[ "${error_text}" == *"dataset does not exist"* ]] || [[ "${error_text}" == *"cannot open"* ]]
 }
 
+zfs_error_indicates_unsupported_json() {
+    local error_text="$1"
+
+    # OpenZFS versions before JSON output support (e.g. 2.2 on Ubuntu 24.04)
+    # fail `zfs list -j` / `zfs get -j` with an invalid-option error instead of
+    # returning empty or malformed JSON. Missing datasets are handled separately.
+    [[ "${error_text}" == *"invalid option"*"j"* ]] \
+        || [[ "${error_text}" == *"unrecognized option"*"j"* ]] \
+        || [[ "${error_text}" == *"illegal option"*"j"* ]] \
+        || [[ "${error_text}" == *"unknown option"*"j"* ]]
+}
+
 zfs_legacy_dataset_names() {
     local output="$1"
     local destination_dataset="$2"
@@ -391,31 +403,47 @@ run_snapshot_post_hook_and_trigger() {
     local post_hook="${2:-}"
     local hook_timeout="${3:-30}"
     local trigger_uid="${4:-}"
+    local hook_scope="${5:-}"
     local nchan="snapshot"
 
-    # If post_hook wasn't supplied or is empty, load it from snapshots.cfg for this dataset
-    if [[ -z "${post_hook}" && -n "${dataset}" ]]; then
+    # If post_hook or hook_scope wasn't supplied, load from snapshots.cfg for this dataset
+    if [[ -z "${post_hook}" && -n "${dataset}" ]] || [[ -z "${hook_scope}" && -n "${dataset}" ]]; then
         load_dataset_snapshot_hooks "${dataset}"
-        post_hook="${SNAP_POST_HOOK}"
-        hook_timeout="${SNAP_TIMEOUT:-30}"
+        if [[ -z "${post_hook}" ]]; then
+            post_hook="${SNAP_POST_HOOK}"
+            hook_timeout="${SNAP_TIMEOUT:-30}"
+        fi
+        if [[ -z "${hook_scope}" ]]; then
+            hook_scope="${SNAP_HOOK_SCOPE:-}"
+        fi
     fi
 
     logger "Running snapshot post-hook and trigger for dataset '${dataset}'" -t"${plugin}"
 
     # a. Run <post_hook_script> under <timeout> (thaws workload immediately).
     if [[ -n "${post_hook}" ]]; then
-        run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
-        local post_status=$?
-        if [[ ${post_status} -ne 0 ]]; then
-            logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+        if [[ "${hook_scope}" == "daily" && -n "${SANOID_TYPES:-}" && "${SANOID_TYPES}" != *"daily"* ]]; then
+            logger "Skipping post-snapshot hook '${post_hook}' for dataset '${dataset}': hook_scope is daily and SANOID_TYPES='${SANOID_TYPES}'" -t"${plugin}"
+        else
+            run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
+            local post_status=$?
+            if [[ ${post_status} -ne 0 ]]; then
+                logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+            fi
         fi
     fi
 
-    # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>".
+    # b. If trigger is set and not empty, invoke rc.buddybackup.php send_backup "<trigger_backup_uid>" in the background.
     if [[ -n "${trigger_uid}" && "${trigger_uid}" != "no" ]]; then
-        logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
-        "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh"
+        if [[ "${trigger_uid}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
+            ( flock -n "/var/lock/buddybackup-${trigger_uid}" "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh" ) >/dev/null 2>&1 &
+        else
+            logger "Invalid trigger_uid '${trigger_uid}' for dataset '${dataset}', ignoring trigger" -t"${plugin}"
+        fi
     fi
+
+    return 0
 }
 
 load_dataset_snapshot_hooks() {
@@ -424,6 +452,7 @@ load_dataset_snapshot_hooks() {
     SNAP_POST_HOOK=""
     SNAP_TIMEOUT="30"
     SNAP_MODE="abort"
+    SNAP_HOOK_SCOPE=""
 
     local cfg_file="${plugin_path}/snapshots.cfg"
     if [[ ! -f "${cfg_file}" ]]; then
@@ -435,6 +464,7 @@ load_dataset_snapshot_hooks() {
     local cur_post=""
     local cur_timeout="30"
     local cur_mode="abort"
+    local cur_scope=""
 
     local save_section=0
     while IFS='=' read -r key val || [[ -n "$key" ]]; do
@@ -446,12 +476,14 @@ load_dataset_snapshot_hooks() {
                 SNAP_POST_HOOK="${cur_post}"
                 SNAP_TIMEOUT="${cur_timeout}"
                 SNAP_MODE="${cur_mode}"
+                SNAP_HOOK_SCOPE="${cur_scope}"
             fi
             current_dataset=""
             cur_pre=""
             cur_post=""
             cur_timeout="30"
             cur_mode="abort"
+            cur_scope=""
             continue
         fi
 
@@ -471,6 +503,9 @@ load_dataset_snapshot_hooks() {
             hook_failure_mode)
                 cur_mode="${val}"
                 ;;
+            hook_scope)
+                cur_scope="${val}"
+                ;;
         esac
     done < "${cfg_file}"
 
@@ -479,6 +514,7 @@ load_dataset_snapshot_hooks() {
         SNAP_POST_HOOK="${cur_post}"
         SNAP_TIMEOUT="${cur_timeout}"
         SNAP_MODE="${cur_mode}"
+        SNAP_HOOK_SCOPE="${cur_scope}"
     fi
 }
 
@@ -525,20 +561,51 @@ load_backup_hooks() {
     done < "${cfg_file}"
 }
 
+sshd_is_running() {
+    pgrep -x sshd >/dev/null 2>&1
+}
+
+reload_sshd() {
+    # Restart sshd so it picks up the sshd_config changes. Never use
+    # /etc/rc.d/rc.sshd reload here: some Unraid releases implement it as
+    # "kill the current listener, then immediately start a new daemon", which
+    # races the port bind and can leave the node without any sshd. SIGHUP makes
+    # OpenSSH re-exec itself while keeping the listening socket. Pick the
+    # oldest sshd process because OpenSSH 9.8+ spawns separate sshd-session
+    # children and the listener is always the first process.
+    local sshd_pid
+    sshd_pid=$(pgrep -x sshd 2>/dev/null | head -n 1)
+    if [[ -n "${sshd_pid}" ]]; then
+        kill -HUP "${sshd_pid}" 2>/dev/null || true
+        sleep 1
+    fi
+
+    if sshd_is_running; then
+        return 0
+    fi
+
+    if [[ -x /etc/rc.d/rc.sshd ]]; then
+        /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+    else
+        /usr/sbin/sshd >/dev/null 2>&1 || true
+    fi
+}
+
 setup_buddy_user() {
-    # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists (and restart sshd)
+    local sshd_config_checksum_before
+    sshd_config_checksum_before=$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')
+
+    # add buddybackup to "AllowUsers list" in sshd_config if AllowUsers exists
     # note: This probably makes it incompatible with other plugins that modify this line, such as "SSH Config Tool" by DocGyver
     local grepped=$(grep "AllowUsers.*${username}" "${sshd_config}")
     local trimmed=$(echo "${grepped}" | sed 's/^[ \t]*//')
-    local restart_sshd=false
     if [[ ! $grepped ]] || [[ $trimmed == "#"* ]]; then
         sed -i 's/^#\?AllowUsers .*/AllowUsers root/' "${sshd_config}"
         sed -i 's/^#\?AllowUsers \(.*\)/AllowUsers \1 '${username}'/' "${sshd_config}"
-        restart_sshd=true
     fi
 
     # Add own section to sshd_config for buddybackup to try avoid having unraid updates break buddybackup auth
-    if ! grep -q "^Match User ${username}" "${sshd_config}"; then
+    if ! grep -Eq "^[[:space:]]*Match[[:space:]]+User[[:space:]]+${username}([[:space:]]|$)" "${sshd_config}"; then
         cat <<EOF >> "${sshd_config}"
 Match User ${username}
     PasswordAuthentication no
@@ -546,33 +613,44 @@ Match User ${username}
     PubkeyAuthentication yes
     AuthorizedKeysFile    .ssh/authorized_keys
 EOF
-        restart_sshd=true
     fi
 
-    if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            :
-        elif [ -x /etc/rc.d/rc.sshd ]; then
-            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        else
-            /usr/sbin/sshd >/dev/null 2>&1 || true
-        fi
-        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        fi
+    # Only restart sshd when the config actually changed; an unconditional
+    # restart on every update is unnecessary and trips the pid file race above.
+    if [[ "$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')" != "${sshd_config_checksum_before}" ]]; then
+        reload_sshd
     fi
 
-    # Ensure user is setup correctly
+    # Ensure user exists; create if missing
     if ! id "${username}" >/dev/null 2>&1; then
         local pwd=$(openssl rand -base64 32)
         useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
     fi
 
+    # Repair user and group if user already existed (e.g. after Unraid reboot,
+    # /etc/rc.d/rc.S.cont recreates users from /boot/config/passwd with home=/ and shell=/bin/false,
+    # and does not restore custom groups in /etc/group).
+    if ! getent group "${username}" >/dev/null 2>&1; then
+        local user_gid
+        user_gid=$(id -g "${username}" 2>/dev/null || true)
+        if [[ -n "${user_gid}" ]] && ! getent group "${user_gid}" >/dev/null 2>&1; then
+            groupadd -g "${user_gid}" "${username}" >/dev/null 2>&1 || groupadd "${username}" >/dev/null 2>&1 || true
+        else
+            groupadd "${username}" >/dev/null 2>&1 || true
+        fi
+    fi
+    usermod -g "${username}" "${username}" >/dev/null 2>&1 || true
+    usermod -d "/home/${username}" -s /bin/bash "${username}" >/dev/null 2>&1 || true
+    usermod -U "${username}" >/dev/null 2>&1 || true
+
     mkdir -p "/home/${username}/.ssh" >/dev/null 2>&1
-    chmod 700 "/home/${username}/.ssh"
+    chmod 700 "/home/${username}" "/home/${username}/.ssh" >/dev/null 2>&1
     touch "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
-    chmod 644 "/home/${username}/.ssh/authorized_keys"
-    chown -R ${username}:${username} "/home/${username}/"
+    chmod 644 "/home/${username}/.ssh/authorized_keys" >/dev/null 2>&1
+    chown -R "${username}:${username}" "/home/${username}/" >/dev/null 2>&1 || chown -R "${username}" "/home/${username}/" >/dev/null 2>&1
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    chown root:buddybackup /var/run/buddybackup >/dev/null 2>&1 || chown root:root /var/run/buddybackup >/dev/null 2>&1
+    chmod 0770 /var/run/buddybackup >/dev/null 2>&1
 }
 
 allow_buddy_dataset() {
@@ -710,37 +788,29 @@ enable_backups_from_buddy() {
 }
 
 disable_backups_from_buddy() {
-    local restart_sshd=false
+    local sshd_config_checksum_before
+    sshd_config_checksum_before=$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')
+
     # Remove "Match User buddybackup" section from sshd_config
-    if grep -q "^Match User ${username}" "${sshd_config}"; then
+    if grep -Eq "^[[:space:]]*Match[[:space:]]+User[[:space:]]+${username}([[:space:]]|$)" "${sshd_config}"; then
         awk -v user="${username}" '
         BEGIN { skip=0 }
-        $0 ~ "^Match User "user"$" { skip=1; next }
+        $0 ~ "^[[:space:]]*Match[[:space:]]+User[[:space:]]+"user"([[:space:]]|$)" { skip=1; next }
         skip {
             if ($0 !~ /^(\t|    )/) { skip=0 } else { next }
         }
         { print }
         ' "${sshd_config}" | tee "${sshd_config}.tmp" > /dev/null && mv "${sshd_config}.tmp" "${sshd_config}"
-        restart_sshd=true
     fi
 
     # remove buddybackup from "AllowUsers list" in sshd_config
     if grep -q "AllowUsers.*${username}" "${sshd_config}"; then
         sed -i '/^[[:space:]#]*AllowUsers/ s/ '${username}'\b//' "${sshd_config}"
-        restart_sshd=true
     fi
 
-    if [ "$restart_sshd" = true ]; then
-        if [ -f /var/run/sshd.pid ] && kill -HUP "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            :
-        elif [ -x /etc/rc.d/rc.sshd ]; then
-            /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || /etc/rc.d/rc.sshd restart >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        else
-            /usr/sbin/sshd >/dev/null 2>&1 || true
-        fi
-        if [ ! -f /var/run/sshd.pid ] || ! kill -0 "$(cat /var/run/sshd.pid 2>/dev/null)" 2>/dev/null; then
-            /usr/sbin/sshd >/dev/null 2>&1 || /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-        fi
+    # Only restart sshd when the config actually changed
+    if [[ "$(md5sum "${sshd_config}" 2>/dev/null | awk '{print $1}')" != "${sshd_config_checksum_before}" ]]; then
+        reload_sshd
     fi
 
     rm -r "/home/${username}" >/dev/null 2>&1
@@ -759,6 +829,7 @@ disable_backups_from_buddy() {
     fi
 
     userdel "${username}" >/dev/null 2>&1
+    groupdel "${username}" >/dev/null 2>&1 || true
 }
 
 remove_cron_files() {
@@ -827,7 +898,11 @@ remove_managed_known_host() {
 append_managed_known_host() {
     local host="$1"
     local remote_port="${2:-}"
-    local scanned_key=""
+    local scanned_keys=""
+    local attempt_keys=""
+    local merged_keys=""
+    local attempt
+    local empty_scans=0
 
     ensure_managed_known_hosts_file
     remove_managed_known_host "${host}" "${remote_port}"
@@ -835,12 +910,49 @@ append_managed_known_host() {
     if [[ -n "${remote_port}" ]] && [[ "${remote_port}" != "22" ]]; then
         keyscan_opts=(-p "${remote_port}")
     fi
-    scanned_key=$(ssh-keyscan "${keyscan_opts[@]}" "${host}" 2>/dev/null)
-    if [[ -z "${scanned_key}" ]]; then
+
+    # ssh-keyscan can return a partial key set while the peer is busy. Scan a
+    # few times and merge the results (deduplicated by key material), so a
+    # single incomplete scan cannot persist an unusable known_hosts entry.
+    # Stop early once the common host key types have all been seen, or once
+    # the peer is consistently unreachable.
+    for attempt in 1 2 3 4 5; do
+        attempt_keys=$(ssh-keyscan -T 5 "${keyscan_opts[@]}" "${host}" 2>/dev/null || true)
+        if [[ -z "${attempt_keys}" ]]; then
+            empty_scans=$((empty_scans + 1))
+            if [[ "${empty_scans}" -ge 2 ]]; then
+                break
+            fi
+            continue
+        fi
+        empty_scans=0
+
+        if [[ -z "${scanned_keys}" ]]; then
+            merged_keys=$(printf '%s\n' "${attempt_keys}" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print }
+            ')
+        else
+            merged_keys=$(printf '%s\n%s\n' "${scanned_keys}" "${attempt_keys}" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print }
+            ')
+        fi
+        scanned_keys="${merged_keys}"
+
+        if printf '%s\n' "${scanned_keys}" | grep -q 'ssh-ed25519' && \
+           printf '%s\n' "${scanned_keys}" | grep -q 'ecdsa-sha2-nistp256' && \
+           printf '%s\n' "${scanned_keys}" | grep -q 'ssh-rsa'; then
+            break
+        fi
+    done
+
+    if [[ -z "${scanned_keys}" ]]; then
         return 1
     fi
 
-    printf '%s\n' "${scanned_key}" >> "${ssh_known_hosts_path}"
+    scanned_keys=$(printf '%s\n' "${scanned_keys}" | LC_ALL=C sort)
+    printf '%s\n' "${scanned_keys}" >> "${ssh_known_hosts_path}"
 }
 
 ensure_managed_known_host() {
@@ -993,6 +1105,45 @@ manual_snapshot_name() {
     printf '%s' "${snapshot_name}"
 }
 
+ensure_child_datasets_have_snapshots() {
+    local parent_dataset="${1:-}"
+    local nchan="${2:-send}"
+
+    [[ -z "${parent_dataset}" ]] && return 0
+
+    local all_datasets=""
+    all_datasets=$(zfs list -H -o name -t filesystem,volume -r "${parent_dataset}" 2>/dev/null) || return 0
+    [[ -z "${all_datasets}" ]] && return 0
+
+    local snap_datasets=""
+    snap_datasets=$(zfs list -H -o name -t snapshot -r "${parent_dataset}" 2>/dev/null | sed 's/@.*//' | sort -u)
+
+    local missing_datasets=""
+    if [[ -z "${snap_datasets}" ]]; then
+        missing_datasets="${all_datasets}"
+    else
+        missing_datasets=$(comm -23 <(printf '%s\n' "${all_datasets}" | sort -u) <(printf '%s\n' "${snap_datasets}" | sort -u))
+    fi
+
+    [[ -z "${missing_datasets}" ]] && return 0
+
+    local ds=""
+    while IFS= read -r ds; do
+        [[ -z "${ds}" ]] && continue
+        local snap_timestamp=""
+        snap_timestamp=$(manual_snapshot_timestamp)
+        local snap_name="${ds}@autosnap_${snap_timestamp}_daily"
+        local log_msg="Child dataset '${ds}' has no snapshots. Creating initial baseline snapshot '${snap_name}'.."
+        logger "${log_msg}" -t"${plugin}"
+        write "${nchan}" "${log_msg}"
+        local snap_err=""
+        if ! snap_err=$(zfs snapshot "${snap_name}" 2>&1); then
+            logger "Failed to create baseline snapshot '${snap_name}': ${snap_err}" -t"${plugin}"
+            write "${nchan}" "Warning: Failed to create baseline snapshot '${snap_name}': ${snap_err}"
+        fi
+    done <<< "${missing_datasets}"
+}
+
 send_mark_received_backup() {
     local destination_host="${1}"
     local destination_dataset="${2:-}"
@@ -1041,7 +1192,15 @@ mark_sent_backup() {
         fi
     fi
 
-    printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "/tmp/buddybackup-${uid}";
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    local run_file="/var/run/buddybackup/${uid}"
+    if [[ ! -L "${run_file}" ]]; then
+        printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "${run_file}"
+    fi
+    local tmp_file="/tmp/buddybackup-${uid}"
+    if [[ ! -L "${tmp_file}" ]]; then
+        printf "last_ran=$(date +%s)\ndest_size=${dest_size}\nlast_status=success\n" > "${tmp_file}"
+    fi
 }
 
 mark_failed_backup() {
@@ -1051,25 +1210,45 @@ mark_failed_backup() {
     if [[ -z "${uid}" ]]; then
         return
     fi
+    local run_file="/var/run/buddybackup/${uid}"
     local tmp_file="/tmp/buddybackup-${uid}"
+    local target_file="${run_file}"
+    if [[ -f "${run_file}" && ! -L "${run_file}" ]]; then
+        target_file="${run_file}"
+    elif [[ -f "${tmp_file}" && ! -L "${tmp_file}" ]]; then
+        target_file="${tmp_file}"
+    fi
     local last_ran=""
     local dest_size=""
-    if [[ -f "${tmp_file}" ]]; then
-        last_ran=$(grep '^last_ran=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
-        dest_size=$(grep '^dest_size=' "${tmp_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+    if [[ -f "${target_file}" && ! -L "${target_file}" ]]; then
+        last_ran=$(grep '^last_ran=' "${target_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
+        dest_size=$(grep '^dest_size=' "${target_file}" 2>/dev/null | head -n 1 | cut -d= -f2-)
     fi
 
     local clean_msg
     clean_msg=$(printf '%s' "${error_msg}" | tr '\r\n' ' ' | sed 's/"//g' | head -c 250)
 
-    {
-        [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
-        [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
-        echo "last_status=failed"
-        echo "last_error_time=$(date +%s)"
-        echo "last_error_code=${error_code}"
-        echo "last_error_message=\"${clean_msg}\""
-    } > "${tmp_file}"
+    mkdir -p /var/run/buddybackup >/dev/null 2>&1
+    if [[ ! -L "${run_file}" ]]; then
+        {
+            [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
+            [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
+            echo "last_status=failed"
+            echo "last_error_time=$(date +%s)"
+            echo "last_error_code=${error_code}"
+            echo "last_error_message=\"${clean_msg}\""
+        } > "${run_file}"
+    fi
+    if [[ ! -L "${tmp_file}" ]]; then
+        {
+            [[ -n "${last_ran}" ]] && echo "last_ran=${last_ran}"
+            [[ -n "${dest_size}" ]] && echo "dest_size=${dest_size}"
+            echo "last_status=failed"
+            echo "last_error_time=$(date +%s)"
+            echo "last_error_code=${error_code}"
+            echo "last_error_message=\"${clean_msg}\""
+        } > "${tmp_file}"
+    fi
 }
 
 send_backup() {
@@ -1172,14 +1351,15 @@ send_backup() {
         write "${nchan}" "Warning: sending unencrypted dataset to remote destination!"
         my_syncoid_flags="${syncoid_flags_unencrypted}"
     fi
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
+        ensure_child_datasets_have_snapshots "${source_dataset}" "${nchan}"
         my_syncoid_flags+=" --recursive"
         if [[ "${skip_parent}" == "yes" ]]; then
             my_syncoid_flags+=" --skip-parent"
         fi
     fi
     local port_flag=""
-    if [[ "${type}" == "remote_generic" ]] && [[ "${remote_port}" != "22" ]]; then
+    if [[ ( "${type}" == "remote" || "${type}" == "remote_generic" ) ]] && [[ -n "${remote_port}" && "${remote_port}" != "22" ]]; then
         port_flag="--sshport=${remote_port}"
     fi
     ensure_managed_known_host "${destination_host}" "${remote_port}" >/dev/null 2>&1
@@ -1289,7 +1469,8 @@ send_local_backup() {
     fi
 
     local my_syncoid_flags="${syncoid_flags_local}"
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
+        ensure_child_datasets_have_snapshots "${source_dataset}" "${nchan}"
         my_syncoid_flags+=" --recursive"
         if [[ "${skip_parent}" == "yes" ]]; then
             my_syncoid_flags+=" --skip-parent"
@@ -1392,7 +1573,7 @@ create_snapshot_and_send() {
     snapshot_name=$(manual_snapshot_name "${source_dataset}")
     write "${nchan}" "Creating fresh snapshot '${snapshot_name}'.."
 
-    if [[ "${recursive}" == "yes" ]]; then
+    if [[ "${recursive}" == "yes" || "${recursive}" == "zfs" ]]; then
         snapshot_cmd+=(-r)
     fi
     snapshot_cmd+=("${snapshot_name}")
@@ -1450,7 +1631,7 @@ restore_snapshot() {
     logger "Restoring ${type} backup" -t"${plugin}"
 
     local remote_type_for_syncoid="${type}"
-    if [[ "${type}" == "remote_generic" ]]; then
+    if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]]; then
         if ! normalize_remote_target remote_user remote_port "${destination_host}"; then
             write "${nchan}" "Invalid destination host, user or port."
             return
@@ -1462,9 +1643,9 @@ restore_snapshot() {
     local port_flag=""
     if [[ "${type}" == "remote_generic" ]]; then
         user_prefix="${remote_user}"
-        if [[ "${remote_port}" != "22" ]]; then
-            port_flag="--sshport=${remote_port}"
-        fi
+    fi
+    if [[ -n "${remote_port}" && "${remote_port}" != "22" ]]; then
+        port_flag="--sshport=${remote_port}"
     fi
 
     local error_code=-1
@@ -1553,14 +1734,22 @@ test_connection() {
 test_connection_cmd() {
     local host=$1
     local destination_dataset=$2
+    local remote_port="${3:-22}"
+    local remote_user="buddybackup"
     local host_html
     host_html=$(html_escape "${host}")
     local destination_dataset_html
     destination_dataset_html=$(html_escape "${destination_dataset}")
     echo "<h2>Trying to connect to ${host_html} over SSH..<br>"
 
+    if ! normalize_remote_target remote_user remote_port "${host}"; then
+        echo "<span style='color:red'>Invalid host or port.</span><br>"
+        echo "</h2>"
+        return
+    fi
+
     local success=0
-    eval "$(test_connection "${host}")"
+    eval "$(test_connection "${host}" "echo ok" "${remote_user}" "${remote_port}")"
     local connection_result_html
     connection_result_html=$(html_escape "${connection_result}")
     case "${connection_status}" in
@@ -1579,34 +1768,96 @@ test_connection_cmd() {
 
     if [[ $success -eq 1 ]]; then
         local zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+        if [[ -n "${destination_dataset}" ]]; then
+            zfs_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs $(shell_single_quote "${destination_dataset}")"
+        fi
         local zfs_probe_result
-        zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" 2>&1)
+        zfs_probe_result=$(run_remote_ssh "${host}" "${zfs_probe_cmd}" "${remote_user}" "${remote_port}" 2>&1)
         local zfs_probe_status=$?
+
+        if [[ -n "${destination_dataset}" ]] && [[ $zfs_probe_status -ne 0 ]]; then
+            local fallback_probe_cmd="/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php probe_zfs"
+            local fallback_probe_result
+            fallback_probe_result=$(run_remote_ssh "${host}" "${fallback_probe_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+            local fallback_probe_status=$?
+            if [[ $fallback_probe_status -eq 0 ]] && [[ "${fallback_probe_result}" == \{* ]]; then
+                zfs_probe_cmd="${fallback_probe_cmd}"
+                zfs_probe_result="${fallback_probe_result}"
+                zfs_probe_status=0
+            fi
+        fi
 
         local remote_receive_dataset=""
         local remote_probe_message=""
         local remote_probe_status=""
+        local -a remote_receive_datasets=()
         if [[ "${zfs_probe_result}" == \{* ]]; then
             remote_probe_status=$(json_field "${zfs_probe_result}" "status")
             if [[ -n "${remote_probe_status}" ]]; then
                 remote_receive_dataset=$(json_field "${zfs_probe_result}" "dataset")
                 remote_probe_message=$(json_field "${zfs_probe_result}" "message")
+                while IFS= read -r ds_line; do
+                    [[ -n "${ds_line}" ]] && remote_receive_datasets+=("${ds_line}")
+                done < <(printf '%s' "${zfs_probe_result}" | jq -r 'if type == "object" then (if .datasets and (.datasets | type == "array") then .datasets[] elif .dataset and (.dataset | type == "string") then .dataset else empty end) else empty end' 2>/dev/null)
+                if [[ ${#remote_receive_datasets[@]} -eq 0 ]] && [[ -n "${remote_receive_dataset}" ]]; then
+                    remote_receive_datasets+=("${remote_receive_dataset}")
+                fi
             fi
         fi
 
-        if [[ "${remote_probe_status}" == "ok" ]] && [[ -n "${remote_receive_dataset}" ]]; then
-            local remote_receive_dataset_html
-            remote_receive_dataset_html=$(html_escape "${remote_receive_dataset}")
-            echo "Buddy's configured receive dataset: ${remote_receive_dataset_html}<br>"
+        if [[ "${remote_probe_status}" == "ok" ]] && [[ ${#remote_receive_datasets[@]} -gt 0 ]]; then
+            local formatted_datasets=""
+            local ds
+            for ds in "${remote_receive_datasets[@]}"; do
+                [[ -n "${formatted_datasets}" ]] && formatted_datasets+=", "
+                formatted_datasets+="$(html_escape "${ds}")"
+            done
+            if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                echo "Buddy's configured receive dataset: ${formatted_datasets}<br>"
+            else
+                echo "Buddy's configured receive datasets: ${formatted_datasets}<br>"
+            fi
 
             if [[ -z "${destination_dataset}" ]]; then
-                echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${remote_receive_dataset_html}/' or match '${remote_receive_dataset_html}'.</span><br>"
-            elif [[ "${destination_dataset}" == "${remote_receive_dataset}/"* ]]; then
-                echo "Destination dataset is under the receiver's configured dataset.<br>"
-            elif [[ "${destination_dataset}" == "${remote_receive_dataset}" ]]; then
-                echo "Destination dataset matches the receiver's configured dataset.<br>"
+                if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                    echo "<span style='color:#996600'>Destination dataset is blank. It should begin with '${formatted_datasets}/' or match '${formatted_datasets}'.</span><br>"
+                else
+                    echo "<span style='color:#996600'>Destination dataset is blank. It should begin with or match one of the receiver's configured datasets: ${formatted_datasets}.</span><br>"
+                fi
             else
-                echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${remote_receive_dataset_html}/' or match it.</span><br>"
+                local matched_dataset=""
+                local match_mode=""
+                for ds in "${remote_receive_datasets[@]}"; do
+                    if [[ "${destination_dataset}" == "${ds}" ]]; then
+                        matched_dataset="${ds}"
+                        match_mode="exact"
+                        break
+                    elif [[ "${destination_dataset}" == "${ds}/"* ]]; then
+                        matched_dataset="${ds}"
+                        match_mode="child"
+                        break
+                    fi
+                done
+
+                if [[ "${match_mode}" == "exact" ]]; then
+                    if [[ ${#remote_receive_datasets[@]} -gt 1 ]]; then
+                        echo "Destination dataset matches the receiver's configured dataset: $(html_escape "${matched_dataset}").<br>" # Destination dataset matches the receiver's configured dataset.
+                    else
+                        echo "Destination dataset matches the receiver's configured dataset.<br>"
+                    fi
+                elif [[ "${match_mode}" == "child" ]]; then
+                    if [[ ${#remote_receive_datasets[@]} -gt 1 ]]; then
+                        echo "Destination dataset is under the receiver's configured dataset: $(html_escape "${matched_dataset}").<br>"
+                    else
+                        echo "Destination dataset is under the receiver's configured dataset.<br>"
+                    fi
+                else
+                    if [[ ${#remote_receive_datasets[@]} -eq 1 ]]; then
+                        echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with '${formatted_datasets}/' or match it.</span><br>"
+                    else
+                        echo "<span style='color:red'>Destination dataset '${destination_dataset_html}' does not begin with or match any of the receiver's configured datasets (${formatted_datasets}).</span><br>"
+                    fi
+                fi
             fi
         elif [[ "${zfs_probe_result}" != "ok" ]]; then
             if [[ -z "${zfs_probe_result}" ]] && [[ -n "${destination_dataset}" ]]; then
@@ -1616,7 +1867,7 @@ test_connection_cmd() {
                 fi
 
                 local legacy_probe_cmd="zfs get -H name $(shell_single_quote "${probe_dataset}")"
-                zfs_probe_result=$(run_remote_ssh "${host}" "${legacy_probe_cmd}" 2>&1)
+                zfs_probe_result=$(run_remote_ssh "${host}" "${legacy_probe_cmd}" "${remote_user}" "${remote_port}" 2>&1)
                 zfs_probe_status=$?
                 local legacy_probe_line="${zfs_probe_result%%$'\n'*}"
                 local legacy_probe_name=""
@@ -1647,7 +1898,7 @@ test_connection_cmd() {
         fi
 
         local security_validation_raw=""
-    security_validation_raw=$(run_remote_ssh "${host}" "echo ok && ls" 2>&1)
+        security_validation_raw=$(run_remote_ssh "${host}" "echo ok && ls" "${remote_user}" "${remote_port}" 2>&1)
         local security_validation_status=$?
         local security_validation_result=""
         security_validation_result=$(sanitize_ssh_output "${security_validation_raw}")
@@ -1881,7 +2132,7 @@ get_available_snapshots() {
     local destination_dataset="${2}"
     local remote_user="${3:-}"
     local remote_port="${4:-}"
-    if [[ "${type}" == "remote_generic" ]]; then
+    if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]]; then
         if ! normalize_remote_target remote_user remote_port "${destination_host}"; then
             printf '{"status": "failed", "error": "%s"}' "Invalid remote host, user or port."
             return
@@ -1901,15 +2152,21 @@ get_available_snapshots() {
         result=$(eval "${cmd}")
     fi
     local result_status=$?
+    local result_unsupported_json=0
     if zfs_error_indicates_missing_dataset "${result}"; then
         jq -cn --arg empty_message "${empty_message}" '{"status": "ok", "data": {}, "empty_message": $empty_message}'
         return
     fi
 
     if [ ${result_status} -ne 0 ]; then
-        result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-        printf '{"status": "failed", "error": "%s"}' "${result}"
-        return
+        if zfs_error_indicates_unsupported_json "${result}"; then
+            result_unsupported_json=1
+            result=""
+        else
+            result=$(echo "${result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+            printf '{"status": "failed", "error": "%s"}' "${result}"
+            return
+        fi
     fi
 
     local dataset_list=""
@@ -1920,9 +2177,20 @@ get_available_snapshots() {
     ' 2>/dev/null)
     local dataset_list_status=$?
 
-    if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${result}" ]] || [[ ${dataset_list_status} -ne 0 ]]; }; then
+    local need_legacy_dataset_list=0
+    if [[ ${result_unsupported_json} -eq 1 ]]; then
+        need_legacy_dataset_list=1
+    elif [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${result}" ]] || [[ ${dataset_list_status} -ne 0 ]]; }; then
+        need_legacy_dataset_list=1
+    fi
+
+    if [[ ${need_legacy_dataset_list} -eq 1 ]]; then
         local legacy_result=""
-        legacy_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        if [[ "${type}" == "local" ]]; then
+            legacy_result=$(eval "${legacy_cmd}" 2>&1)
+        else
+            legacy_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        fi
         local legacy_status=$?
 
         if zfs_error_indicates_missing_dataset "${legacy_result}"; then
@@ -1984,18 +2252,36 @@ get_available_snapshots() {
             sub_result=$(eval "${sub_cmd}" 2>&1)
         fi
         local sub_result_status=$?
+        local sub_result_unsupported_json=0
         if [ ${sub_result_status} -ne 0 ]; then
-            sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
-            printf '{"status": "failed", "error": "%s"}' "${sub_result}"
-            return
+            if zfs_error_indicates_unsupported_json "${sub_result}"; then
+                sub_result_unsupported_json=1
+                sub_result=""
+            else
+                sub_result=$(echo "${sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
+                printf '{"status": "failed", "error": "%s"}' "${sub_result}"
+                return
+            fi
         fi
 
         local dataset_snapshots=""
         dataset_snapshots=$(zfs_json_snapshots_for_dataset "${sub_result}" "${dataset}")
         local dataset_snapshots_status=$?
-        if [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${sub_result}" ]] || [[ ${dataset_snapshots_status} -ne 0 ]]; }; then
+
+        local need_legacy_snapshots=0
+        if [[ ${sub_result_unsupported_json} -eq 1 ]]; then
+            need_legacy_snapshots=1
+        elif [[ "${type}" == "remote" || "${type}" == "remote_generic" ]] && { [[ -z "${sub_result}" ]] || [[ ${dataset_snapshots_status} -ne 0 ]]; }; then
+            need_legacy_snapshots=1
+        fi
+
+        if [[ ${need_legacy_snapshots} -eq 1 ]]; then
             local legacy_sub_result=""
-            legacy_sub_result=$(run_remote_ssh "${destination_host}" "${legacy_sub_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+            if [[ "${type}" == "local" ]]; then
+                legacy_sub_result=$(eval "${legacy_sub_cmd}" 2>&1)
+            else
+                legacy_sub_result=$(run_remote_ssh "${destination_host}" "${legacy_sub_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+            fi
             local legacy_sub_status=$?
             if [[ ${legacy_sub_status} -ne 0 ]]; then
                 legacy_sub_result=$(echo "${legacy_sub_result}" | jq -Rrsa . | sed -e 's/^"//' -e 's/"$//')
@@ -2061,6 +2347,16 @@ get_buddy_used_size() {
         error_code=1
     fi
 
+    if [[ $error_code -ne 0 ]] && zfs_error_indicates_unsupported_json "${ssh_result}"; then
+        local legacy_cmd="zfs get -H -o value used $(shell_single_quote "${destination_dataset}")"
+        ssh_result=$(run_remote_ssh "${destination_host}" "${legacy_cmd}" "${remote_user}" "${remote_port}" 2>&1)
+        error_code=$?
+        if [[ $error_code -eq 0 ]] && [[ -n "${ssh_result}" ]]; then
+            printf '%s\n' "${ssh_result}"
+            exit 0
+        fi
+    fi
+
     echo "${ssh_result}";
     exit $error_code
 }
@@ -2069,6 +2365,9 @@ uninstall() {
     disable_backups_from_buddy
     remove_cron_files
     clear_known_hosts
+    rm -rf /var/run/buddybackup >/dev/null 2>&1 || true
+    rm -f /tmp/buddybackup* >/dev/null 2>&1 || true
+    rm -f /var/lock/buddybackup* >/dev/null 2>&1 || true
 }
 
 # read our configuration.
@@ -2118,10 +2417,10 @@ case "$1" in
         create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
     ('run_snapshot_post_hook_and_trigger')
-        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}"
+        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}" "${6:-}"
     ;;
     ('test_connection')
-        test_connection_cmd "${2}" "${3}"
+        test_connection_cmd "${2}" "${3}" "${4:-22}"
 	;;
     ('test_generic_connection')
         test_generic_connection_cmd "${2}" "${3}" "${4}" "${5}" "${6}"
