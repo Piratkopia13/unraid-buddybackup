@@ -566,17 +566,18 @@ sshd_is_running() {
 }
 
 reload_sshd() {
-    # Restart sshd so it picks up the sshd_config changes. OpenSSH unlinks its
-    # pid file and re-execs itself while restarting, so never use the pid file
-    # to decide whether a manual start is needed: checking it right after the
-    # SIGHUP races the restart and spawns a second sshd that cannot bind the
-    # port ("Address already in use", "fatal: Cannot bind any address").
+    # Restart sshd so it picks up the sshd_config changes. Never use
+    # /etc/rc.d/rc.sshd reload here: some Unraid releases implement it as
+    # "kill the current listener, then immediately start a new daemon", which
+    # races the port bind and can leave the node without any sshd. SIGHUP makes
+    # OpenSSH re-exec itself while keeping the listening socket. Pick the
+    # oldest sshd process because OpenSSH 9.8+ spawns separate sshd-session
+    # children and the listener is always the first process.
     local sshd_pid
-    sshd_pid=$(cat /var/run/sshd.pid 2>/dev/null)
-    if [[ -n "${sshd_pid}" ]] && kill -HUP "${sshd_pid}" 2>/dev/null; then
+    sshd_pid=$(pgrep -x sshd 2>/dev/null | head -n 1)
+    if [[ -n "${sshd_pid}" ]]; then
+        kill -HUP "${sshd_pid}" 2>/dev/null || true
         sleep 1
-    elif [[ -x /etc/rc.d/rc.sshd ]]; then
-        /etc/rc.d/rc.sshd reload >/dev/null 2>&1 || true
     fi
 
     if sshd_is_running; then
@@ -897,7 +898,11 @@ remove_managed_known_host() {
 append_managed_known_host() {
     local host="$1"
     local remote_port="${2:-}"
-    local scanned_key=""
+    local scanned_keys=""
+    local attempt_keys=""
+    local merged_keys=""
+    local attempt
+    local empty_scans=0
 
     ensure_managed_known_hosts_file
     remove_managed_known_host "${host}" "${remote_port}"
@@ -905,12 +910,49 @@ append_managed_known_host() {
     if [[ -n "${remote_port}" ]] && [[ "${remote_port}" != "22" ]]; then
         keyscan_opts=(-p "${remote_port}")
     fi
-    scanned_key=$(ssh-keyscan "${keyscan_opts[@]}" "${host}" 2>/dev/null)
-    if [[ -z "${scanned_key}" ]]; then
+
+    # ssh-keyscan can return a partial key set while the peer is busy. Scan a
+    # few times and merge the results (deduplicated by key material), so a
+    # single incomplete scan cannot persist an unusable known_hosts entry.
+    # Stop early once the common host key types have all been seen, or once
+    # the peer is consistently unreachable.
+    for attempt in 1 2 3 4 5; do
+        attempt_keys=$(ssh-keyscan -T 5 "${keyscan_opts[@]}" "${host}" 2>/dev/null || true)
+        if [[ -z "${attempt_keys}" ]]; then
+            empty_scans=$((empty_scans + 1))
+            if [[ "${empty_scans}" -ge 2 ]]; then
+                break
+            fi
+            continue
+        fi
+        empty_scans=0
+
+        if [[ -z "${scanned_keys}" ]]; then
+            merged_keys=$(printf '%s\n' "${attempt_keys}" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print }
+            ')
+        else
+            merged_keys=$(printf '%s\n%s\n' "${scanned_keys}" "${attempt_keys}" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print }
+            ')
+        fi
+        scanned_keys="${merged_keys}"
+
+        if printf '%s\n' "${scanned_keys}" | grep -q 'ssh-ed25519' && \
+           printf '%s\n' "${scanned_keys}" | grep -q 'ecdsa-sha2-nistp256' && \
+           printf '%s\n' "${scanned_keys}" | grep -q 'ssh-rsa'; then
+            break
+        fi
+    done
+
+    if [[ -z "${scanned_keys}" ]]; then
         return 1
     fi
 
-    printf '%s\n' "${scanned_key}" >> "${ssh_known_hosts_path}"
+    scanned_keys=$(printf '%s\n' "${scanned_keys}" | LC_ALL=C sort)
+    printf '%s\n' "${scanned_keys}" >> "${ssh_known_hosts_path}"
 }
 
 ensure_managed_known_host() {

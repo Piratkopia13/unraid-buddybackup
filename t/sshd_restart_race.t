@@ -83,6 +83,12 @@ subtest 'static analysis: restarting sshd must not race OpenSSH pid file handlin
     like($fallback // q{}, qr{/usr/sbin/sshd}, 'manual sshd start only runs after the liveness check passed');
     unlike($reload_sshd_code, qr/\bkill -0\b/, 'does not use the pid file to test liveness (races the unlink)');
     unlike($content, qr/\bkill -0\b/, 'no remaining pid-file liveness checks anywhere in rc.buddybackup');
+    like($reload_sshd_code, qr/pgrep -x sshd/, 'reload_sshd discovers the listener from the process table');
+    like($reload_sshd_code, qr/kill -HUP/, 'reload_sshd sends SIGHUP so OpenSSH re-execs but keeps the listening socket');
+
+    my $reload_sshd_commands = $reload_sshd_code;
+    $reload_sshd_commands =~ s/^[ \t]*#.*$//mg;
+    unlike($reload_sshd_commands, qr{rc\.sshd\s+reload}, 'never invokes rc.sshd reload (kill + immediate start races the port bind)');
 };
 
 subtest 'static analysis: sshd_config edits restart sshd only on actual change' => sub {
@@ -256,6 +262,56 @@ CONF
 
     my $calls = slurp($log_file);
     is(scalar(my @reloads = ($calls =~ /^reload_sshd/mg)), 1, 'sshd restarted exactly once');
+};
+
+subtest 'behavioral: reload_sshd HUPs the listener and never uses rc.sshd reload' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $bin_dir = File::Spec->catdir($workdir, 'bin');
+    make_path($bin_dir);
+    my $log_file = File::Spec->catfile($workdir, 'calls.log');
+    write_script($log_file, "");
+
+    write_script(File::Spec->catfile($bin_dir, 'pgrep'), <<"SH");
+#!/bin/bash
+echo "pgrep \$@" >> "$log_file"
+echo "4242"
+SH
+
+    write_script(File::Spec->catfile($bin_dir, 'kill'), <<"SH");
+#!/bin/bash
+echo "kill \$@" >> "$log_file"
+exit 0
+SH
+
+    my $runner_template = <<'SH';
+#!/bin/bash
+set -e
+export PATH="__BIN_DIR__:$PATH"
+
+kill() { echo "kill $@" >> "__LOG_FILE__"; return 0; }
+
+__SSHD_IS_RUNNING__
+
+__RELOAD_SSHD__
+
+reload_sshd
+echo "reload=ok"
+SH
+    $runner_template =~ s/__BIN_DIR__/$bin_dir/;
+    $runner_template =~ s/__LOG_FILE__/$log_file/;
+    $runner_template =~ s/__SSHD_IS_RUNNING__/$sshd_is_running_code/;
+    $runner_template =~ s/__RELOAD_SSHD__/$reload_sshd_code/;
+    my $runner = File::Spec->catfile($workdir, 'run_reload.sh');
+    write_script($runner, $runner_template);
+
+    my $out = `bash "$runner" 2>&1`;
+    is($? >> 8, 0, "reload_sshd executed successfully: $out");
+    like($out, qr/reload=ok/, 'reload_sshd completed');
+
+    my $calls = slurp($log_file);
+    like($calls, qr/^pgrep -x sshd$/m, 'reload_sshd found the running listener');
+    like($calls, qr/^kill -HUP 4242$/m, 'reload_sshd sent SIGHUP to the listener');
+    unlike($calls, qr/rc\.sshd/, 'no rc.sshd reload invocation happened');
 };
 
 done_testing();

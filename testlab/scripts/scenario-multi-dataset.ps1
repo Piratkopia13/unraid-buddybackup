@@ -182,6 +182,8 @@ function Invoke-NodeSshCommand {
         "-F", "NUL",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=8",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
         "-o", "IdentitiesOnly=yes",
         "-o", "LogLevel=ERROR",
         "-o", "StrictHostKeyChecking=no",

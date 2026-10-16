@@ -1021,6 +1021,70 @@ function add_backup_cron_file($uid, $cfg) {
     BB_VERBOSE("Created $plugin_path/backup-$uid.cron");
 }
 
+function scan_remote_known_hosts($host, $port) {
+    $command = 'ssh-keyscan -T 5';
+    if ((string)$port !== '' && (string)$port !== '22') {
+        $command .= ' -p '.escapeshellarg($port);
+    }
+    $command .= ' '.escapeshellarg($host).' 2>/dev/null';
+
+    $keys = [];
+    $key_types = [];
+    $standard_types = ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ssh-rsa'];
+    $standard_types_found = 0;
+    $empty_scans = 0;
+    // ssh-keyscan can return only a subset of the offered host key types while
+    // the peer is busy. Scan a few times and merge the results (deduplicated by
+    // key material), so a partial scan cannot replace a complete known_hosts
+    // entry and break host key verification later. Stop early once every
+    // common key type has been seen, or once the peer is consistently
+    // unreachable.
+    for ($attempt = 0; $attempt < 5; $attempt++) {
+        $scan = shell_exec($command);
+        if (!is_string($scan) || trim($scan) === '') {
+            $empty_scans++;
+            if ($empty_scans >= 2) {
+                break;
+            }
+            continue;
+        }
+        $empty_scans = 0;
+
+        foreach (preg_split('/\r?\n/', $scan) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            $parts = preg_split('/\s+/', $line);
+            if (!is_array($parts) || count($parts) < 3) {
+                continue;
+            }
+            $material = $parts[1].' '.$parts[2];
+            if (!isset($keys[$material])) {
+                $keys[$material] = $line;
+            }
+            $key_type = $parts[1];
+            if (!isset($key_types[$key_type])) {
+                $key_types[$key_type] = true;
+                if (in_array($key_type, $standard_types, true)) {
+                    $standard_types_found++;
+                }
+            }
+        }
+
+        if ($standard_types_found >= count($standard_types)) {
+            break;
+        }
+    }
+
+    if (empty($keys)) {
+        return null;
+    }
+
+    sort($keys, SORT_STRING);
+    return implode("\n", $keys);
+}
+
 function update_backups_from_config() {
     BB_LOG("Updating backup cronjobs");
     global $managed_known_hosts_path;
@@ -1129,13 +1193,9 @@ function update_backups_from_config() {
 
     foreach ($destination_host_keys as $destination_host_key) {
         $entry = $destination_hosts[$destination_host_key];
-        $command = 'ssh-keyscan';
-        if ($entry['port'] != '22') {
-            $command .= ' -p '.escapeshellarg($entry['port']);
-        }
-        $command .= ' '.escapeshellarg($entry['host']).' 2>/dev/null';
-        if ($key = shell_exec($command)) {
-            $known_hosts_content .= rtrim($key, "\r\n") . "\n";
+        $scanned_keys = scan_remote_known_hosts($entry['host'], $entry['port']);
+        if ($scanned_keys !== null) {
+            $known_hosts_content .= $scanned_keys . "\n";
         }
     }
 

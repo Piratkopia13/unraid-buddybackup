@@ -76,6 +76,8 @@ $resolvedIdentityFile = Get-LocalSshIdentityFile $IdentityFile
 $labSshOpts = @(
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=5",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
     "-o", "GlobalKnownHostsFile=/dev/null",
@@ -200,7 +202,7 @@ if ($Execute) {
 if [ -s /home/buddybackup/.ssh/authorized_keys ] && [ -f /boot/config/plugins/buddybackup/buddybackup_sender_key ]; then
     target_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     target_ip=${target_ip:-127.0.0.1}
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i /boot/config/plugins/buddybackup/buddybackup_sender_key buddybackup@${target_ip} "echo ok" >/dev/null 2>&1
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -i /boot/config/plugins/buddybackup/buddybackup_sender_key buddybackup@${target_ip} "echo ok" >/dev/null 2>&1
 fi
 '@
     & ssh @labSshOpts -p $Port -i $resolvedIdentityFile "$User@$TargetHost" $remoteSshCheck
