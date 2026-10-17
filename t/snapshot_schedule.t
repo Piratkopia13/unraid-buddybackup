@@ -427,4 +427,75 @@ SH
     };
 };
 
+# ---------------------------------------------------------------------------
+# 4. Behavioral: standalone rc.buddybackup process detachment and trap disarm
+# ---------------------------------------------------------------------------
+subtest 'behavioral: standalone rc.buddybackup disowns trigger and survives parent cleanup trap' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $event_log = File::Spec->catfile($workdir, 'lifecycle_events.log');
+    my $mock_empath = File::Spec->catdir($workdir, 'empath');
+    my $mock_scripts = File::Spec->catdir($mock_empath, 'scripts');
+    make_path($mock_scripts);
+
+    my $mock_php = File::Spec->catfile($mock_scripts, 'rc.buddybackup.php');
+    open my $pfh, '>', $mock_php or die "Cannot write $mock_php: $!";
+    print $pfh <<'SH';
+#!/bin/bash
+if [[ "$1" == "send_backup" ]]; then
+    sleep 0.3
+    echo "background_trigger_completed uid=$2" >> "$LIFECYCLE_EVENT_LOG"
+fi
+exit 0
+SH
+    close $pfh;
+    chmod 0755, $mock_php;
+
+    my $mock_log = File::Spec->catfile($mock_scripts, 'log.sh');
+    open my $lfh, '>', $mock_log or die "Cannot write $mock_log: $!";
+    print $lfh <<'SH';
+#!/bin/bash
+cat > /dev/null
+SH
+    close $lfh;
+    chmod 0755, $mock_log;
+
+    my $thaw_hook = File::Spec->catfile($workdir, 'thaw_hook.sh');
+    open my $tfh, '>', $thaw_hook or die "Cannot write $thaw_hook: $!";
+    print $tfh <<'SH';
+#!/bin/bash
+echo "post_thaw_hook_executed" >> "$LIFECYCLE_EVENT_LOG"
+exit 0
+SH
+    close $tfh;
+    chmod 0755, $thaw_hook;
+
+    my $t0 = time();
+    my $cmd = sprintf(
+        'LIFECYCLE_EVENT_LOG=%s empath=%s bash %s run_snapshot_post_hook_and_trigger %s %s 30 %s',
+        quotemeta($event_log),
+        quotemeta($mock_empath),
+        quotemeta($rc_script),
+        quotemeta('tank/test_ds'),
+        quotemeta($thaw_hook),
+        quotemeta('trig_lifecycle_1')
+    );
+    my $output = `$cmd 2>&1`;
+    my $exit_code = $? >> 8;
+    my $elapsed = time() - $t0;
+
+    is($exit_code, 0, 'standalone rc.buddybackup exited with code 0');
+    ok($elapsed < 3, 'standalone wrapper exited immediately without blocking on background backup');
+
+    # Give the background process a moment to write completion if it has not already done so
+    for (1..20) {
+        last if -f $event_log && slurp($event_log) =~ /background_trigger_completed/;
+        select(undef, undef, undef, 0.1);
+    }
+
+    ok(-f $event_log, 'event log was created');
+    my $log_content = -f $event_log ? slurp($event_log) : '';
+    like($log_content, qr/post_thaw_hook_executed/, 'thaw hook executed in standalone wrapper');
+    like($log_content, qr/background_trigger_completed uid=trig_lifecycle_1/, 'background trigger survived parent exit and completed successfully');
+};
+
 done_testing();

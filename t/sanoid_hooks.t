@@ -111,6 +111,16 @@ subtest 'rc.buddybackup defines chained runner helper' => sub {
     );
     like(
         $rc,
+        qr/disown\s+(?:-h\s+)?["']?\$\{trigger_pid\}["']?/,
+        'chained helper disowns background trigger process'
+    );
+    like(
+        $rc,
+        qr/trap\s+-\s+EXIT INT TERM HUP/,
+        'chained helper disarms cleanup trap before returning'
+    );
+    like(
+        $rc,
         qr/\(?['"]?run_snapshot_post_hook_and_trigger['"]?\)?/,
         'case dispatch routes run_snapshot_post_hook_and_trigger command'
     );
@@ -372,6 +382,43 @@ SH
         is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed first');
         is($lines[1], 'trigger_dispatched uid=trig_abc123', 'trigger backup completed in background');
     };
+};
+
+# ---------------------------------------------------------------------------
+# Behavioral test: log.sh filters harmless upstream Sanoid filehandle warning
+# ---------------------------------------------------------------------------
+subtest 'behavioral: log.sh filters upstream Sanoid closed filehandle warning' => sub {
+    my $log_script = File::Spec->catfile($plugin_dir, 'scripts', 'log.sh');
+    ok(-f $log_script, 'log.sh exists');
+
+    my $workdir = tempdir(CLEANUP => 1);
+    my $test_logfile = File::Spec->catfile($workdir, 'filtered.log');
+
+    my $input = join("\n",
+        'Starting Sanoid snapshot run',
+        'filehandle FH at /usr/local/emhttp/plugins/buddybackup/deps/sanoid line 1797.',
+        'print() on closed filehandle FH at /usr/local/emhttp/plugins/buddybackup/deps/sanoid line 1797.',
+        'Completed Sanoid snapshot run',
+        ''
+    );
+
+    my $stdin  = gensym;
+    my $stdout = gensym;
+    my $stderr = gensym;
+    local $ENV{LOGFILE} = $test_logfile;
+    my $pid = eval { open3($stdin, $stdout, $stderr, 'bash', $log_script) };
+    if ($pid) {
+        print $stdin $input;
+        close $stdin;
+        waitpid($pid, 0);
+    }
+
+    ok(-f $test_logfile, 'log file was created');
+    my $content = -f $test_logfile ? slurp($test_logfile) : '';
+    like($content, qr/Starting Sanoid snapshot run/, 'normal logs are retained with timestamps');
+    like($content, qr/Completed Sanoid snapshot run/, 'subsequent normal logs are retained');
+    unlike($content, qr/closed filehandle FH/, 'closed filehandle FH warning was filtered');
+    unlike($content, qr/filehandle FH at .*sanoid line/, 'bareword filehandle FH error was filtered');
 };
 
 done_testing();

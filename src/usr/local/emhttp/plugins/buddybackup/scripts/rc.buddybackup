@@ -438,11 +438,15 @@ run_snapshot_post_hook_and_trigger() {
         if [[ "${trigger_uid}" =~ ^[A-Za-z0-9_-]+$ ]]; then
             logger "Triggering backup task '${trigger_uid}' after snapshot of '${dataset}'" -t"${plugin}"
             ( flock -n "/var/lock/buddybackup-${trigger_uid}" "${empath}/scripts/rc.buddybackup.php" send_backup "${trigger_uid}" 2>&1 | "${empath}/scripts/log.sh" ) >/dev/null 2>&1 &
+            local trigger_pid=$!
+            disown -h "${trigger_pid}" 2>/dev/null || true
         else
             logger "Invalid trigger_uid '${trigger_uid}' for dataset '${dataset}', ignoring trigger" -t"${plugin}"
         fi
     fi
 
+    # Disarm the global cleanup trap so the background trigger is not killed when this wrapper process exits
+    trap - EXIT INT TERM HUP
     return 0
 }
 
@@ -2371,13 +2375,17 @@ uninstall() {
 }
 
 # read our configuration.
-CONFIG="/boot/config/plugins/${plugin}/${plugin}.cfg"
-source $CONFIG
+CONFIG="${CONFIG:-/boot/config/plugins/${plugin}/${plugin}.cfg}"
+if [[ -f "$CONFIG" ]]; then
+    source "$CONFIG"
+fi
 
 # Unraid 7.1 copies ssh configs from boot, so edit the boot file if on that version and it exists
-source /etc/unraid-version
+if [[ -f "/etc/unraid-version" ]]; then
+    source /etc/unraid-version
+fi
 unraid_7_1_or_higher=false
-if [[ "$(echo "$version" | awk -F. '{print $2}')" -ge 1 ]]; then
+if [[ "$(echo "${version:-}" | awk -F. '{print $2}')" -ge 1 ]] 2>/dev/null; then
     unraid_7_1_or_higher=true
 fi
 if [[ -f "/boot/config/ssh/sshd_config" ]] && [ "$unraid_7_1_or_higher" = true ]; then
@@ -2387,11 +2395,11 @@ else
 fi
 
 username="buddybackup"
-plugin_path="/boot/config/plugins/${plugin}"
+plugin_path="${plugin_path:-/boot/config/plugins/${plugin}}"
 ssh_key_path="${plugin_path}/buddybackup_sender_key"
 ssh_known_hosts_path="${plugin_path}/buddybackup_known_hosts"
 legacy_root_known_hosts_path="/root/.ssh/known_hosts"
-empath="/usr/local/emhttp/plugins/buddybackup"
+empath="${empath:-/usr/local/emhttp/plugins/buddybackup}"
 sanoid_bin="${empath}/deps/sanoid"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
