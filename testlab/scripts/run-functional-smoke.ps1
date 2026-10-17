@@ -1427,6 +1427,120 @@ rm -f '$hookLog'
         Write-Host "[testlab] Skipping backup hooks test: neither node supports hooks in this cell."
     }
 
+    # 4. Snapshot trigger decoupling & background detachment test
+    $nodeSupportsTriggerRunner = $false
+    if ($null -ne $hookTargetConnection) {
+        $triggerProbeCmd = "grep -q 'run_snapshot_post_hook_and_trigger' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'supported' || echo 'unsupported'"
+        $triggerProbeResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command $triggerProbeCmd -Label "$hookTargetNode-probe-trigger-runner" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $triggerProbeResult
+        if ($Execute -and $triggerProbeResult.success) {
+            $probeStr = ($triggerProbeResult.output -join "`n").Trim()
+            if ($probeStr -eq "supported") {
+                $nodeSupportsTriggerRunner = $true
+            }
+        }
+    }
+
+    if ($nodeSupportsTriggerRunner) {
+        Write-Host "[testlab] Functional smoke: verifying snapshot trigger decoupling and background detachment on $hookTargetNode"
+        $triggerThawHook = "/boot/config/plugins/buddybackup/hooks/test-trigger-thaw.sh"
+        $triggerEventLog = "/tmp/buddybackup-trigger-test.log"
+        $setupTriggerCmd = @"
+cat > '$triggerThawHook' <<'EOF'
+#!/bin/bash
+echo "thaw_executed" >> '$triggerEventLog'
+exit 0
+EOF
+chmod 755 '$triggerThawHook'
+rm -f '$triggerEventLog'
+rm -f '/var/run/buddybackup/$($hookTargetPlan.localBackupUid)' '/tmp/buddybackup-$($hookTargetPlan.localBackupUid)' '/var/lock/buddybackup-$($hookTargetPlan.localBackupUid)'
+"@
+        $setupTriggerResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command $setupTriggerCmd -Label "$hookTargetNode-setup-trigger-hooks" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $setupTriggerResult
+        Assert-CommandSucceeded -Result $setupTriggerResult -FailureMessage "Failed to stage trigger test hook on $hookTargetNode."
+
+        try {
+            $triggerArgs = @($hookTargetPlan.sourceDataset, $triggerThawHook, "30", $hookTargetPlan.localBackupUid)
+            $triggerResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $hookTargetConnection -Action "run_snapshot_post_hook_and_trigger" -Arguments $triggerArgs -Label "$hookTargetNode-trigger-decoupling-test" -RetryTransientSshFailure -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $triggerResult
+            Assert-CommandSucceeded -Result $triggerResult -FailureMessage "BuddyBackup run_snapshot_post_hook_and_trigger failed on $hookTargetNode."
+
+            if ($Execute) {
+                # Verify wrapper returned immediately and thaw hook ran
+                $readTriggerLogCmd = "cat '$triggerEventLog' 2>/dev/null || echo '(no-log)'"
+                $readTriggerLogResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command $readTriggerLogCmd -Label "$hookTargetNode-check-trigger-thaw-log" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $readTriggerLogResult
+                $thawOutput = Get-ResultOutputText -Result $readTriggerLogResult
+                if ($thawOutput -notmatch 'thaw_executed') {
+                    throw "Snapshot trigger test failed: thaw hook was not executed before trigger return on $hookTargetNode."
+                }
+
+                # Poll runtime telemetry file for up to 30 seconds to verify background backup completes and reports last_status="success" (not killed by SIGTERM)
+                $pollScript = @'
+uid="$1"
+run_file="/var/run/buddybackup/${uid}"
+tmp_file="/tmp/buddybackup-${uid}"
+
+for i in {1..30}; do
+    target_file=""
+    if [[ -f "$run_file" ]]; then
+        target_file="$run_file"
+    elif [[ -f "$tmp_file" ]]; then
+        target_file="$tmp_file"
+    fi
+
+    if [[ -n "$target_file" ]]; then
+        status=$(grep '^last_status=' "$target_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"\r\n' || true)
+        if [[ "$status" == "success" ]]; then
+            echo "TRIGGER_BACKUP_SUCCESS"
+            exit 0
+        elif [[ "$status" == "failed" ]]; then
+            error_msg=$(grep '^last_error_message=' "$target_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"\r\n' || true)
+            echo "TRIGGER_BACKUP_FAILED: $error_msg"
+            exit 1
+        fi
+    fi
+    sleep 1
+done
+
+echo "TRIGGER_BACKUP_TIMEOUT"
+if [[ -f /var/log/buddybackup.log ]]; then
+    echo "--- Recent /var/log/buddybackup.log ---"
+    tail -n 25 /var/log/buddybackup.log
+fi
+exit 1
+'@
+                $pollResult = Invoke-NodeBashScript -NodeConnection $hookTargetConnection -ScriptContent $pollScript -Arguments @($hookTargetPlan.localBackupUid) -Label "$hookTargetNode-verify-trigger-backup-success" -DoExecute:$Execute
+                Add-ReportAction -Report $report -Result $pollResult
+                Assert-CommandSucceeded -Result $pollResult -FailureMessage "Triggered backup task did not succeed on $hookTargetNode (possible SIGTERM kill or timeout)."
+            }
+        } finally {
+            $cleanupTriggerResult = Invoke-NodeSshCommandWithRetry -NodeConnection $hookTargetConnection -Command "rm -f '$triggerThawHook' '$triggerEventLog'" -Label "$hookTargetNode-cleanup-trigger-hooks" -DoExecute:$Execute
+            Add-ReportAction -Report $report -Result $cleanupTriggerResult
+        }
+    }
+
+    # 5. Log hygiene and warning auditing
+    if ($Execute -and $null -ne $hookTargetConnection) {
+        Write-Host "[testlab] Functional smoke: auditing /var/log/buddybackup.log for suppressed warnings and errors on $hookTargetNode"
+        $auditScript = @'
+if [[ -f /var/log/buddybackup.log ]]; then
+    if grep -E 'print\(\) on closed filehandle FH|filehandle FH at .*sanoid line' /var/log/buddybackup.log; then
+        echo "LOG_AUDIT_FAILED_SANOID_WARNING"
+        exit 1
+    fi
+    echo "LOG_AUDIT_PASSED"
+    exit 0
+else
+    echo "LOG_AUDIT_SKIPPED_NO_LOG"
+    exit 0
+fi
+'@
+        $auditResult = Invoke-NodeBashScript -NodeConnection $hookTargetConnection -ScriptContent $auditScript -Label "$hookTargetNode-audit-log-cleanliness" -DoExecute:$Execute
+        Add-ReportAction -Report $report -Result $auditResult
+        Assert-CommandSucceeded -Result $auditResult -FailureMessage "Log hygiene audit failed on ${hookTargetNode}: unhandled Sanoid filehandle warning detected in buddybackup.log."
+    }
+
     $report.success = $true
     Write-Host "[testlab] Functional smoke completed successfully"
 } catch {
