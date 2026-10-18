@@ -710,39 +710,40 @@ function Wait-NodeBootSettle {
         return
     }
 
-    $settleScript = @'
-uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 60)
-if [ "$uptime_secs" -lt 45 ]; then
-    sleep $((45 - uptime_secs))
-fi
-while atq 2>/dev/null | grep -q '^[0-9]' || pidof -x reload_services >/dev/null 2>&1; do
-    sleep 1
-done
-if ! pgrep -x sshd >/dev/null 2>&1; then
-    /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-    if ! pgrep -x sshd >/dev/null 2>&1; then
-        mkdir -p /boot/config/ssh
-        cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
-        chmod 600 /etc/ssh/* 2>/dev/null || true
-        ssh-keygen -A >/dev/null 2>&1 || true
-        cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
-        /usr/sbin/sshd >/dev/null 2>&1 || true
-    fi
-fi
-echo "boot-settled"
-'@
-
     $startTime = Get-Date
+    $settled = $false
     while ((New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds -lt $TimeoutSeconds) {
-        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $settleScript -Label "boot-settle" -PreviewCommand "wait for early boot service reloads" -DoExecute:$DoExecute
-        if ($result.success -and @($result.output) -contains "boot-settled") {
-            Write-Host "[testlab] Early boot services settled on $NodeName"
-            return
+        $checkScript = @'
+uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+reload_pid=$(pidof -x reload_services 2>/dev/null || true)
+sshd_running=0
+if pgrep -x sshd >/dev/null 2>&1; then
+    sshd_running=1
+fi
+echo "uptime=$uptime_secs reload=$reload_pid sshd=$sshd_running"
+if [ "$uptime_secs" -ge 45 ] && [ -z "$reload_pid" ] && [ "$sshd_running" -eq 1 ]; then
+    echo "boot-settled"
+fi
+'@
+        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $checkScript -Label "boot-settle" -PreviewCommand "check early boot service status" -DoExecute:$DoExecute
+        if ($result.success) {
+            $outputStr = ($result.output -join ' ').Trim()
+            if ($outputStr -match "boot-settled") {
+                Write-Host "[testlab] Early boot services settled on $NodeName ($outputStr)"
+                $settled = $true
+                break
+            } else {
+                Write-Host "[testlab] Waiting for $NodeName boot services to settle: $outputStr"
+            }
+        } else {
+            Write-Host "[testlab] Node $NodeName SSH not ready during boot settle (exit=$($result.exitCode)), retrying..."
         }
         Start-Sleep -Seconds 3
     }
 
-    throw "Node '$NodeName' did not settle early boot services within $TimeoutSeconds seconds."
+    if (-not $settled) {
+        throw "Node '$NodeName' did not settle early boot services within $TimeoutSeconds seconds."
+    }
 }
 
 function Invoke-NodeBaseSetup {
@@ -1165,7 +1166,7 @@ while [ "$attempts" -gt 0 ]; do
                 if [ "$uptime_secs" -lt 45 ]; then
                     sleep $((45 - uptime_secs))
                 fi
-                while atq 2>/dev/null | grep -q '^[0-9]' || pidof -x reload_services >/dev/null 2>&1; do
+                while pidof -x reload_services >/dev/null 2>&1; do
                     sleep 1
                 done
                 if ! pgrep -x sshd >/dev/null 2>&1; then
@@ -1358,25 +1359,6 @@ if [ "$encryption_value" = "off" ]; then
   exit 1
 fi
 
-# Wait until post-boot service reloads (scheduled at +20s by network init) complete
-uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 60)
-if [ "$uptime_secs" -lt 45 ]; then
-    sleep $((45 - uptime_secs))
-fi
-while atq 2>/dev/null | grep -q '^[0-9]' || pidof -x reload_services >/dev/null 2>&1; do
-    sleep 1
-done
-if ! pgrep -x sshd >/dev/null 2>&1; then
-    /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
-    if ! pgrep -x sshd >/dev/null 2>&1; then
-        mkdir -p /boot/config/ssh
-        cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
-        chmod 600 /etc/ssh/* 2>/dev/null || true
-        ssh-keygen -A >/dev/null 2>&1 || true
-        cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
-        /usr/sbin/sshd >/dev/null 2>&1 || true
-    fi
-fi
 
 echo "pool=$pool_name"
 echo "dataset_root=$dataset_root"
@@ -1583,6 +1565,19 @@ $report = [ordered]@{
 $startedInstances = @()
 
 try {
+    if ($Execute) {
+        Write-Host "[testlab] Ensuring any lingering WSL/QEMU lab instances are stopped"
+        foreach ($preStopNode in @("nodeA", "nodeB")) {
+            $preStopNodeObj = Get-ObjectValue -Object $lab.nodes -Name $preStopNode
+            $preStopInstance = if ($preStopNodeObj -and $preStopNodeObj.instanceName) { [string]$preStopNodeObj.instanceName } else { "lab-$preStopNode" }
+            try {
+                Stop-WslLabInstance -Distro $distro -InstanceName $preStopInstance -DoExecute
+            } catch {
+                # Ignore if not running
+            }
+        }
+    }
+
     foreach ($entry in @(
         @{ NodeName = "nodeA"; DefaultPort = 2222; DefaultHttpPort = 8080; DefaultHttpsPort = 8443 },
         @{ NodeName = "nodeB"; DefaultPort = 2223; DefaultHttpPort = 8081; DefaultHttpsPort = 8444 }

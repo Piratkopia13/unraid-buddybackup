@@ -1338,8 +1338,8 @@ function Wait-ForRebootCycle {
                     }
                 }
             }
-            # Ensure any pending Unraid delayed service reloads (atq / reload_services) have completed
-            $serviceWaitCommand = 'while atq 2>/dev/null | grep -q "^[0-9]" || pidof -x reload_services >/dev/null 2>&1; do sleep 1; done; echo settled'
+            # Ensure any pending Unraid delayed service reloads (reload_services) have completed
+            $serviceWaitCommand = 'uptime_secs=$(awk "{print int(\$1)}" /proc/uptime 2>/dev/null || echo 60); if [ "$uptime_secs" -lt 45 ]; then sleep $((45 - uptime_secs)); fi; while pidof -x reload_services >/dev/null 2>&1; do sleep 1; done; echo settled'
             $null = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $serviceWaitCommand -LoggedCommand "wait for pending Unraid service reloads" -Label "post-reboot-service-settle" -TimeoutSeconds 60 -IntervalSeconds 2
         }
 
@@ -2965,7 +2965,7 @@ while [ "$attempts" -gt 0 ]; do
                 if [ "$uptime_secs" -lt 45 ]; then
                     sleep $((45 - uptime_secs))
                 fi
-                while atq 2>/dev/null | grep -q '^[0-9]' || pidof -x reload_services >/dev/null 2>&1; do
+                while pidof -x reload_services >/dev/null 2>&1; do
                     sleep 1
                 done
                 if ! pgrep -x sshd >/dev/null 2>&1; then
