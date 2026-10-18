@@ -198,6 +198,53 @@ function validate_hook_script($path, &$error_message = null) {
     return true;
 }
 
+function format_sanoid_hook_command($hook) {
+    $hook = trim((string)$hook);
+    if ($hook === '') {
+        return '';
+    }
+
+    if (preg_match('/^([\'"]?)(\/[^\s;&|]+)\1$/', $hook, $matches)) {
+        $path = $matches[2];
+        $resolved = realpath($path);
+        if ($resolved === false) {
+            $resolved = $path;
+        }
+
+        $test_prefix = getenv('BUDDYBACKUP_TEST_BOOT_PREFIX') ?: ($_ENV['BUDDYBACKUP_TEST_BOOT_PREFIX'] ?? '');
+        $is_boot = (
+            substr($resolved, 0, 6) === '/boot/' ||
+            substr($path, 0, 6) === '/boot/' ||
+            ($test_prefix !== '' && (
+                substr($resolved, 0, strlen($test_prefix)) === $test_prefix ||
+                substr($path, 0, strlen($test_prefix)) === $test_prefix
+            ))
+        );
+
+        if ($is_boot) {
+            $interpreter = 'bash';
+            $target_file = is_file($resolved) ? $resolved : (is_file($path) ? $path : null);
+            if ($target_file !== null && is_readable($target_file)) {
+                $fh = @fopen($target_file, 'r');
+                if ($fh) {
+                    $first_line = fgets($fh);
+                    fclose($fh);
+                    if ($first_line !== false) {
+                        $first_line = trim($first_line, "\r\n");
+                        if (preg_match('/^#!\s*(\/.+)$/', $first_line, $m)) {
+                            $interpreter = trim($m[1]);
+                        }
+                    }
+                }
+            }
+            $escaped_path = "'" . str_replace("'", "'\\''", $path) . "'";
+            return "$interpreter $escaped_path";
+        }
+    }
+
+    return $hook;
+}
+
 function normalize_hook_timeout($value) {
     $value = trim((string)$value);
     if ($value === '' || !ctype_digit($value) || (int)$value < 1) {
@@ -953,6 +1000,7 @@ function update_sanoid_conf() {
             $daily_filter = '[ -n "${SANOID_TYPES:-}" ] && case "${SANOID_TYPES}" in *daily*) ;; *) exit 0;; esac; ';
 
             if ($pre_hook !== '') {
+                $pre_hook = format_sanoid_hook_command($pre_hook);
                 if ($hook_scope === 'daily') {
                     $pre_hook = $daily_filter . $pre_hook;
                 }
@@ -976,6 +1024,7 @@ function update_sanoid_conf() {
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             } else if ($post_hook !== '') {
                 $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                $post_hook = format_sanoid_hook_command($post_hook);
                 if ($hook_scope === 'daily') {
                     $post_hook = $daily_filter . $post_hook;
                 }
@@ -997,6 +1046,7 @@ function enable_sanoid_cron() {
     global $plugin_path;
     global $log_script;
     global $plugin_config_path;
+    global $rc;
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
     if (file_exists($sanoid_cron_path)) {
         ENSURE_SUCCESS(unlink($sanoid_cron_path));
@@ -1004,7 +1054,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $sanoid_bin --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");

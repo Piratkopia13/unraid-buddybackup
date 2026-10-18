@@ -405,6 +405,65 @@ fi
 
 cat >> "$mount_dir/config/go" <<'EOF'
 
+# BuddyBackup testlab: ensure SSH is enabled in ident.cfg so rc.sshd starts and generates host keys
+mkdir -p /boot/config
+ident_cfg="/boot/config/ident.cfg"
+if [ -f "$ident_cfg" ]; then
+    if grep -q '^USE_SSH=' "$ident_cfg"; then
+        sed -i 's/^USE_SSH=.*/USE_SSH="yes"/' "$ident_cfg"
+    else
+        printf '\nUSE_SSH="yes"\n' >> "$ident_cfg"
+    fi
+else
+    printf 'USE_SSH="yes"\n' > "$ident_cfg"
+fi
+
+# BuddyBackup testlab: guard Unraid rc.sshd against port bind race during delayed service reloads
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+    if command -v perl >/dev/null 2>&1; then
+        perl -0777 -i -pe '
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            or
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+        ' /etc/rc.d/rc.sshd 2>/dev/null || true
+    fi
+fi
+sysctl -w net.ipv4.ip_nonlocal_bind=1 >/dev/null 2>&1 || true
+
+ensure_sshd_global_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    [ -f "$target_file" ] || return 0
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v opt="$opt" -v key="$key" '
+        BEGIN { found = 0; match_seen = 0 }
+        $1 == "Match" {
+            if (!found && !match_seen) {
+                print opt
+                found = 1
+            }
+            match_seen = 1
+        }
+        tolower($1) == tolower(key) {
+            if (match_seen) {
+                next
+            }
+            found = 1
+        }
+        { print }
+        END {
+            if (!found && !match_seen) {
+                print opt
+            }
+        }
+    ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
+}
+
+ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
+ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+
 # BuddyBackup testlab: restore persisted SSH key and root password on every boot
 merge_root_shadow_entry() {
     local source_path="$1"
@@ -458,6 +517,14 @@ fi
 if [ -x /etc/rc.d/rc.sshd ]; then
     chmod +x /etc/rc.d/rc.sshd 2>/dev/null || true
     /etc/rc.d/rc.sshd start 2>/dev/null || true
+    if ! pgrep -x sshd >/dev/null 2>&1; then
+        mkdir -p /boot/config/ssh
+        cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
+        chmod 600 /etc/ssh/* 2>/dev/null || true
+        ssh-keygen -A >/dev/null 2>&1 || true
+        cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
+        /usr/sbin/sshd >/dev/null 2>&1 || true
+    fi
 fi
 (
     attempts=180
@@ -473,6 +540,14 @@ fi
 
         if ! pgrep -x sshd >/dev/null 2>&1; then
             /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+            if ! pgrep -x sshd >/dev/null 2>&1; then
+                mkdir -p /boot/config/ssh
+                cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
+                chmod 600 /etc/ssh/* 2>/dev/null || true
+                ssh-keygen -A >/dev/null 2>&1 || true
+                cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
+                /usr/sbin/sshd >/dev/null 2>&1 || true
+            fi
         fi
 
         sleep 2
@@ -498,7 +573,18 @@ fi
                 known_hosts_ready=0
             fi
 
-            if grep -q '^buddybackup:' /etc/shadow 2>/dev/null && [ "$known_hosts_ready" -eq 1 ]; then
+            receiver_ready=1
+            if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
+                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                    receiver_ready=0
+                fi
+            elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
+                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                    receiver_ready=0
+                fi
+            fi
+
+            if [ "$receiver_ready" -eq 1 ] && [ "$known_hosts_ready" -eq 1 ]; then
                 break
             fi
         fi

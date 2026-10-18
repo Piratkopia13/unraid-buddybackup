@@ -239,7 +239,7 @@ Automated snapshot creation and retention policies powered by **Sanoid**.
 - **Create snapshots automatically** (`autosnap`) & **Prune snapshots automatically** (`autoprune`): Toggle automated snapshot creation and retention pruning.
 - **Snapshot retention**: Number of snapshots to retain for Hourly, Daily, Weekly, Monthly, and Yearly intervals.
 - **Scheduled snapshot time**: Configurable hour and minute (e.g. `04:00 AM`) specifying when daily, weekly, monthly, and yearly snapshot cycles execute. Powered by a 1-minute precision cron heartbeat (`* * * * *`). Includes a live dynamic schedule preview that explains the exact snapshot intervals and hook behavior.
-- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset. Triggered replication executes asynchronously in the background so Sanoid exits in milliseconds and releases its lock immediately.
+- **Trigger backup after snapshot**: Select a backup task to run immediately whenever Sanoid creates a new snapshot of this dataset. Triggered replication executes asynchronously as a detached background process so Sanoid exits in milliseconds and releases its lock immediately without interrupting the running transfer.
 
 #### Snapshot Hooks (Advanced)
 

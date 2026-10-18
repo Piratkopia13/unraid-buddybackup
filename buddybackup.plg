@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.10.16">
+  <!ENTITY version      "2026.10.18">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "379190ea3d60e82e2eaf3bb26dcfaac1">
+  <!ENTITY pkgMD5        "7d6802eb9a711d3d92d2f9300bf38e1a">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,12 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.10.18
+- Fix automated backups triggered by snapshots to prevent premature termination and false failure alerts [#36](https://github.com/Piratkopia13/unraid-buddybackup/issues/36)
+- Suppress harmless background Perl filehandle warnings in the log when atomic ZFS recursion is enabled [#36](https://github.com/Piratkopia13/unraid-buddybackup/issues/36)
+- Guard scheduled snapshot execution during server startup or when ZFS pools are offline to prevent error logs and false alerts [#39](https://github.com/Piratkopia13/unraid-buddybackup/issues/39)
+- Automatically execute hook scripts stored on /boot with their script interpreter to prevent FAT32 permission denied errors
 
 ###2026.10.16
 - Support multi-dataset replication using a single shared SSH key across multiple destination datasets [#38](https://github.com/Piratkopia13/unraid-buddybackup/issues/38)

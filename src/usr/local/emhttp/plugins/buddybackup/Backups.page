@@ -939,14 +939,14 @@ Title="Backup and restore"
                                     <dt><?=_('Pre-backup hook')?>:</dt>
                                     <dd>
                                         <input type="text" name="pre_backup_script" class="align" value="<?=htmlspecialchars($pre_backup)?>" placeholder="/boot/config/plugins/buddybackup/hooks/pre-backup.sh" <?=$disabled?>>
-                                        <div class="buddybackup-field-note"><?=_('Runs before replication starts. Script path or command. Leave empty to disable.')?></div>
+                                        <div class="buddybackup-field-note"><?=_('Runs before replication starts. Script path (scripts on /boot/ run automatically via bash/interpreter) or command. Leave empty to disable.')?></div>
                                     </dd>
                                 </dl>
                                 <dl class="buddybackup-form-dl">
                                     <dt><?=_('Post-backup hook')?>:</dt>
                                     <dd>
                                         <input type="text" name="post_backup_script" class="align" value="<?=htmlspecialchars($post_backup)?>" placeholder="/boot/config/plugins/buddybackup/hooks/post-backup.sh" <?=$disabled?>>
-                                        <div class="buddybackup-field-note"><?=_('Runs after replication completes, on both success and failure. Script path or command. Leave empty to disable.')?></div>
+                                        <div class="buddybackup-field-note"><?=_('Runs after replication completes, on both success and failure. Script path (scripts on /boot/ run automatically via bash/interpreter) or command. Leave empty to disable.')?></div>
                                     </dd>
                                 </dl>
                             </div>

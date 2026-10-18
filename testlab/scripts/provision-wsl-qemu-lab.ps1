@@ -697,6 +697,55 @@ echo "webgui_password_configured=yes"
     }
 }
 
+function Wait-NodeBootSettle {
+    param(
+        $NodeConnection,
+        [string]$NodeName,
+        [int]$TimeoutSeconds = 90,
+        [switch]$DoExecute
+    )
+
+    if (-not $DoExecute) {
+        Write-Host "[dry-run] Would wait for early boot services to settle on $NodeName"
+        return
+    }
+
+    $startTime = Get-Date
+    $settled = $false
+    while ((New-TimeSpan -Start $startTime -End (Get-Date)).TotalSeconds -lt $TimeoutSeconds) {
+        $checkScript = @'
+uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)
+reload_pid=$(pidof -x reload_services 2>/dev/null || true)
+sshd_running=0
+if pgrep -x sshd >/dev/null 2>&1; then
+    sshd_running=1
+fi
+echo "uptime=$uptime_secs reload=$reload_pid sshd=$sshd_running"
+if [ "$uptime_secs" -ge 45 ] && [ -z "$reload_pid" ] && [ "$sshd_running" -eq 1 ]; then
+    echo "boot-settled"
+fi
+'@
+        $result = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $checkScript -Label "boot-settle" -PreviewCommand "check early boot service status" -DoExecute:$DoExecute
+        if ($result.success) {
+            $outputStr = ($result.output -join ' ').Trim()
+            if ($outputStr -match "boot-settled") {
+                Write-Host "[testlab] Early boot services settled on $NodeName ($outputStr)"
+                $settled = $true
+                break
+            } else {
+                Write-Host "[testlab] Waiting for $NodeName boot services to settle: $outputStr"
+            }
+        } else {
+            Write-Host "[testlab] Node $NodeName SSH not ready during boot settle (exit=$($result.exitCode)), retrying..."
+        }
+        Start-Sleep -Seconds 3
+    }
+
+    if (-not $settled) {
+        throw "Node '$NodeName' did not settle early boot services within $TimeoutSeconds seconds."
+    }
+}
+
 function Invoke-NodeBaseSetup {
     param(
         $Lab,
@@ -906,6 +955,51 @@ post_boot_refresh_end="#BUDDYBACKUP_TESTLAB_POSTBOOT_REFRESH_END"
 
 set -euo pipefail
 
+ensure_sshd_global_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    [ -f "$target_file" ] || return 0
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v opt="$opt" -v key="$key" '
+        BEGIN { found = 0; match_seen = 0 }
+        $1 == "Match" {
+            if (!found && !match_seen) {
+                print opt
+                found = 1
+            }
+            match_seen = 1
+        }
+        tolower($1) == tolower(key) {
+            if (match_seen) {
+                next
+            }
+            found = 1
+        }
+        { print }
+        END {
+            if (!found && !match_seen) {
+                print opt
+            }
+        }
+    ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
+}
+
+ensure_ssh_client_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    local dir
+    dir="$(dirname "$target_file")"
+    [ -d "$dir" ] || mkdir -p "$dir"
+    [ -f "$target_file" ] || touch "$target_file"
+    chmod 600 "$target_file" 2>/dev/null || true
+    if ! grep -qi "^[[:space:]]*${key}\b" "$target_file" 2>/dev/null; then
+        printf '\nHost *\n    %s\n' "$opt" >> "$target_file"
+    fi
+}
+
 if ! command -v zpool >/dev/null 2>&1 || ! command -v zfs >/dev/null 2>&1; then
   echo "zpool/zfs commands are unavailable on this guest" >&2
   exit 1
@@ -960,9 +1054,74 @@ cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
 #!/bin/bash
 set -euo pipefail
 
+# Guard Unraid rc.sshd against port bind race during delayed service reloads
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+    if command -v perl >/dev/null 2>&1; then
+        perl -0777 -i -pe '
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            or
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+        ' /etc/rc.d/rc.sshd 2>/dev/null || true
+    fi
+fi
+
+ensure_sshd_global_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    [ -f "$target_file" ] || return 0
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v opt="$opt" -v key="$key" '
+        BEGIN { found = 0; match_seen = 0 }
+        $1 == "Match" {
+            if (!found && !match_seen) {
+                print opt
+                found = 1
+            }
+            match_seen = 1
+        }
+        tolower($1) == tolower(key) {
+            if (match_seen) {
+                next
+            }
+            found = 1
+        }
+        { print }
+        END {
+            if (!found && !match_seen) {
+                print opt
+            }
+        }
+    ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
+}
+
+# Ensure persistent sshd_config on flash is maintained with penalties disabled
+mkdir -p /boot/config/ssh
+if [ -f /etc/ssh/sshd_config ]; then
+    cp -n /etc/ssh/sshd_config /boot/config/ssh/sshd_config 2>/dev/null || true
+fi
+ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
+ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+
 attempts=60
 while [ "$attempts" -gt 0 ]; do
+    if ! pgrep -x sshd >/dev/null 2>&1; then
+        /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+        if ! pgrep -x sshd >/dev/null 2>&1; then
+            mkdir -p /boot/config/ssh
+            cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
+            chmod 600 /etc/ssh/* 2>/dev/null || true
+            ssh-keygen -A >/dev/null 2>&1 || true
+            cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
+            /usr/sbin/sshd >/dev/null 2>&1 || true
+        fi
+    fi
+
     if [ -x /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php ] && [ -f /boot/config/plugins/buddybackup/buddybackup.cfg ]; then
+        # Always run local update to ensure receiver user, groups, and permissions are initialized immediately
+        /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
+
         plugin_root="/boot/config/plugins/buddybackup"
         backups_cfg="$plugin_root/backups.cfg"
         remote_hosts=()
@@ -981,13 +1140,46 @@ while [ "$attempts" -gt 0 ]; do
         done
 
         if [ "$all_reachable" -eq 1 ]; then
-            /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update >/dev/null 2>&1 || true
-
+            bb_ready=0
             if [ "${#remote_hosts[@]}" -gt 0 ]; then
                 if grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
-                    exit 0
+                    bb_ready=1
                 fi
             else
+                bb_ready=1
+            fi
+
+            receiver_ready=1
+            if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
+                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                    receiver_ready=0
+                fi
+            elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
+                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                    receiver_ready=0
+                fi
+            fi
+
+            if [ "$bb_ready" -eq 1 ] && [ "$receiver_ready" -eq 1 ]; then
+                # Wait until post-boot service reloads (scheduled at +20s by network init) complete
+                uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 60)
+                if [ "$uptime_secs" -lt 45 ]; then
+                    sleep $((45 - uptime_secs))
+                fi
+                while pidof -x reload_services >/dev/null 2>&1; do
+                    sleep 1
+                done
+                if ! pgrep -x sshd >/dev/null 2>&1; then
+                    /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+                    if ! pgrep -x sshd >/dev/null 2>&1; then
+                        mkdir -p /boot/config/ssh
+                        cp -f /boot/config/ssh/* /etc/ssh 2>/dev/null || true
+                        chmod 600 /etc/ssh/* 2>/dev/null || true
+                        ssh-keygen -A >/dev/null 2>&1 || true
+                        cp -n /etc/ssh/ssh_host*_key* /boot/config/ssh/ 2>/dev/null || true
+                        /usr/sbin/sshd >/dev/null 2>&1 || true
+                    fi
+                fi
                 exit 0
             fi
         fi
@@ -1001,18 +1193,112 @@ exit 0
 EOF_BUDDYBACKUP_POSTBOOT_REFRESH
 chmod 700 "$post_boot_refresh_script"
 
+go_file="/boot/config/go"
+sshd_guard_begin="#BUDDYBACKUP_SSHD_GUARD_BEGIN"
+sshd_guard_end="#BUDDYBACKUP_SSHD_GUARD_END"
+
 tmp_go="$(mktemp)"
-if [ -f /boot/config/go ]; then
-    awk -v begin="$post_boot_refresh_begin" -v end="$post_boot_refresh_end" '
-        $0 == begin { skip=1; next }
-        $0 == end { skip=0; next }
+if [ -f "$go_file" ]; then
+    awk -v b="$sshd_guard_begin" -v e="$sshd_guard_end" -v pb="$post_boot_refresh_begin" -v pe="$post_boot_refresh_end" '
+        $0 == b || $0 == pb { skip=1; next }
+        $0 == e || $0 == pe { skip=0; next }
         !skip { print }
-    ' /boot/config/go > "$tmp_go"
+    ' "$go_file" > "$tmp_go"
 else
     : > "$tmp_go"
 fi
 
-cat >> "$tmp_go" <<EOF
+head_line="$(head -n 1 "$tmp_go" 2>/dev/null || true)"
+{
+    if [[ "$head_line" =~ ^#! ]]; then
+        echo "$head_line"
+    else
+        echo "#!/bin/bash"
+    fi
+    cat <<'EOF_GUARD'
+#BUDDYBACKUP_SSHD_GUARD_BEGIN
+mkdir -p /boot/config
+ident_cfg="/boot/config/ident.cfg"
+if [ -f "$ident_cfg" ]; then
+    if grep -q '^USE_SSH=' "$ident_cfg"; then
+        sed -i 's/^USE_SSH=.*/USE_SSH="yes"/' "$ident_cfg"
+    else
+        printf '\nUSE_SSH="yes"\n' >> "$ident_cfg"
+    fi
+else
+    printf 'USE_SSH="yes"\n' > "$ident_cfg"
+fi
+
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+    if command -v perl >/dev/null 2>&1; then
+        perl -0777 -i -pe '
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            or
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+        ' /etc/rc.d/rc.sshd 2>/dev/null || true
+    fi
+fi
+sysctl -w net.ipv4.ip_nonlocal_bind=1 >/dev/null 2>&1 || true
+
+ensure_sshd_global_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    [ -f "$target_file" ] || return 0
+    local tmp_file
+    tmp_file="$(mktemp)"
+    awk -v opt="$opt" -v key="$key" '
+        BEGIN { found = 0; match_seen = 0 }
+        $1 == "Match" {
+            if (!found && !match_seen) {
+                print opt
+                found = 1
+            }
+            match_seen = 1
+        }
+        tolower($1) == tolower(key) {
+            if (match_seen) {
+                next
+            }
+            found = 1
+        }
+        { print }
+        END {
+            if (!found && !match_seen) {
+                print opt
+            }
+        }
+    ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
+}
+
+ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
+ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+
+ensure_ssh_client_option() {
+    local target_file="$1"
+    local opt="$2"
+    local key="${opt%% *}"
+    local dir
+    dir="$(dirname "$target_file")"
+    [ -d "$dir" ] || mkdir -p "$dir"
+    [ -f "$target_file" ] || touch "$target_file"
+    chmod 600 "$target_file" 2>/dev/null || true
+    if ! grep -qi "^[[:space:]]*${key}\b" "$target_file" 2>/dev/null; then
+        printf '\nHost *\n    %s\n' "$opt" >> "$target_file"
+    fi
+}
+
+ensure_ssh_client_option /etc/ssh/ssh_config "UpdateHostKeys no"
+ensure_ssh_client_option /boot/config/ssh/root/config "UpdateHostKeys no"
+ensure_ssh_client_option /root/.ssh/config "UpdateHostKeys no"
+#BUDDYBACKUP_SSHD_GUARD_END
+EOF_GUARD
+    if [[ "$head_line" =~ ^#! ]]; then
+        tail -n +2 "$tmp_go"
+    else
+        cat "$tmp_go"
+    fi
+    cat <<EOF
 
 $post_boot_refresh_begin
 if [ -f /boot/config/plugins/buddybackup/testlab-postboot-refresh.sh ]; then
@@ -1020,8 +1306,39 @@ if [ -f /boot/config/plugins/buddybackup/testlab-postboot-refresh.sh ]; then
 fi
 $post_boot_refresh_end
 EOF
+} > "${tmp_go}.new"
+mv "${tmp_go}.new" "$go_file"
+chmod 755 "$go_file"
+rm -f "$tmp_go" 2>/dev/null || true
 
-mv "$tmp_go" /boot/config/go
+# Apply immediately to running system
+mkdir -p /boot/config
+ident_cfg="/boot/config/ident.cfg"
+if [ -f "$ident_cfg" ]; then
+    if grep -q '^USE_SSH=' "$ident_cfg"; then
+        sed -i 's/^USE_SSH=.*/USE_SSH="yes"/' "$ident_cfg"
+    else
+        printf '\nUSE_SSH="yes"\n' >> "$ident_cfg"
+    fi
+else
+    printf 'USE_SSH="yes"\n' > "$ident_cfg"
+fi
+
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+    if command -v perl >/dev/null 2>&1; then
+        perl -0777 -i -pe '
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            or
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+        ' /etc/rc.d/rc.sshd 2>/dev/null || true
+    fi
+fi
+sysctl -w net.ipv4.ip_nonlocal_bind=1 >/dev/null 2>&1 || true
+ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
+ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+ensure_ssh_client_option /etc/ssh/ssh_config "UpdateHostKeys no"
+ensure_ssh_client_option /boot/config/ssh/root/config "UpdateHostKeys no"
+ensure_ssh_client_option /root/.ssh/config "UpdateHostKeys no"
 
 if ! zfs list -H -o name "$dataset_root" >/dev/null 2>&1; then
   zfs create -o mountpoint=none "$dataset_root"
@@ -1041,6 +1358,7 @@ if [ "$encryption_value" = "off" ]; then
   echo "Encrypted dataset has encryption=off: $encrypted_dataset" >&2
   exit 1
 fi
+
 
 echo "pool=$pool_name"
 echo "dataset_root=$dataset_root"
@@ -1150,10 +1468,23 @@ work_root="$1"
 pid_file="$work_root/qemu.pid"
 
 if [ -f "$pid_file" ]; then
-  kill "$(cat "$pid_file")" 2>/dev/null || true
+  pid=$(cat "$pid_file" 2>/dev/null || true)
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    for i in $(seq 1 50); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
 fi
 
 pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+for i in $(seq 1 30); do
+  pgrep -f "$work_root/unraid-boot.img" >/dev/null 2>&1 || break
+  sleep 0.1
+done
+pkill -9 -f "$work_root/unraid-boot.img" 2>/dev/null || true
 rm -rf "$work_root"
 '@
 
@@ -1234,6 +1565,19 @@ $report = [ordered]@{
 $startedInstances = @()
 
 try {
+    if ($Execute) {
+        Write-Host "[testlab] Ensuring any lingering WSL/QEMU lab instances are stopped"
+        foreach ($preStopNode in @("nodeA", "nodeB")) {
+            $preStopNodeObj = Get-ObjectValue -Object $lab.nodes -Name $preStopNode
+            $preStopInstance = if ($preStopNodeObj -and $preStopNodeObj.instanceName) { [string]$preStopNodeObj.instanceName } else { "lab-$preStopNode" }
+            try {
+                Stop-WslLabInstance -Distro $distro -InstanceName $preStopInstance -DoExecute
+            } catch {
+                # Ignore if not running
+            }
+        }
+    }
+
     foreach ($entry in @(
         @{ NodeName = "nodeA"; DefaultPort = 2222; DefaultHttpPort = 8080; DefaultHttpsPort = 8443 },
         @{ NodeName = "nodeB"; DefaultPort = 2223; DefaultHttpPort = 8081; DefaultHttpsPort = 8444 }
@@ -1378,6 +1722,9 @@ try {
             }
 
             $startedInstances += $instanceName
+            Write-Host "[testlab] Waiting for early boot services to settle on $nodeName"
+            Wait-NodeBootSettle -NodeConnection $nodeConnection -NodeName $nodeName -DoExecute:$Execute
+
             Write-Host "[testlab] Configuring manual WebGUI access on $nodeName"
             $manualAccess = Invoke-NodeManualAccessSetup -Lab $lab -NodeName $nodeName -NodeConnection $nodeConnection -DoExecute
             $nodeEntry.manualAccess = $manualAccess

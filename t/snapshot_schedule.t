@@ -71,6 +71,9 @@ subtest 'static assertions on scheduling, cron, and WebGUI code' => sub {
     like($php, qr/normalize_snapshot_time\s*\(/, 'defines normalize_snapshot_time()');
     like($php, qr/daily_hour\s*=/, 'emits daily_hour directive');
     like($php, qr/daily_min\s*=/, 'emits daily_min directive');
+    like($php, qr/run_sanoid_cron/, 'PHP invokes run_sanoid_cron in sanoid.cron');
+    like($rc, qr/run_sanoid_cron\(\)/, 'rc.buddybackup defines run_sanoid_cron()');
+    like($rc, qr/['"]?run_sanoid_cron['"]?/, 'rc.buddybackup dispatches run_sanoid_cron');
 
     # WebGUI SnapshotSettings.page
     like($page, qr/name=['"]daily_hour['"]/, 'SnapshotSettings.page includes daily_hour dropdown');
@@ -425,6 +428,193 @@ SH
         is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed because scope is all');
         is($lines[1], 'trigger_dispatched uid=trig_scope_1', 'trigger backup dispatched');
     };
+};
+
+# ---------------------------------------------------------------------------
+# 4. Behavioral: standalone rc.buddybackup process detachment and trap disarm
+# ---------------------------------------------------------------------------
+subtest 'behavioral: standalone rc.buddybackup disowns trigger and survives parent cleanup trap' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $event_log = File::Spec->catfile($workdir, 'lifecycle_events.log');
+    my $mock_empath = File::Spec->catdir($workdir, 'empath');
+    my $mock_scripts = File::Spec->catdir($mock_empath, 'scripts');
+    make_path($mock_scripts);
+
+    my $mock_php = File::Spec->catfile($mock_scripts, 'rc.buddybackup.php');
+    open my $pfh, '>', $mock_php or die "Cannot write $mock_php: $!";
+    print $pfh <<'SH';
+#!/bin/bash
+if [[ "$1" == "send_backup" ]]; then
+    sleep 0.3
+    echo "background_trigger_completed uid=$2" >> "$LIFECYCLE_EVENT_LOG"
+fi
+exit 0
+SH
+    close $pfh;
+    chmod 0755, $mock_php;
+
+    my $mock_log = File::Spec->catfile($mock_scripts, 'log.sh');
+    open my $lfh, '>', $mock_log or die "Cannot write $mock_log: $!";
+    print $lfh <<'SH';
+#!/bin/bash
+cat > /dev/null
+SH
+    close $lfh;
+    chmod 0755, $mock_log;
+
+    my $thaw_hook = File::Spec->catfile($workdir, 'thaw_hook.sh');
+    open my $tfh, '>', $thaw_hook or die "Cannot write $thaw_hook: $!";
+    print $tfh <<'SH';
+#!/bin/bash
+echo "post_thaw_hook_executed" >> "$LIFECYCLE_EVENT_LOG"
+exit 0
+SH
+    close $tfh;
+    chmod 0755, $thaw_hook;
+
+    my $t0 = time();
+    my $cmd = sprintf(
+        'LIFECYCLE_EVENT_LOG=%s empath=%s bash %s run_snapshot_post_hook_and_trigger %s %s 30 %s',
+        quotemeta($event_log),
+        quotemeta($mock_empath),
+        quotemeta($rc_script),
+        quotemeta('tank/test_ds'),
+        quotemeta($thaw_hook),
+        quotemeta('trig_lifecycle_1')
+    );
+    my $output = `$cmd 2>&1`;
+    my $exit_code = $? >> 8;
+    my $elapsed = time() - $t0;
+
+    is($exit_code, 0, 'standalone rc.buddybackup exited with code 0');
+    ok($elapsed < 3, 'standalone wrapper exited immediately without blocking on background backup');
+
+    # Give the background process a moment to write completion if it has not already done so
+    for (1..20) {
+        last if -f $event_log && slurp($event_log) =~ /background_trigger_completed/;
+        select(undef, undef, undef, 0.1);
+    }
+
+    ok(-f $event_log, 'event log was created');
+    my $log_content = -f $event_log ? slurp($event_log) : '';
+    like($log_content, qr/post_thaw_hook_executed/, 'thaw hook executed in standalone wrapper');
+    like($log_content, qr/background_trigger_completed uid=trig_lifecycle_1/, 'background trigger survived parent exit and completed successfully');
+};
+
+# ---------------------------------------------------------------------------
+# 5. Behavioral: run_sanoid_cron pool availability and transition guards
+# ---------------------------------------------------------------------------
+subtest 'behavioral: run_sanoid_cron guards early boot, offline pools, and transition states' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $mock_bin = File::Spec->catdir($workdir, 'bin');
+    make_path($mock_bin);
+
+    my $mock_zpool = File::Spec->catfile($mock_bin, 'zpool');
+    my $mock_zfs   = File::Spec->catfile($mock_bin, 'zfs');
+    my $mock_sanoid = File::Spec->catfile($mock_bin, 'mock_sanoid');
+    my $mock_logger = File::Spec->catfile($mock_bin, 'logger');
+    my $log_file   = File::Spec->catfile($workdir, 'sanoid_invocations.log');
+
+    # mock logger
+    open my $lfh, '>', $mock_logger or die "Cannot write $mock_logger: $!";
+    print $lfh "#!/bin/bash\nexit 0\n";
+    close $lfh;
+    chmod 0755, $mock_logger;
+
+    # mock zfs
+    open my $zfh, '>', $mock_zfs or die "Cannot write $mock_zfs: $!";
+    print $zfh "#!/bin/bash\nexit 0\n";
+    close $zfh;
+    chmod 0755, $mock_zfs;
+
+    # mock sanoid: logs its invocations
+    open my $sfh, '>', $mock_sanoid or die "Cannot write $mock_sanoid: $!";
+    print $sfh <<"SH";
+#!/bin/bash
+echo "sanoid_invoked \$*" >> "$log_file"
+exit 0
+SH
+    close $sfh;
+    chmod 0755, $mock_sanoid;
+
+    my $conf_dir = File::Spec->catdir($workdir, 'config');
+    make_path($conf_dir);
+    my $conf_file = File::Spec->catfile($conf_dir, 'sanoid.conf');
+    open my $cfh, '>', $conf_file or die "Cannot write $conf_file: $!";
+    print $cfh <<'CONF';
+[template_production]
+    hourly = 24
+    daily = 7
+
+[system_cache_ssd/appdata]
+    use_template = production
+    recursive = yes
+
+[disk7/zfs_backups/tower-vm]
+    use_template = production
+CONF
+    close $cfh;
+
+    # Helper to execute run_sanoid_cron
+    my $run_check = sub {
+        my ($zpool_script, $extra_env) = @_;
+        $extra_env //= {};
+
+        open my $zpfh, '>', $mock_zpool or die "Cannot write $mock_zpool: $!";
+        print $zpfh "#!/bin/bash\n" . $zpool_script . "\n";
+        close $zpfh;
+        chmod 0755, $mock_zpool;
+
+        my $env_str = join(' ', map { "$_=\"$extra_env->{$_}\"" } keys %$extra_env);
+        my $cmd = sprintf(
+            'PATH=%s:$PATH %s sanoid_bin=%s bash %s run_sanoid_cron --cache-ttl=60 --configdir=%s --cron',
+            quotemeta($mock_bin),
+            $env_str,
+            quotemeta($mock_sanoid),
+            quotemeta($rc_script),
+            quotemeta($conf_dir)
+        );
+        my $out = `$cmd 2>&1`;
+        return ($? >> 8, $out);
+    };
+
+    # 1. Early boot: zpool list fails or reports no pools available
+    unlink $log_file if -f $log_file;
+    my ($code1, $out1) = $run_check->('exit 1');
+    is($code1, 0, 'exited 0 when zpool list fails during early boot');
+    ok(!-f $log_file, 'sanoid was not invoked when zpool list fails');
+
+    # 2. Configured pools are not imported yet (only unrelated pool imported)
+    unlink $log_file if -f $log_file;
+    my ($code2, $out2) = $run_check->('echo unrelated_pool; exit 0');
+    is($code2, 0, 'exited 0 when configured pools are not imported');
+    ok(!-f $log_file, 'sanoid was not invoked when neither system_cache_ssd nor disk7 is imported');
+
+    # 3. Configured pool IS imported (e.g. system_cache_ssd)
+    unlink $log_file if -f $log_file;
+    my ($code3, $out3) = $run_check->("echo system_cache_ssd; exit 0");
+    is($code3, 0, 'exited 0 when configured pool is imported');
+    ok(-f $log_file, 'sanoid was invoked when configured pool is imported');
+    my $log_content = -f $log_file ? slurp($log_file) : '';
+    like($log_content, qr/sanoid_invoked\s+--cache-ttl=60\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
+
+    # 4. Strict literal pool matching (e.g. pool with dot: tank.fast vs tankafast)
+    my $conf_dot = File::Spec->catfile($conf_dir, 'sanoid.conf');
+    open my $cdfh, '>', $conf_dot or die "Cannot write $conf_dot: $!";
+    print $cdfh "[tank.fast/appdata]\n    use_template = production\n";
+    close $cdfh;
+
+    # 4a. Pool matching regex wildcard (tankafast) does NOT invoke sanoid
+    unlink $log_file if -f $log_file;
+    my ($code4a, $out4a) = $run_check->("echo tankafast; exit 0");
+    is($code4a, 0, 'exited 0 when pool name only matches regex wildcard');
+    ok(!-f $log_file, 'sanoid was not invoked when pool tankafast does not literally match tank.fast');
+
+    # 4b. Exact literal pool match (tank.fast) DOES invoke sanoid
+    unlink $log_file if -f $log_file;
+    my ($code4b, $out4b) = $run_check->("echo tank.fast; exit 0");
+    is($code4b, 0, 'exited 0 when pool name literally matches tank.fast');
+    ok(-f $log_file, 'sanoid was invoked when tank.fast pool is imported');
 };
 
 done_testing();

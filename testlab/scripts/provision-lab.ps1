@@ -153,7 +153,7 @@ function Invoke-NodeProbe {
         [string]$TargetHost,
         [int]$Port,
         [string]$IdentityFile,
-        [int]$Attempts = 5,
+        [int]$Attempts = 15,
         [int]$RetryDelayMilliseconds = 2000,
         [switch]$DoExecute
     )
@@ -217,6 +217,16 @@ function Invoke-NodeProbe {
 
         if ($attemptCount -gt 1 -and $exitCode -ne 0) {
             $output = ($attemptOutputs -join [Environment]::NewLine)
+        }
+
+        if ($exitCode -ne 0 -and [string]::IsNullOrWhiteSpace($output)) {
+            try {
+                $diagArgs = @($sshArgs | Where-Object { $_ -ne "ERROR" -and $_ -ne "-o LogLevel=ERROR" })
+                $diagOutput = & ssh -v @diagArgs 2>&1
+                $output = (@($diagOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+            } catch {
+                $output = $_.Exception.Message
+            }
         }
 
         return [pscustomobject]@{
@@ -368,7 +378,13 @@ try {
 
         if ($failedChecks.Count -gt 0) {
             $report | ConvertTo-Json -Depth 8 | Set-Content -Path $reportPath
-            $labels = @($failedChecks | ForEach-Object { "$($_.node)@$($_.host):$($_.port) exit=$($_.exitCode)" }) -join '; '
+            $labels = @($failedChecks | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_.output)) {
+                    "$($_.node)@$($_.host):$($_.port) exit=$($_.exitCode)"
+                } else {
+                    "$($_.node)@$($_.host):$($_.port) exit=$($_.exitCode) ($($_.output))"
+                }
+            }) -join '; '
             throw "Provisioned nodes did not remain reachable after provider setup: $labels"
         }
     }

@@ -33,10 +33,23 @@ work_root="$1"
 pid_file="$work_root/qemu.pid"
 
 if [ -f "$pid_file" ]; then
-  kill "$(cat "$pid_file")" 2>/dev/null || true
+  pid=$(cat "$pid_file" 2>/dev/null || true)
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    for i in $(seq 1 50); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
 fi
 
 pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+for i in $(seq 1 30); do
+  pgrep -f "$work_root/unraid-boot.img" >/dev/null 2>&1 || break
+  sleep 0.1
+done
+pkill -9 -f "$work_root/unraid-boot.img" 2>/dev/null || true
 rm -rf "$work_root"
 '@
 
