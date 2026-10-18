@@ -299,13 +299,13 @@ function Convert-ToRemoteShellCommand {
         return $Command
     }
 
-    if ($Command -notmatch "[`r`n]") {
-        return $Command
+    if ($Command -match '[\r\n\"''\$\(\)\{\}\;\|\&\<\>\`\\]') {
+        $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
+        $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
+        return "printf '%s' '$commandB64' | base64 -d | bash"
     }
 
-    $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
-    $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
-    return "printf '%s' '$commandB64' | base64 -d | bash"
+    return $Command
 }
 
 function Convert-ToRemoteSingleQuotedArgument {
@@ -1299,9 +1299,35 @@ function Wait-ForRebootCycle {
         }
     }
 
+    $readyResult = $null
+    if ($SettleSeconds -gt 0) {
+        Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
+        Start-Sleep -Seconds $SettleSeconds
+
+        $recoveryTimeout = [Math]::Max($TimeoutSeconds, 120)
+        if (-not (Wait-SshStable -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds $recoveryTimeout -RequiredSuccesses 2)) {
+            Write-Host "[testlab] SSH unstable after settle period on $targetLabel, waiting for recovery"
+            if (-not (Wait-SshReady -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds $recoveryTimeout)) {
+                return [pscustomobject]@{
+                    Success = $false
+                    Error = "Host SSH dropped during settle period and did not recover on $targetLabel."
+                    BootId = $null
+                    ReadyResult = $null
+                }
+            }
+        }
+
+        # Ensure any pending Unraid delayed service reloads (reload_services) have completed
+        $serviceWaitCommand = 'uptime_secs=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 60); if [ -n "$uptime_secs" ] && [ "$uptime_secs" -lt 45 ] 2>/dev/null; then sleep $((45 - uptime_secs)); fi; while pidof -x reload_services >/dev/null 2>&1; do sleep 1; done; echo settled'
+        $settleCheck = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $serviceWaitCommand -LoggedCommand "wait for pending Unraid service reloads" -Label "post-reboot-service-settle" -TimeoutSeconds 120 -IntervalSeconds 3
+        if (-not $settleCheck.Success) {
+            Write-Warning "Unraid post-reboot service settle check did not complete cleanly on $targetLabel."
+        }
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($ReadyCommand)) {
         $elapsedSeconds = [int](New-TimeSpan -Start $started -End (Get-Date)).TotalSeconds
-        $remainingSeconds = [Math]::Max($TimeoutSeconds - $elapsedSeconds, 1)
+        $remainingSeconds = [Math]::Max($TimeoutSeconds - $elapsedSeconds, 30)
         $readyResult = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $ReadyCommand -LoggedCommand $ReadyLoggedCommand -Label $ReadyLabel -TimeoutSeconds $remainingSeconds -IntervalSeconds 5
         if (-not $readyResult.Success) {
             $readyOutputText = if ($readyResult.Result -and $null -ne $readyResult.Result.Output) {
@@ -1323,55 +1349,13 @@ function Wait-ForRebootCycle {
                 ReadyResult = $readyResult.Result
             }
         }
-
-        if ($SettleSeconds -gt 0) {
-            Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
-            Start-Sleep -Seconds $SettleSeconds
-            if (-not (Wait-SshStable -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds 60 -RequiredSuccesses 2)) {
-                Write-Host "[testlab] SSH unstable after settle period on $targetLabel, waiting for recovery"
-                if (-not (Wait-SshReady -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds 60)) {
-                    return [pscustomobject]@{
-                        Success = $false
-                        Error = "Host SSH dropped during settle period and did not recover on $targetLabel."
-                        BootId = $null
-                        ReadyResult = $null
-                    }
-                }
-            }
-            # Ensure any pending Unraid delayed service reloads (reload_services) have completed
-            $serviceWaitCommand = 'uptime_secs=$(awk "{print int(\$1)}" /proc/uptime 2>/dev/null || echo 60); if [ "$uptime_secs" -lt 45 ]; then sleep $((45 - uptime_secs)); fi; while pidof -x reload_services >/dev/null 2>&1; do sleep 1; done; echo settled'
-            $null = Wait-ForRemoteSuccess -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -Command $serviceWaitCommand -LoggedCommand "wait for pending Unraid service reloads" -Label "post-reboot-service-settle" -TimeoutSeconds 60 -IntervalSeconds 2
-        }
-
-        return [pscustomobject]@{
-            Success = $true
-            Error = $null
-            BootId = $confirmedBootId
-            ReadyResult = $readyResult.Result
-        }
-    }
-
-    if ($SettleSeconds -gt 0) {
-        Write-Host "[testlab] Letting host settle for ${SettleSeconds}s after reboot"
-        Start-Sleep -Seconds $SettleSeconds
-        if (-not (Wait-SshStable -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds 60 -RequiredSuccesses 2)) {
-            Write-Host "[testlab] SSH unstable after settle period on $targetLabel, waiting for recovery"
-            if (-not (Wait-SshReady -User $User -TargetHost $TargetHost -Port $Port -IdentityFile $IdentityFile -TimeoutSeconds 60)) {
-                return [pscustomobject]@{
-                    Success = $false
-                    Error = "Host SSH dropped during settle period and did not recover on $targetLabel."
-                    BootId = $null
-                    ReadyResult = $null
-                }
-            }
-        }
     }
 
     return [pscustomobject]@{
         Success = $true
         Error = $null
         BootId = $confirmedBootId
-        ReadyResult = $null
+        ReadyResult = if ($readyResult) { $readyResult.Result } else { $null }
     }
 }
 
@@ -3135,8 +3119,9 @@ chmod 700 "$post_boot_refresh_script"
     }
 }
 
-Require-File $LabConfig
-Require-File $MatrixConfig
+if ($MyInvocation.InvocationName -ne '.') {
+    Require-File $LabConfig
+    Require-File $MatrixConfig
 
 $lab = Get-Json -Path $LabConfig
 $matrix = Get-Json -Path $MatrixConfig
@@ -3303,3 +3288,4 @@ $failCount = $result.Count - $passCount
 Write-Host "[testlab] Summary: $passCount passed, $failCount failed"
 Write-TestLabResultTable -Rows $result
 Write-Host "[testlab] Results written to $outPath"
+}

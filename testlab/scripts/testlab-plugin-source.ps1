@@ -64,7 +64,12 @@ function Get-TestLabPluginDisplayVersion {
         throw "Missing BuddyBackup manifest: $pluginManifestPath"
     }
 
-    $pluginManifestContent = Get-Content -Raw -Path $pluginManifestPath
+    $resolvedManifestPath = (Resolve-Path -LiteralPath $pluginManifestPath).ProviderPath
+    if ([string]::IsNullOrWhiteSpace($resolvedManifestPath)) {
+        $resolvedManifestPath = $pluginManifestPath
+    }
+
+    $pluginManifestContent = [System.IO.File]::ReadAllText($resolvedManifestPath, [System.Text.Encoding]::UTF8)
     $match = [regex]::Match($pluginManifestContent, '<!ENTITY\s+version\s+"([^"]+)"')
     if (-not $match.Success) {
         throw "Failed to parse BuddyBackup version from $pluginManifestPath"

@@ -134,13 +134,13 @@ function Convert-ToRemoteShellCommand {
         return $Command
     }
 
-    if ($Command -notmatch "[`r`n]") {
-        return $Command
+    if ($Command -match '[\r\n\"''\$\(\)\{\}\;\|\&\<\>\`\\]') {
+        $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
+        $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
+        return "printf '%s' '$commandB64' | base64 -d | bash"
     }
 
-    $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
-    $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
-    return "printf '%s' '$commandB64' | base64 -d | bash"
+    return $Command
 }
 
 function Convert-ToRemoteSingleQuotedArgument {
