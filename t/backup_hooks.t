@@ -98,6 +98,16 @@ subtest 'Backups.page exposes backup hook fields' => sub {
         qr/function\s+verify_and_submit_backup\b.*?pre_backup_script.*?post_backup_script/s,
         'verify_and_submit_backup validates hook script paths'
     );
+    like(
+        $page,
+        qr/Runs before replication starts\.\s+Script path \(scripts on \/boot\/ run automatically via bash\/interpreter\) or command\./,
+        'pre-backup hook field note documents automatic /boot/ interpreter execution'
+    );
+    like(
+        $page,
+        qr/Runs after replication completes, on both success and failure\.\s+Script path \(scripts on \/boot\/ run automatically via bash\/interpreter\) or command\./,
+        'post-backup hook field note documents automatic /boot/ interpreter execution'
+    );
 };
 
 # ---------------------------------------------------------------------------
