@@ -597,6 +597,24 @@ CONF
     ok(-f $log_file, 'sanoid was invoked when configured pool is imported');
     my $log_content = -f $log_file ? slurp($log_file) : '';
     like($log_content, qr/sanoid_invoked\s+--cache-ttl=60\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
+
+    # 4. Strict literal pool matching (e.g. pool with dot: tank.fast vs tankafast)
+    my $conf_dot = File::Spec->catfile($conf_dir, 'sanoid.conf');
+    open my $cdfh, '>', $conf_dot or die "Cannot write $conf_dot: $!";
+    print $cdfh "[tank.fast/appdata]\n    use_template = production\n";
+    close $cdfh;
+
+    # 4a. Pool matching regex wildcard (tankafast) does NOT invoke sanoid
+    unlink $log_file if -f $log_file;
+    my ($code4a, $out4a) = $run_check->("echo tankafast; exit 0");
+    is($code4a, 0, 'exited 0 when pool name only matches regex wildcard');
+    ok(!-f $log_file, 'sanoid was not invoked when pool tankafast does not literally match tank.fast');
+
+    # 4b. Exact literal pool match (tank.fast) DOES invoke sanoid
+    unlink $log_file if -f $log_file;
+    my ($code4b, $out4b) = $run_check->("echo tank.fast; exit 0");
+    is($code4b, 0, 'exited 0 when pool name literally matches tank.fast');
+    ok(-f $log_file, 'sanoid was invoked when tank.fast pool is imported');
 };
 
 done_testing();

@@ -283,37 +283,46 @@ run_hook() {
     # If the hook specifies a standalone file path, ensure the file exists and is executable.
     local standalone_path_pattern='^/[^[:space:];&|]+$'
     local exec_cmd="${hook_cmd}"
-    if [[ "${hook_cmd}" =~ ${standalone_path_pattern} ]]; then
-        if [[ ! -e "${hook_cmd}" ]]; then
-            write "${nchan}" "${label} script '${hook_cmd}' is missing or does not exist."
-            logger "${label} script '${hook_cmd}' is missing or does not exist" -t"${plugin}"
+    local hook_target="${hook_cmd}"
+    if [[ "${hook_target}" =~ ^\'(/[^\'\"]+)\'$ ]]; then
+        hook_target="${BASH_REMATCH[1]}"
+    elif [[ "${hook_target}" =~ ^\"(/[^\'\"]+)\"$ ]]; then
+        hook_target="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "${hook_target}" =~ ${standalone_path_pattern} ]]; then
+        if [[ ! -e "${hook_target}" ]]; then
+            write "${nchan}" "${label} script '${hook_target}' is missing or does not exist."
+            logger "${label} script '${hook_target}' is missing or does not exist" -t"${plugin}"
             return 127
         fi
 
         local resolved_hook
-        resolved_hook=$(realpath "${hook_cmd}" 2>/dev/null || echo "${hook_cmd}")
+        resolved_hook=$(realpath "${hook_target}" 2>/dev/null || echo "${hook_target}")
         if [[ "${resolved_hook}" =~ ^/boot/ ]] || [[ -n "${BUDDYBACKUP_TEST_BOOT_PREFIX:-}" && "${resolved_hook}" == "${BUDDYBACKUP_TEST_BOOT_PREFIX}"* ]]; then
             # Unraid's /boot is a FAT32 filesystem mounted with fmask=0177, preventing
             # POSIX execute permissions (+x) on all files. Ensure the file is readable
             # and invoke it via an appropriate interpreter (or bash).
-            if [[ ! -r "${hook_cmd}" ]]; then
-                write "${nchan}" "${label} script '${hook_cmd}' is missing or not readable."
-                logger "${label} script '${hook_cmd}' is missing or not readable" -t"${plugin}"
+            if [[ ! -r "${hook_target}" ]]; then
+                write "${nchan}" "${label} script '${hook_target}' is missing or not readable."
+                logger "${label} script '${hook_target}' is missing or not readable" -t"${plugin}"
                 return 127
             fi
             local shebang=""
-            read -r shebang < "${hook_cmd}" 2>/dev/null || true
+            read -r shebang < "${hook_target}" 2>/dev/null || true
             shebang=$(echo "${shebang}" | tr -d '\r')
             if [[ "${shebang}" =~ ^#![[:space:]]*(/.+) ]]; then
                 local interpreter="${BASH_REMATCH[1]}"
-                exec_cmd="${interpreter} $(printf '%q' "${hook_cmd}")"
+                exec_cmd="${interpreter} $(printf '%q' "${hook_target}")"
             else
-                exec_cmd="bash $(printf '%q' "${hook_cmd}")"
+                exec_cmd="bash $(printf '%q' "${hook_target}")"
             fi
-        elif [[ ! -x "${hook_cmd}" ]]; then
-            write "${nchan}" "${label} script '${hook_cmd}' is missing or not executable."
-            logger "${label} script '${hook_cmd}' is missing or not executable" -t"${plugin}"
+        elif [[ ! -x "${hook_target}" ]]; then
+            write "${nchan}" "${label} script '${hook_target}' is missing or not executable."
+            logger "${label} script '${hook_target}' is missing or not executable" -t"${plugin}"
             return 127
+        else
+            exec_cmd="$(printf '%q' "${hook_target}")"
         fi
     fi
 
@@ -504,7 +513,7 @@ run_sanoid_cron() {
         [[ -z "${section}" ]] && continue
         [[ "${section}" =~ ^template_ ]] && continue
         dataset_pool="${section%%/*}"
-        if echo "${imported_pools}" | grep -qx "${dataset_pool}"; then
+        if echo "${imported_pools}" | grep -Fqx "${dataset_pool}"; then
             has_available_pool=true
             break
         fi

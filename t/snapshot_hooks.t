@@ -74,7 +74,7 @@ subtest 'rc.buddybackup defines a safe run_hook helper' => sub {
 
     like(
         $rc,
-        qr/\[\[ ! -x "\$\{hook_cmd\}" \]\]/,
+        qr/\[\[ ! -x "\$\{(?:hook_cmd|hook_target)\}" \]\]/,
         'run_hook validates standalone scripts are executable'
     );
 };
@@ -294,6 +294,14 @@ SH
         my ($log, $out) = _run_harness( pre => $cmd_pre, post => $cmd_post, mode => 'abort', send_status => '0' );
         my @lines = grep { length } split /\n/, $log;
         is_deeply( \@lines, [qw(cmd_pre cmd_pre2 snapshot cmd_post replicate)], 'chained pre command and direct post command ran in order' );
+    };
+
+    subtest 'behavioral: single-quoted and double-quoted hook scripts execute cleanly' => sub {
+        my $quoted_pre_single = "'$pre_hook'";
+        my $quoted_post_double = "\"$post_hook\"";
+        my ($log, $out) = _run_harness( pre => $quoted_pre_single, post => $quoted_post_double, mode => 'abort', send_status => '0' );
+        my @lines = grep { length } split /\n/, $log;
+        is_deeply( \@lines, [qw(pre snapshot post replicate)], 'quoted pre and post hook paths are unquoted and executed' );
     };
 };
 
