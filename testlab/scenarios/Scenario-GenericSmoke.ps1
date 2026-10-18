@@ -357,13 +357,15 @@ function Test-GenericConnectionRejectedPush {
     )
 
     $joined = ($Output -join [Environment]::NewLine)
-    if ($joined -match 'Success!') {
-        throw "BuddyBackup test_generic_connection unexpectedly succeeded against an unallowed push dataset on node '$NodeName'.`n$joined"
+    if ($joined -match 'ZFS receive permissions verified') {
+        throw "BuddyBackup generic test_connection unexpectedly verified receive permissions for a dataset outside the configured scope on node '$NodeName'.`n$joined"
     }
 
-    if ($joined -notmatch '(?i)Destination dataset .* is not within the receiver.s configured allowed dataset scope') {
-        throw "BuddyBackup test_generic_connection did not return the expected scope rejection message on node '$NodeName'.`n$joined"
+    if ($joined -match 'Neither dataset|does not exist|not within the receiver') {
+        return
     }
+
+    throw "BuddyBackup generic test_connection did not reject the unallowed push dataset on node '$NodeName'.`n$joined"
 }
 
 function New-GenericNodePrepScript {

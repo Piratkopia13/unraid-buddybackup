@@ -18,6 +18,10 @@ function Convert-ToRemoteShellCommand {
         return $Command
     }
 
+    if ($Command -match '^printf ''%s'' ''[A-Za-z0-9+/=]+'' \| base64 -d \| bash') {
+        return $Command
+    }
+
     if ($Command -match '[\r\n\"''\$\(\)\{\}\;\|\&\<\>\`\\]') {
         $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
         $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
@@ -158,6 +162,19 @@ function Invoke-RemoteCommand {
 
     $remoteCommand = Convert-ToRemoteShellCommand -Command $Command
     $commandForLogs = if ([string]::IsNullOrWhiteSpace($LoggedCommand)) { $Command } else { $LoggedCommand }
+
+    # Windows caps native process command lines at 32k characters (CreateProcess lpCommandLine limit).
+    # Upload scripts over SCP if the command string exceeds the threshold.
+    if ($remoteCommand.Length -gt 24000) {
+        return Invoke-RemoteBashUpload -NodeConnection $connForSsh `
+            -BashScript $Command `
+            -Label $Label `
+            -DoExecute:$DoExecute `
+            -TimeoutSeconds $TimeoutSeconds `
+            -StreamOutput:$StreamOutput `
+            -StreamLabel $StreamLabel
+    }
+
     $sshArgs = Get-SshCommandLineArguments -NodeConnection $connForSsh -Command $remoteCommand
 
     if (-not $DoExecute) {
@@ -258,6 +275,95 @@ function Invoke-RemoteCommand {
     }
 }
 
+function Invoke-RemoteBashUpload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        $NodeConnection,
+
+        [Parameter(Mandatory = $true, Position = 1)]
+        [Alias('ScriptContent', 'Script', 'Command')]
+        [string]$BashScript,
+
+        [Parameter(Mandatory = $false, Position = 2)]
+        [string[]]$Arguments = @(),
+
+        [Parameter(Mandatory = $false)]
+        [string]$Label = "remote-bash-upload",
+
+        [switch]$DoExecute,
+        [int]$TimeoutSeconds = 0,
+        [switch]$StreamOutput,
+        [string]$StreamLabel = $null
+    )
+
+    $scriptName = "buddybackup-testlab-{0}.sh" -f ([Guid]::NewGuid().ToString("N").Substring(0, 12))
+    $remotePath = "/tmp/$scriptName"
+    $localPath = Join-Path ([System.IO.Path]::GetTempPath()) $scriptName
+    $commandForLogs = if ([string]::IsNullOrWhiteSpace($BashScript)) { "upload $scriptName and run with bash" } else { $BashScript }
+
+    if (-not $DoExecute) {
+        $quotedRemotePath = Convert-ToRemoteSingleQuotedArgument -Value $remotePath
+        $quotedArguments = @($Arguments | ForEach-Object { Convert-ToRemoteSingleQuotedArgument -Value ([string]$_) })
+        $runCmd = "bash $quotedRemotePath"
+        if ($quotedArguments.Count -gt 0) {
+            $runCmd += " " + ($quotedArguments -join " ")
+        }
+        Write-Host "[dry-run][upload][$Label] upload $scriptName to /tmp and run: $runCmd"
+        return [pscustomobject]@{
+            Label    = $Label
+            Command  = $commandForLogs
+            ExitCode = 0
+            Output   = "dry-run"
+            Success  = $true
+        }
+    }
+
+    try {
+        $normalizedScript = ($BashScript -replace "`r`n", "`n").Trim() + "`n"
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($localPath, $normalizedScript, $utf8NoBom)
+
+        $uploadResult = Invoke-RemoteUpload -NodeConnection $NodeConnection `
+            -LocalPaths @($localPath) `
+            -RemotePath "/tmp" `
+            -Label ("{0}-upload" -f $Label) `
+            -DoExecute:$DoExecute `
+            -TimeoutSeconds $TimeoutSeconds
+
+        if (-not $uploadResult.Success) {
+            return [pscustomobject]@{
+                Label    = $Label
+                Command  = $commandForLogs
+                ExitCode = if ($null -ne $uploadResult.ExitCode) { $uploadResult.ExitCode } else { 1 }
+                Output   = "Failed to upload $scriptName to remote node.`n$($uploadResult.Output)"
+                Success  = $false
+            }
+        }
+
+        $quotedRemotePath = Convert-ToRemoteSingleQuotedArgument -Value $remotePath
+        $quotedArguments = @($Arguments | ForEach-Object { Convert-ToRemoteSingleQuotedArgument -Value ([string]$_) })
+        $runCommand = "bash $quotedRemotePath"
+        if ($quotedArguments.Count -gt 0) {
+            $runCommand += " " + ($quotedArguments -join " ")
+        }
+        $wrappedCommand = "$runCommand; rc=`$?; rm -f $quotedRemotePath; exit `$rc"
+
+        return Invoke-RemoteCommand -NodeConnection $NodeConnection `
+            -Command $wrappedCommand `
+            -LoggedCommand $commandForLogs `
+            -Label $Label `
+            -DoExecute:$DoExecute `
+            -TimeoutSeconds $TimeoutSeconds `
+            -StreamOutput:$StreamOutput `
+            -StreamLabel $StreamLabel
+    } finally {
+        if (Test-Path -LiteralPath $localPath) {
+            Remove-Item -LiteralPath $localPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-RemoteBash {
     [CmdletBinding()]
     param(
@@ -281,6 +387,20 @@ function Invoke-RemoteBash {
     )
 
     $remoteCommand = Convert-ToRemoteBashScriptCommand -ScriptContent $BashScript -Arguments $Arguments
+
+    # Windows caps native process command lines at 32k characters (CreateProcess lpCommandLine limit).
+    # Upload scripts over SCP if the script content or command string exceeds the threshold.
+    if ($BashScript.Length -gt 12000 -or $remoteCommand.Length -gt 16000) {
+        return Invoke-RemoteBashUpload -NodeConnection $NodeConnection `
+            -BashScript $BashScript `
+            -Arguments $Arguments `
+            -Label $Label `
+            -DoExecute:$DoExecute `
+            -TimeoutSeconds $TimeoutSeconds `
+            -StreamOutput:$StreamOutput `
+            -StreamLabel $StreamLabel
+    }
+
     return Invoke-RemoteCommand -NodeConnection $NodeConnection `
         -Command $remoteCommand `
         -LoggedCommand $BashScript `

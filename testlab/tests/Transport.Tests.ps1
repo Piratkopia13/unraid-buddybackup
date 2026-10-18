@@ -315,6 +315,59 @@ Assert-Test "New-RetrySummaryResult records attempts on retries" {
     }
 }
 
+# Test 11: Convert-ToRemoteShellCommand idempotence
+Assert-Test "Convert-ToRemoteShellCommand avoids re-encoding already wrapped base64 commands" {
+    $rawCmd = "echo 'already safe'"
+    $firstWrap = Convert-ToRemoteShellCommand -Command $rawCmd
+    $secondWrap = Convert-ToRemoteShellCommand -Command $firstWrap
+    if ($firstWrap -ne $secondWrap) {
+        throw "Expected second conversion to return identical wrapped string, but got: $secondWrap"
+    }
+}
+
+# Test 12: Invoke-RemoteBash upload delegation on large scripts
+Assert-Test "Invoke-RemoteBash delegates large scripts to upload mechanism in dry-run" {
+    $node = [pscustomobject]@{
+        User         = "root"
+        Host         = "127.0.0.1"
+        Port         = 2224
+        IdentityFile = "testlab/keys/id_ed25519"
+    }
+    # Script larger than 12000 chars threshold
+    $largeScript = "echo test`n" * 2000
+    $result = Invoke-RemoteBash -NodeConnection $node -BashScript $largeScript -Label "large-script-test"
+
+    if (-not $result.Success) {
+        throw "Expected dry-run Success == true"
+    }
+    if ($result.Output -ne "dry-run") {
+        throw "Expected dry-run Output == 'dry-run', got '$($result.Output)'"
+    }
+    if ($result.Command -ne $largeScript) {
+        throw "Expected Command to record the logged script content"
+    }
+}
+
+# Test 13: Invoke-RemoteCommand upload delegation on oversized commands
+Assert-Test "Invoke-RemoteCommand delegates oversized commands to upload mechanism in dry-run" {
+    $node = [pscustomobject]@{
+        User         = "root"
+        Host         = "127.0.0.1"
+        Port         = 2224
+        IdentityFile = "testlab/keys/id_ed25519"
+    }
+    # Command larger than 24000 chars threshold
+    $largeCmd = "echo " + ("a" * 25000)
+    $result = Invoke-RemoteCommand -NodeConnection $node -Command $largeCmd -Label "large-cmd-test"
+
+    if (-not $result.Success) {
+        throw "Expected dry-run Success == true"
+    }
+    if ($result.Output -ne "dry-run") {
+        throw "Expected dry-run Output == 'dry-run', got '$($result.Output)'"
+    }
+}
+
 Write-Host "--------------------------------------------------"
 $summaryColor = if ($testsFailed -eq 0) { "Green" } else { "Red" }
 Write-Host "Transport Tests: $testsRun Total | $testsPassed Passed | $testsFailed Failed" -ForegroundColor $summaryColor
