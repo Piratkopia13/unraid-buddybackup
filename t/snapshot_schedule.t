@@ -71,6 +71,9 @@ subtest 'static assertions on scheduling, cron, and WebGUI code' => sub {
     like($php, qr/normalize_snapshot_time\s*\(/, 'defines normalize_snapshot_time()');
     like($php, qr/daily_hour\s*=/, 'emits daily_hour directive');
     like($php, qr/daily_min\s*=/, 'emits daily_min directive');
+    like($php, qr/run_sanoid_cron/, 'PHP invokes run_sanoid_cron in sanoid.cron');
+    like($rc, qr/run_sanoid_cron\(\)/, 'rc.buddybackup defines run_sanoid_cron()');
+    like($rc, qr/['"]?run_sanoid_cron['"]?/, 'rc.buddybackup dispatches run_sanoid_cron');
 
     # WebGUI SnapshotSettings.page
     like($page, qr/name=['"]daily_hour['"]/, 'SnapshotSettings.page includes daily_hour dropdown');
@@ -496,6 +499,104 @@ SH
     my $log_content = -f $event_log ? slurp($event_log) : '';
     like($log_content, qr/post_thaw_hook_executed/, 'thaw hook executed in standalone wrapper');
     like($log_content, qr/background_trigger_completed uid=trig_lifecycle_1/, 'background trigger survived parent exit and completed successfully');
+};
+
+# ---------------------------------------------------------------------------
+# 5. Behavioral: run_sanoid_cron pool availability and transition guards
+# ---------------------------------------------------------------------------
+subtest 'behavioral: run_sanoid_cron guards early boot, offline pools, and transition states' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $mock_bin = File::Spec->catdir($workdir, 'bin');
+    make_path($mock_bin);
+
+    my $mock_zpool = File::Spec->catfile($mock_bin, 'zpool');
+    my $mock_zfs   = File::Spec->catfile($mock_bin, 'zfs');
+    my $mock_sanoid = File::Spec->catfile($mock_bin, 'mock_sanoid');
+    my $mock_logger = File::Spec->catfile($mock_bin, 'logger');
+    my $log_file   = File::Spec->catfile($workdir, 'sanoid_invocations.log');
+
+    # mock logger
+    open my $lfh, '>', $mock_logger or die "Cannot write $mock_logger: $!";
+    print $lfh "#!/bin/bash\nexit 0\n";
+    close $lfh;
+    chmod 0755, $mock_logger;
+
+    # mock zfs
+    open my $zfh, '>', $mock_zfs or die "Cannot write $mock_zfs: $!";
+    print $zfh "#!/bin/bash\nexit 0\n";
+    close $zfh;
+    chmod 0755, $mock_zfs;
+
+    # mock sanoid: logs its invocations
+    open my $sfh, '>', $mock_sanoid or die "Cannot write $mock_sanoid: $!";
+    print $sfh <<"SH";
+#!/bin/bash
+echo "sanoid_invoked \$*" >> "$log_file"
+exit 0
+SH
+    close $sfh;
+    chmod 0755, $mock_sanoid;
+
+    my $conf_dir = File::Spec->catdir($workdir, 'config');
+    make_path($conf_dir);
+    my $conf_file = File::Spec->catfile($conf_dir, 'sanoid.conf');
+    open my $cfh, '>', $conf_file or die "Cannot write $conf_file: $!";
+    print $cfh <<'CONF';
+[template_production]
+    hourly = 24
+    daily = 7
+
+[system_cache_ssd/appdata]
+    use_template = production
+    recursive = yes
+
+[disk7/zfs_backups/tower-vm]
+    use_template = production
+CONF
+    close $cfh;
+
+    # Helper to execute run_sanoid_cron
+    my $run_check = sub {
+        my ($zpool_script, $extra_env) = @_;
+        $extra_env //= {};
+
+        open my $zpfh, '>', $mock_zpool or die "Cannot write $mock_zpool: $!";
+        print $zpfh "#!/bin/bash\n" . $zpool_script . "\n";
+        close $zpfh;
+        chmod 0755, $mock_zpool;
+
+        my $env_str = join(' ', map { "$_=\"$extra_env->{$_}\"" } keys %$extra_env);
+        my $cmd = sprintf(
+            'PATH=%s:$PATH %s sanoid_bin=%s bash %s run_sanoid_cron --cache-ttl=60 --configdir=%s --cron',
+            quotemeta($mock_bin),
+            $env_str,
+            quotemeta($mock_sanoid),
+            quotemeta($rc_script),
+            quotemeta($conf_dir)
+        );
+        my $out = `$cmd 2>&1`;
+        return ($? >> 8, $out);
+    };
+
+    # 1. Early boot: zpool list fails or reports no pools available
+    unlink $log_file if -f $log_file;
+    my ($code1, $out1) = $run_check->('exit 1');
+    is($code1, 0, 'exited 0 when zpool list fails during early boot');
+    ok(!-f $log_file, 'sanoid was not invoked when zpool list fails');
+
+    # 2. Configured pools are not imported yet (only unrelated pool imported)
+    unlink $log_file if -f $log_file;
+    my ($code2, $out2) = $run_check->('echo unrelated_pool; exit 0');
+    is($code2, 0, 'exited 0 when configured pools are not imported');
+    ok(!-f $log_file, 'sanoid was not invoked when neither system_cache_ssd nor disk7 is imported');
+
+    # 3. Configured pool IS imported (e.g. system_cache_ssd)
+    unlink $log_file if -f $log_file;
+    my ($code3, $out3) = $run_check->("echo system_cache_ssd; exit 0");
+    is($code3, 0, 'exited 0 when configured pool is imported');
+    ok(-f $log_file, 'sanoid was invoked when configured pool is imported');
+    my $log_content = -f $log_file ? slurp($log_file) : '';
+    like($log_content, qr/sanoid_invoked\s+--cache-ttl=60\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
 };
 
 done_testing();

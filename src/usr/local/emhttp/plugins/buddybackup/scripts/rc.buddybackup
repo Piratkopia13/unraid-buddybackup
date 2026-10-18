@@ -450,6 +450,79 @@ run_snapshot_post_hook_and_trigger() {
     return 0
 }
 
+run_sanoid_cron() {
+    # Guard against early boot or offline pool states where zfs/zpool is missing,
+    # pools are not imported yet, or the Unraid array is in transition.
+    if ! command -v zpool >/dev/null 2>&1 || ! command -v zfs >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local conf_dir="${plugin_path}"
+    local prev_arg=""
+    local arg
+    for arg in "$@"; do
+        if [[ "${prev_arg}" == "--configdir" ]]; then
+            conf_dir="${arg}"
+            prev_arg=""
+            continue
+        fi
+        if [[ "${arg}" =~ ^--configdir=(.*)$ ]]; then
+            conf_dir="${BASH_REMATCH[1]}"
+        elif [[ "${arg}" == "--configdir" ]]; then
+            prev_arg="--configdir"
+        fi
+    done
+
+    local conf_file="${conf_dir}/sanoid.conf"
+    if [[ ! -f "${conf_file}" ]]; then
+        return 0
+    fi
+
+    # If running on Unraid, check if emhttp is actively starting or stopping the array.
+    # When fsState is "Starting", pool imports and mount operations are in flight.
+    if [[ -f "/etc/unraid-version" && -f "/var/local/emhttp/var.ini" ]]; then
+        if grep -qs '^fsState="Starting"' /var/local/emhttp/var.ini || \
+           grep -qs '^mdState="STARTING"' /var/local/emhttp/var.ini; then
+            return 0
+        fi
+    fi
+
+    local imported_pools
+    imported_pools=$(zpool list -H -o name 2>/dev/null || true)
+    if [[ -z "${imported_pools}" ]]; then
+        return 0
+    fi
+
+    # Ensure at least one configured dataset section in sanoid.conf belongs to an imported pool
+    local has_available_pool=false
+    local section
+    local dataset_pool
+    while IFS= read -r section; do
+        section="${section#[}"
+        section="${section%]}"
+        section=$(echo "${section}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        [[ -z "${section}" ]] && continue
+        [[ "${section}" =~ ^template_ ]] && continue
+        dataset_pool="${section%%/*}"
+        if echo "${imported_pools}" | grep -qx "${dataset_pool}"; then
+            has_available_pool=true
+            break
+        fi
+    done < <(grep -E '^[[:space:]]*\[' "${conf_file}" 2>/dev/null)
+
+    if [[ "${has_available_pool}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ ! -x "${sanoid_bin}" ]]; then
+        logger "Sanoid binary '${sanoid_bin}' not found or not executable" -t"${plugin}"
+        return 1
+    fi
+
+    trap - EXIT INT TERM HUP
+    exec "${sanoid_bin}" "$@"
+}
+
 load_dataset_snapshot_hooks() {
     local target_dataset="$1"
     SNAP_PRE_HOOK=""
@@ -2400,7 +2473,7 @@ ssh_key_path="${plugin_path}/buddybackup_sender_key"
 ssh_known_hosts_path="${plugin_path}/buddybackup_known_hosts"
 legacy_root_known_hosts_path="/root/.ssh/known_hosts"
 empath="${empath:-/usr/local/emhttp/plugins/buddybackup}"
-sanoid_bin="${empath}/deps/sanoid"
+sanoid_bin="${sanoid_bin:-${empath}/deps/sanoid}"
 syncoid_bin="${empath}/deps/syncoid"
 syncoid_flags="--no-privilege-elevation --no-sync-snap --sendoptions=w --pv-options='-pterbf' --compress=zstdmt-fast"
 syncoid_flags_unencrypted="--no-privilege-elevation --no-sync-snap --pv-options='-pterbf' --compress=zstdmt-fast" # flags when sending unencrypted backup to remote destination
@@ -2412,6 +2485,10 @@ case "$1" in
 	('update')
 		update
 	;;
+    ('run_sanoid_cron')
+        shift
+        run_sanoid_cron "$@"
+    ;;
     ('preflight_send_backup')
         emit_send_preflight_status "${2}" "${3}" "${4}"
     ;;
@@ -2462,5 +2539,5 @@ case "$1" in
 		uninstall
 	;;
 	(*)
-        echo "usage $0 update|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|run_snapshot_post_hook_and_trigger|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|setup_buddy_user|allow_buddy_dataset|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
+        echo "usage $0 update|run_sanoid_cron|preflight_send_backup|send_backup|send_local_backup|create_snapshot_and_send|run_snapshot_post_hook_and_trigger|test_connection|test_generic_connection|get_available_snapshots|get_buddy_used_size|restore_snapshot|setup_buddy_user|allow_buddy_dataset|enable_backups_from_buddy|disable_backups_from_buddy|clear_known_hosts|uninstall"
 esac
