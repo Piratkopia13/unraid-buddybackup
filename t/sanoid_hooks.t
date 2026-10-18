@@ -88,6 +88,21 @@ subtest 'rc.buddybackup.php generates complete Sanoid hook directives' => sub {
         qr/\$rc\s+run_snapshot_post_hook_and_trigger/,
         'uses run_snapshot_post_hook_and_trigger runner when both post_hook and trigger are present'
     );
+    like(
+        $php,
+        qr/function format_sanoid_hook_command\s*\(/,
+        'defines format_sanoid_hook_command()'
+    );
+    like(
+        $php,
+        qr/format_sanoid_hook_command\s*\(\s*\$pre_hook\s*\)/,
+        'wraps pre_hook via format_sanoid_hook_command()'
+    );
+    like(
+        $php,
+        qr/format_sanoid_hook_command\s*\(\s*\$post_hook\s*\)/,
+        'wraps standalone post_hook via format_sanoid_hook_command()'
+    );
 };
 
 # ---------------------------------------------------------------------------
@@ -259,6 +274,159 @@ PHP
             qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_chained" "\/usr\/local\/bin\/thaw\.sh" "45" "uid_trig_100"/,
             'chained sec sets post_snapshot_script to run_snapshot_post_hook_and_trigger helper'
         );
+    };
+
+    subtest 'behavioral: update_sanoid_conf() wraps /boot/ hooks with interpreter to prevent FAT32 EACCES' => sub {
+        my $workdir = tempdir(CLEANUP => 1);
+        my $boot_dir = File::Spec->catdir($workdir, 'boot');
+        make_path($boot_dir);
+
+        # 1. Script on /boot without shebang (chmod 0644 simulating FAT32 mount)
+        my $boot_script_noshebang = File::Spec->catfile($boot_dir, 'hook_noshebang.sh');
+        open my $h1, '>', $boot_script_noshebang or die "Cannot write $boot_script_noshebang: $!";
+        print $h1 "echo noshebang_ok\n";
+        close $h1;
+        chmod 0644, $boot_script_noshebang;
+
+        # 2. Script on /boot with #!/bin/bash shebang
+        my $boot_script_bash = File::Spec->catfile($boot_dir, 'hook_bash.sh');
+        open my $h2, '>', $boot_script_bash or die "Cannot write $boot_script_bash: $!";
+        print $h2 "#!/bin/bash\necho bash_ok\n";
+        close $h2;
+        chmod 0644, $boot_script_bash;
+
+        # 3. Script on /boot with #!/bin/sh shebang
+        my $boot_script_sh = File::Spec->catfile($boot_dir, 'hook_sh.sh');
+        open my $h3, '>', $boot_script_sh or die "Cannot write $boot_script_sh: $!";
+        print $h3 "#!/bin/sh\necho sh_ok\n";
+        close $h3;
+        chmod 0644, $boot_script_sh;
+
+        my $plugin_cfg = File::Spec->catfile($workdir, 'plugin.cfg');
+        my $extra_cfg  = File::Spec->catfile($workdir, 'extra_sanoid.cfg');
+        my $incoming_cfg = File::Spec->catfile($workdir, 'buddys.cfg');
+        my $sanoid_cfg = File::Spec->catfile($workdir, 'sanoid.conf');
+        my $test_php   = File::Spec->catfile($workdir, 'test_sanoid_boot.php');
+
+        open my $pfh, '>', $plugin_cfg or die "Cannot write $plugin_cfg: $!";
+        print $pfh "ReceiveBackups=\"disable\"\n";
+        close $pfh;
+
+        open my $efh, '>', $extra_cfg or die "Cannot write $extra_cfg: $!";
+        print $efh <<"CFG";
+[snap_boot_noshebang]
+dataset="tank/workload_boot_noshebang"
+pre_snapshot_script="$boot_script_noshebang"
+hook_timeout="15"
+hook_failure_mode="abort"
+trigger="no"
+
+[snap_boot_shebang_bash]
+dataset="tank/workload_boot_bash"
+pre_snapshot_script="$boot_script_bash"
+hook_timeout="20"
+hook_failure_mode="warn"
+trigger="no"
+
+[snap_boot_post_only]
+dataset="tank/workload_boot_post"
+post_snapshot_script="$boot_script_sh"
+hook_timeout="25"
+trigger="no"
+
+[snap_boot_daily]
+dataset="tank/workload_boot_daily"
+pre_snapshot_script="$boot_script_noshebang"
+hook_scope="daily"
+trigger="no"
+
+[snap_boot_inline]
+dataset="tank/workload_boot_inline"
+pre_snapshot_script="bash $boot_script_noshebang"
+trigger="no"
+CFG
+        close $efh;
+
+        open my $sfh, '>', $test_php or die "Cannot write $test_php: $!";
+        print $sfh <<"PHP";
+<?php
+putenv('BUDDYBACKUP_TEST_BOOT_PREFIX=$boot_dir');
+\$_ENV['BUDDYBACKUP_TEST_BOOT_PREFIX'] = '$boot_dir';
+
+\$argv = array('test_sanoid_boot.php', 'noop');
+require_once '$rc_php';
+
+\$plugin_config_path = '$plugin_cfg';
+\$extra_sanoid_config_path = '$extra_cfg';
+\$incoming_config_path = '$incoming_cfg';
+\$sanoid_config_path = '$sanoid_cfg';
+\$empath = '/usr/local/emhttp/plugins/buddybackup';
+\$log_script = '/usr/local/emhttp/plugins/buddybackup/scripts/log.sh';
+\$rc = '/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup';
+
+update_sanoid_conf();
+echo file_get_contents('$sanoid_cfg');
+PHP
+        close $sfh;
+
+        my $generated = `php "$test_php" 2>&1`;
+        ok($generated, 'php executed and produced sanoid.conf for boot hooks');
+
+        # 1. noshebang -> bash '/path/to/boot/hook_noshebang.sh'
+        my ($noshebang_sec) = $generated =~ /\[tank\/workload_boot_noshebang\](.*?)(?=\n\[|\z)/s;
+        ok(defined $noshebang_sec, 'section [tank/workload_boot_noshebang] exists');
+        like(
+            $noshebang_sec,
+            qr/pre_snapshot_script = bash '\Q$boot_script_noshebang\E'/,
+            'pre_snapshot_script on boot without shebang is wrapped with bash'
+        );
+
+        # 2. shebang bash -> /bin/bash '/path/to/boot/hook_bash.sh'
+        my ($bash_sec) = $generated =~ /\[tank\/workload_boot_bash\](.*?)(?=\n\[|\z)/s;
+        ok(defined $bash_sec, 'section [tank/workload_boot_bash] exists');
+        like(
+            $bash_sec,
+            qr/pre_snapshot_script = \/bin\/bash '\Q$boot_script_bash\E'/,
+            'pre_snapshot_script on boot with #!/bin/bash preserves /bin/bash interpreter'
+        );
+
+        # 3. standalone post hook -> /bin/sh '/path/to/boot/hook_sh.sh'
+        my ($post_sec) = $generated =~ /\[tank\/workload_boot_post\](.*?)(?=\n\[|\z)/s;
+        ok(defined $post_sec, 'section [tank/workload_boot_post] exists');
+        like(
+            $post_sec,
+            qr/post_snapshot_script = \/bin\/sh '\Q$boot_script_sh\E'/,
+            'standalone post_snapshot_script on boot is wrapped with shebang interpreter'
+        );
+
+        # 4. daily scope boot hook -> prepends daily filter and wraps with bash
+        my ($daily_sec) = $generated =~ /\[tank\/workload_boot_daily\](.*?)(?=\n\[|\z)/s;
+        ok(defined $daily_sec, 'section [tank/workload_boot_daily] exists');
+        like(
+            $daily_sec,
+            qr/pre_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && case "\$\{SANOID_TYPES\}" in \*daily\*\) ;; \*\) exit 0;; esac; bash '\Q$boot_script_noshebang\E'/,
+            'daily scoped boot hook retains daily filter and bash wrapper'
+        );
+
+        # 5. inline command -> not double wrapped
+        my ($inline_sec) = $generated =~ /\[tank\/workload_boot_inline\](.*?)(?=\n\[|\z)/s;
+        ok(defined $inline_sec, 'section [tank/workload_boot_inline] exists');
+        like(
+            $inline_sec,
+            qr/pre_snapshot_script = bash \Q$boot_script_noshebang\E/,
+            'inline hook command is not double wrapped'
+        );
+
+        # 6. Verify FAT32 execution: unwrapped path fails (exit 126), wrapped command succeeds (exit 0)
+        my $raw_out = `/bin/sh -c "$boot_script_noshebang" 2>&1`;
+        my $raw_exit = $? >> 8;
+        is($raw_exit, 126, 'unwrapped 0644 script fails with exit 126 (Permission denied) under /bin/sh -c');
+
+        my $wrapped_cmd = "bash '$boot_script_noshebang'";
+        my $wrapped_out = `/bin/sh -c "$wrapped_cmd" 2>&1`;
+        my $wrapped_exit = $? >> 8;
+        is($wrapped_exit, 0, 'wrapped bash invocation succeeds with exit 0 on 0644 script');
+        like($wrapped_out, qr/noshebang_ok/, 'wrapped command produces expected script output');
     };
 }
 
