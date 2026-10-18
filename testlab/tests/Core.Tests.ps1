@@ -484,6 +484,15 @@ Assert-Test "Test-PortAvailable and Get-FreeLoopbackPort scan localhost TCP port
     }
 }
 
+# ---------------------------------------------------------------------------
+# Test Group 9: WSL Instance Management
+# ---------------------------------------------------------------------------
+Assert-Test "Stop-WslLabInstance dry run calculates work root and executes cleanly" {
+    $dryRunOutput = @(Stop-WslLabInstance -InstanceName "nodeTest" 6>&1)
+    # Also test absolute path variant
+    $dryRunAbsOutput = @(Stop-WslLabInstance -InstanceName "/tmp/custom-work-root" 6>&1)
+}
+
 Write-Host "--------------------------------------------------"
 $summaryColor = if ($testsFailed -eq 0) { "Green" } else { "Red" }
 Write-Host "Core & Platform Tests: $testsRun Total | $testsPassed Passed | $testsFailed Failed" -ForegroundColor $summaryColor

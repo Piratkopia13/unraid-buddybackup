@@ -20,7 +20,11 @@ function Stop-WslLabInstance {
         [switch]$DoExecute
     )
 
-    $workRoot = "/tmp/buddybackup-qemu-$InstanceName"
+    $workRoot = if ($InstanceName.StartsWith("/")) {
+        $InstanceName
+    } else {
+        "/tmp/buddybackup-qemu-$InstanceName"
+    }
     if (-not $DoExecute) {
         Write-Host "[dry-run] Would stop WSL/QEMU instance '$InstanceName' at $workRoot"
         return
@@ -44,12 +48,59 @@ if [ -f "$pid_file" ]; then
   fi
 fi
 
-pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+self_pid=$$
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+done
 for i in $(seq 1 30); do
-  pgrep -f "$work_root/unraid-boot.img" >/dev/null 2>&1 || break
+  remaining=0
+  for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+    if [ "$pid" != "$self_pid" ]; then
+      remaining=1
+      break
+    fi
+  done
+  [ "$remaining" -eq 0 ] && break
   sleep 0.1
 done
-pkill -9 -f "$work_root/unraid-boot.img" 2>/dev/null || true
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+done
+
+# Unmount any mounts inside work_root (deepest first)
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
+# Detach any loop devices associated with files inside work_root
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        if [ -f /proc/mounts ]; then
+          awk -v dev="$loop_dev" '$1 == dev || index($1, dev "p") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+          done
+        fi
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
+
+# Secondary pass to ensure all mounts under work_root are detached
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
 rm -rf "$work_root"
 '@
 

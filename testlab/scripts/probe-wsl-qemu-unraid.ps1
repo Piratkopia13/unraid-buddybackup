@@ -97,8 +97,36 @@ if [ -f "$pid_file" ]; then
   rm -f "$pid_file"
 fi
 
-pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+self_pid=$$
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+done
 rm -f "$work_root/qemu-monitor.sock"
+
+# Unmount any mounts inside work_root (deepest first)
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
+# Detach any loop devices associated with files inside work_root
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        if [ -f /proc/mounts ]; then
+          awk -v dev="$loop_dev" '$1 == dev || index($1, dev "p") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+          done
+        fi
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
 '@
 
     $stopResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $stopScript -Arguments @($WslWorkingRoot)
@@ -355,6 +383,20 @@ if ! require_command qemu-system-x86_64 || ! require_command losetup || ! requir
 fi
 
 log_step "Preparing WSL work root $work_root"
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
 rm -rf "$work_root"
 mkdir -p "$work_root/mnt"
 
@@ -373,10 +415,10 @@ parted -s "$image_path" set 1 boot on
 loop_device=$(losetup --find --show -P "$image_path")
 cleanup_loop() {
   if mountpoint -q "$mount_dir"; then
-    umount "$mount_dir" || true
+    umount "$mount_dir" 2>/dev/null || umount -l "$mount_dir" 2>/dev/null || true
   fi
   if [ -n "${loop_device:-}" ]; then
-    losetup -d "$loop_device" || true
+    losetup -d "$loop_device" 2>/dev/null || true
   fi
 }
 trap cleanup_loop EXIT
@@ -600,7 +642,7 @@ if [ -f "$mount_dir/syslinux/syslinux.cfg" ]; then
 fi
 
 sync
-umount "$mount_dir"
+umount "$mount_dir" 2>/dev/null || umount -l "$mount_dir" 2>/dev/null || true
 
 log_step "Installing syslinux bootloader"
 chmod +x "$payload_root/syslinux/syslinux_linux"
@@ -608,7 +650,7 @@ run_quietly_allowing_geometry_warning "$payload_root/syslinux/syslinux_linux" -f
 dd if="$payload_root/syslinux/mbr.bin" of="$loop_device" conv=notrunc status=none
 run_quietly_allowing_geometry_warning fsck.fat -a "${loop_device}p1" || true
 sync
-losetup -d "$loop_device"
+losetup -d "$loop_device" 2>/dev/null || true
 loop_device=""
 trap - EXIT
 

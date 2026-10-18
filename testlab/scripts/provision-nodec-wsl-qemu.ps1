@@ -386,6 +386,11 @@ rm -f "$vm_root/qemu.pid"
 echo "stopped=$stopped"
 
 if [ "$remove_disks" = "1" ]; then
+  if [ -f /proc/mounts ] && [ -d "$vm_root" ]; then
+    awk -v prefix="$vm_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+      umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+    done
+  fi
   rm -rf "$vm_root"
   echo "disks-removed=yes"
 fi
