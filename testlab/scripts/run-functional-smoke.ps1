@@ -532,12 +532,109 @@ function Test-IsHostKeyVerificationFailure {
     }
 
     $outputText = Get-ResultOutputText -Result $Result
-    return $outputText -match '(?i)Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED'
+    return $outputText -match '(?i)Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|hostfile_replace_entries|update_known_hosts'
+}
+
+function Invoke-PrimeLegacyKnownHostsOnNode {
+    param(
+        $NodeConnection,
+        [string]$RemoteHost,
+        [switch]$DoExecute
+    )
+
+    if (-not $DoExecute -or [string]::IsNullOrWhiteSpace($RemoteHost)) {
+        return
+    }
+
+    $script = @'
+remote_host="$1"
+known_hosts_file="/root/.ssh/known_hosts"
+ssh_config_file="/root/.ssh/config"
+flash_ssh_config="/boot/config/ssh/root/config"
+begin_marker="# buddybackup start"
+end_marker="# buddybackup end"
+
+mkdir -p /root/.ssh /boot/config/ssh/root
+chmod 700 /root/.ssh /boot/config/ssh/root 2>/dev/null || true
+touch "$known_hosts_file"
+chmod 600 "$known_hosts_file"
+
+for cfg in "$ssh_config_file" "$flash_ssh_config"; do
+    touch "$cfg"
+    chmod 600 "$cfg"
+    if ! grep -q "UpdateHostKeys" "$cfg" 2>/dev/null; then
+        cat >> "$cfg" <<'EOF'
+Host *
+    UpdateHostKeys no
+EOF
+    fi
+done
+
+scanned_keys=""
+for attempt in 1 2 3 4 5; do
+    attempt_keys=$(ssh-keyscan -T 3 "$remote_host" 2>/dev/null || true)
+    hashed_keys=$(ssh-keyscan -T 3 -H "$remote_host" 2>/dev/null || true)
+    combined=""
+    if [[ -n "$attempt_keys" && -n "$hashed_keys" ]]; then
+        combined="${attempt_keys}"$'\n'"${hashed_keys}"
+    elif [[ -n "$attempt_keys" ]]; then
+        combined="$attempt_keys"
+    elif [[ -n "$hashed_keys" ]]; then
+        combined="$hashed_keys"
+    fi
+
+    if [[ -n "$combined" ]]; then
+        if [[ -n "$scanned_keys" ]]; then
+            scanned_keys=$(printf '%s\n%s\n' "$scanned_keys" "$combined" | sed '/^[[:space:]]*$/d' | awk '
+                /^[[:space:]]*#/ { if (!comment[$0]++) print; next }
+                NF >= 3 { key = $2 " " $3; if (!material[key]++) print; next }
+                { print }
+            ')
+        else
+            scanned_keys=$(printf '%s\n' "$combined" | sed '/^[[:space:]]*$/d')
+        fi
+
+        if printf '%s\n' "$scanned_keys" | grep -q 'ssh-ed25519' && \
+           printf '%s\n' "$scanned_keys" | grep -q 'ecdsa-sha2-nistp256' && \
+           printf '%s\n' "$scanned_keys" | grep -q 'ssh-rsa'; then
+            break
+        fi
+    fi
+
+    if [[ "$attempt" -lt 5 ]]; then
+        sleep 1
+    fi
+done
+
+if [[ -n "$scanned_keys" ]]; then
+    tmp_known_hosts="$(mktemp)"
+    next_known_hosts="${tmp_known_hosts}.next"
+
+    awk -v begin="$begin_marker" -v end="$end_marker" '
+        $0 == begin { skip=1; next }
+        $0 == end { skip=0; next }
+        !skip { print }
+    ' "$known_hosts_file" > "$tmp_known_hosts"
+
+    {
+        cat "$tmp_known_hosts"
+        printf '%s\n' "$begin_marker"
+        printf '%s\n' "$scanned_keys"
+        printf '%s\n' "$end_marker"
+    } > "$next_known_hosts"
+
+    mv "$next_known_hosts" "$known_hosts_file"
+    rm -f "$tmp_known_hosts"
+fi
+'@
+    $cmd = Convert-ToRemoteBashScriptCommand -Script $script -Arguments @($RemoteHost)
+    Invoke-NodeSshCommandWithRetry -NodeConnection $NodeConnection -Command $cmd -Label "$($NodeConnection.NodeName)-prime-legacy-known-hosts" -DoExecute:$DoExecute | Out-Null
 }
 
 function Invoke-BuddyBackupRefreshKnownHosts {
     param(
         $NodeConnection,
+        [string]$RemoteHost = "",
         [switch]$DoExecute
     )
 
@@ -546,7 +643,23 @@ function Invoke-BuddyBackupRefreshKnownHosts {
     }
 
     Write-Host "[testlab] Refreshing BuddyBackup known_hosts on $($NodeConnection.NodeName) after a host key verification failure"
-    Invoke-BuddyBackupPhpCommandWithRetry -NodeConnection $NodeConnection -Action "update" -Label "$($NodeConnection.NodeName)-known-hosts-refresh" -MaxAttempts 3 -DoExecute:$DoExecute | Out-Null
+    $probeManagedCmd = "grep -q 'ssh_known_hosts_path' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'managed' || echo 'legacy'"
+    $probeResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $probeManagedCmd -Label "$($NodeConnection.NodeName)-probe-managed-for-refresh" -DoExecute:$DoExecute
+    $isManaged = $true
+    if ($probeResult -and $probeResult.success) {
+        $out = ($probeResult.output -join "`n").Trim()
+        if ($out -eq "legacy") {
+            $isManaged = $false
+        }
+    }
+
+    if ($isManaged) {
+        Invoke-BuddyBackupPhpCommandWithRetry -NodeConnection $NodeConnection -Action "update" -Label "$($NodeConnection.NodeName)-known-hosts-refresh" -MaxAttempts 3 -DoExecute:$DoExecute | Out-Null
+    } else {
+        if (-not [string]::IsNullOrWhiteSpace($RemoteHost)) {
+            Invoke-PrimeLegacyKnownHostsOnNode -NodeConnection $NodeConnection -RemoteHost $RemoteHost -DoExecute:$DoExecute
+        }
+    }
 }
 
 function Invoke-BuddyBackupShellCommandWithRetry {
@@ -558,6 +671,7 @@ function Invoke-BuddyBackupShellCommandWithRetry {
         [int]$MaxAttempts = 10,
         [switch]$RetryTransientSshFailure,
         [switch]$RetryHostKeyFailure,
+        [string]$RemoteHost = "",
         [switch]$DoExecute
     )
 
@@ -576,7 +690,7 @@ function Invoke-BuddyBackupShellCommandWithRetry {
         if ($DoExecute -and $hostKeyFailure -and $attempt -lt $MaxAttempts) {
             # Remote commands can exit 0 while reporting a host key failure.
             # Refresh the managed known_hosts and retry against the new keys.
-            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -DoExecute:$DoExecute
+            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -RemoteHost $RemoteHost -DoExecute:$DoExecute
             Start-Sleep -Seconds 2
             continue
         }
@@ -649,19 +763,21 @@ function Invoke-BuddyBackupTestConnectionWithRetry {
         $attempts += $result
 
         $outputText = Get-ResultOutputText -Result $result
-        $reportedSuccess = [int]$result.exitCode -eq 0 -and $outputText -match 'Success!' -and $outputText -notmatch '(?i)security validation failed'
+        $hasKnownHostsUpdateError = $outputText -match '(?i)hostfile_replace_entries|update_known_hosts: hostfile_replace_entries failed'
+        $reportedSuccess = [int]$result.exitCode -eq 0 -and $outputText -match 'Success!' -and $outputText -notmatch '(?i)security validation failed' -and -not $hasKnownHostsUpdateError
         if ($reportedSuccess) {
             break
         }
 
-        $hostKeyFailure = Test-IsHostKeyVerificationFailure -Result $result
+        $hostKeyFailure = (Test-IsHostKeyVerificationFailure -Result $result) -or $hasKnownHostsUpdateError
         $shouldRetry = $DoExecute -and $attempt -lt $MaxAttempts -and ($hostKeyFailure -or (Test-IsTransientSshFailure -Result $result) -or (Test-IsRetryableTestConnectionFailure -Result $result))
         if (-not $shouldRetry) {
             break
         }
 
         if ($hostKeyFailure) {
-            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -DoExecute:$DoExecute
+            $remoteTargetHost = if ($Arguments -and $Arguments.Count -gt 0) { [string]$Arguments[0] } else { "" }
+            Invoke-BuddyBackupRefreshKnownHosts -NodeConnection $NodeConnection -RemoteHost $remoteTargetHost -DoExecute:$DoExecute
             Start-Sleep -Seconds 2
         } else {
             Start-Sleep -Seconds $RetryDelaySeconds
@@ -803,6 +919,10 @@ function Test-ConnectionOutput {
     if ($joined -match 'security validation failed') {
         throw "BuddyBackup test_connection reported an SSH security validation problem on node '$NodeName'.`n$joined"
     }
+
+    if ($joined -match '(?i)hostfile_replace_entries|update_known_hosts: hostfile_replace_entries failed') {
+        throw "BuddyBackup test_connection failed due to known_hosts update restrictions on node '$NodeName'.`n$joined"
+    }
 }
 
 function Test-BackupSendOutput {
@@ -899,6 +1019,8 @@ EOF
 prime_legacy_known_hosts() {
     local remote_host="$1"
     local known_hosts_file="/root/.ssh/known_hosts"
+    local ssh_config_file="/root/.ssh/config"
+    local flash_ssh_config="/boot/config/ssh/root/config"
     local begin_marker="# buddybackup start"
     local end_marker="# buddybackup end"
     local scanned_keys=""
@@ -907,25 +1029,47 @@ prime_legacy_known_hosts() {
     local tmp_known_hosts=""
     local next_known_hosts=""
 
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
+    mkdir -p /root/.ssh /boot/config/ssh/root
+    chmod 700 /root/.ssh /boot/config/ssh/root 2>/dev/null || true
     touch "$known_hosts_file"
     chmod 600 "$known_hosts_file"
 
+    for cfg in "$ssh_config_file" "$flash_ssh_config"; do
+        touch "$cfg"
+        chmod 600 "$cfg"
+        if ! grep -q "UpdateHostKeys" "$cfg" 2>/dev/null; then
+            cat >> "$cfg" <<'EOF'
+Host *
+    UpdateHostKeys no
+EOF
+        fi
+    done
+
     # ssh-keyscan can return partial results when the peer is busy; merge several
     # scans so the primed known_hosts stays stable and doesn't lose key types.
-    # Hash-based (-H) host names differ between scans, so dedupe key lines by key material.
-    for attempt in 1 2 3; do
-        attempt_keys=$(ssh-keyscan -T 3 -H "$remote_host" 2>/dev/null || true)
-        if [[ -n "$attempt_keys" ]]; then
+    # Include both raw host entries and hash-based (-H) entries so legacy OpenSSH
+    # callers can match either format without attempting hostfile_replace_entries.
+    for attempt in 1 2 3 4 5; do
+        attempt_keys=$(ssh-keyscan -T 3 "$remote_host" 2>/dev/null || true)
+        hashed_keys=$(ssh-keyscan -T 3 -H "$remote_host" 2>/dev/null || true)
+        local combined_attempt=""
+        if [[ -n "$attempt_keys" && -n "$hashed_keys" ]]; then
+            combined_attempt="${attempt_keys}"$'\n'"${hashed_keys}"
+        elif [[ -n "$attempt_keys" ]]; then
+            combined_attempt="$attempt_keys"
+        elif [[ -n "$hashed_keys" ]]; then
+            combined_attempt="$hashed_keys"
+        fi
+
+        if [[ -n "$combined_attempt" ]]; then
             if [[ -n "$scanned_keys" ]]; then
-                scanned_keys=$(printf '%s\n%s\n' "$scanned_keys" "$attempt_keys" | sed '/^[[:space:]]*$/d' | awk '
+                scanned_keys=$(printf '%s\n%s\n' "$scanned_keys" "$combined_attempt" | sed '/^[[:space:]]*$/d' | awk '
                     /^[[:space:]]*#/ { if (!comment[$0]++) print; next }
                     NF >= 3 { key = $2 " " $3; if (!material[key]++) print; next }
                     { print }
                 ')
             else
-                scanned_keys=$(printf '%s\n' "$attempt_keys" | sed '/^[[:space:]]*$/d')
+                scanned_keys=$(printf '%s\n' "$combined_attempt" | sed '/^[[:space:]]*$/d')
             fi
 
             if printf '%s\n' "$scanned_keys" | grep -q 'ssh-ed25519' && \
@@ -935,7 +1079,7 @@ prime_legacy_known_hosts() {
             fi
         fi
 
-        if [[ "$attempt" -lt 3 ]]; then
+        if [[ "$attempt" -lt 5 ]]; then
             sleep 1
         fi
     done
@@ -1049,9 +1193,9 @@ if [[ "$peer_port" != "22" ]]; then
     persist_peer_forward_rule "$peer_alias_ip" "$host_gateway_ip" "$peer_port"
 fi
 
-prime_legacy_known_hosts "$remote_host"
-
 /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update
+
+prime_legacy_known_hosts "$remote_host"
 
 echo "configured_node=${node_name}"
 echo "configured_remote_host=${remote_host}"
@@ -1160,8 +1304,8 @@ try {
 
     Write-Host "[testlab] Functional smoke: refreshing managed BuddyBackup host keys"
     foreach ($refresh in @(
-        @{ Connection = $senderConnection; NodeName = "nodeA" },
-        @{ Connection = $receiverConnection; NodeName = "nodeB" }
+        @{ Connection = $senderConnection; NodeName = "nodeA"; RemoteHost = $senderPlan.remoteHost },
+        @{ Connection = $receiverConnection; NodeName = "nodeB"; RemoteHost = $receiverPlan.remoteHost }
     )) {
         $probeManagedCmd = "grep -q 'ssh_known_hosts_path' /usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup && echo 'managed' || echo 'legacy'"
         $probeManagedResult = Invoke-NodeSshCommandWithRetry -NodeConnection $refresh.Connection -Command $probeManagedCmd -Label "$($refresh.NodeName)-probe-managed-known-hosts" -DoExecute:$Execute
@@ -1184,7 +1328,8 @@ try {
             Add-ReportAction -Report $report -Result $refreshUpdateResult
             Assert-CommandSucceeded -Result $refreshUpdateResult -FailureMessage "Failed to rebuild BuddyBackup managed known_hosts on node '$($refresh.Connection.NodeName)'."
         } else {
-            Write-Host "[testlab] $($refresh.NodeName) is running a legacy release without managed known_hosts; skipping clear_known_hosts."
+            Write-Host "[testlab] $($refresh.NodeName) is running a legacy release without managed known_hosts; re-priming legacy known_hosts."
+            Invoke-PrimeLegacyKnownHostsOnNode -NodeConnection $refresh.Connection -RemoteHost ([string]$refresh.RemoteHost) -DoExecute:$Execute
         }
     }
 
@@ -1273,7 +1418,7 @@ try {
         @{ Connection = $receiverConnection; Uid = $receiverPlan.localBackupUid; Type = "local"; DestinationHost = ""; DestinationDataset = $receiverPlan.localBackupDataset; Key = "nodeB-local-snapshots" }
     )) {
         $snapshotArgs = if ($query.Type -eq "remote") { @($query.Type, $query.DestinationHost, $query.DestinationDataset) } else { @($query.Type, $query.DestinationDataset) }
-        $snapshotResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -RetryTransientSshFailure:($query.Type -eq "remote") -RetryHostKeyFailure:($query.Type -eq "remote") -DoExecute:$Execute
+        $snapshotResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $query.Connection -Action "get_available_snapshots" -Arguments $snapshotArgs -Label $query.Key -RetryTransientSshFailure:($query.Type -eq "remote") -RetryHostKeyFailure:($query.Type -eq "remote") -RemoteHost:($query.DestinationHost) -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $snapshotResult
         Assert-CommandSucceeded -Result $snapshotResult -FailureMessage "Snapshot query failed for uid '$($query.Uid)' on node '$($query.Connection.NodeName)'."
         if ($Execute) {
@@ -1293,7 +1438,7 @@ try {
         } else {
             @($restore.Type, "selected", $restore.Selection.snapshot, $restore.Selection.dataset, $restore.Destination)
         }
-        $restoreResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $restore.Connection -Action "restore_snapshot" -Arguments $restoreArgs -Label $restore.Label -RetryTransientSshFailure:($restore.Type -eq "remote") -RetryHostKeyFailure:($restore.Type -eq "remote") -DoExecute:$Execute
+        $restoreResult = Invoke-BuddyBackupShellCommandWithRetry -NodeConnection $restore.Connection -Action "restore_snapshot" -Arguments $restoreArgs -Label $restore.Label -RetryTransientSshFailure:($restore.Type -eq "remote") -RetryHostKeyFailure:($restore.Type -eq "remote") -RemoteHost:($restore.DestinationHost) -DoExecute:$Execute
         Add-ReportAction -Report $report -Result $restoreResult
         Assert-CommandSucceeded -Result $restoreResult -FailureMessage "Restore failed for label '$($restore.Label)' on node '$($restore.Connection.NodeName)'."
     }
