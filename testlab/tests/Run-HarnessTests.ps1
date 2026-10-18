@@ -1,13 +1,16 @@
 <#
 .SYNOPSIS
-    Fast automated unit and regression test harness for BuddyBackup testlab scripts.
+    Fast automated unit and regression test harness for BuddyBackup testlab.
 
 .DESCRIPTION
-    Validates testlab helper functions, remote shell command escaping, manifest parsing,
-    and config resolution in < 3 seconds without booting VMs.
+    Validates testlab modules (Core, Platform, Transport, Guest), helper functions,
+    remote shell command escaping, manifest parsing, and config resolution in < 3 seconds
+    without booting VMs.
 #>
 
+[CmdletBinding()]
 param(
+    [switch]$IncludeScenarios,
     [switch]$VerboseOutput
 )
 
@@ -15,6 +18,7 @@ $ErrorActionPreference = "Stop"
 
 $workspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $testlabScriptsRoot = Join-Path $workspaceRoot "testlab\scripts"
+$testsRoot = Join-Path $workspaceRoot "testlab\tests"
 
 $testsRun = 0
 $testsPassed = 0
@@ -35,12 +39,42 @@ function Assert-Test {
         $script:testsFailed++
         Write-Host "  [FAIL] $Name" -ForegroundColor Red
         Write-Host "         $($_.Exception.Message)" -ForegroundColor DarkRed
+        if ($VerboseOutput) {
+            Write-Host "$($_.ScriptStackTrace)" -ForegroundColor DarkGray
+        }
     }
 }
 
 Write-Host "=== Running BuddyBackup Testlab Harness Tests ===" -ForegroundColor Cyan
 
-# Test 1: Plugin Manifest Display Version Parsing (SMB-Safe)
+# ---------------- Run Layer 1-3 Module Unit Test Suites ----------------
+$moduleSuites = @(
+    @{ Name = "Core & Platform Modules"; Script = "Core.Tests.ps1" },
+    @{ Name = "Transport Module"; Script = "Transport.Tests.ps1" },
+    @{ Name = "Guest Management Module"; Script = "Guest.Tests.ps1" }
+)
+
+foreach ($suite in $moduleSuites) {
+    $suitePath = Join-Path $testsRoot $suite.Script
+    if (Test-Path -LiteralPath $suitePath) {
+        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $suitePath 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            $script:testsPassed++
+            $script:testsRun++
+            Write-Host "  [PASS] $($suite.Name) suite ($($suite.Script))" -ForegroundColor Green
+        } else {
+            $script:testsFailed++
+            $script:testsRun++
+            Write-Host "  [FAIL] $($suite.Name) suite ($($suite.Script))" -ForegroundColor Red
+            Write-Host "         $($output -join "`n")" -ForegroundColor DarkRed
+        }
+    }
+}
+
+# ---------------- Direct Regression Assertions ----------------
+
+# Test: Plugin Manifest Display Version Parsing (SMB-Safe)
 Assert-Test "Get-TestLabPluginDisplayVersion parses manifest reliably" {
     . (Join-Path $testlabScriptsRoot "testlab-plugin-source.ps1")
     $version = Get-TestLabPluginDisplayVersion -WorkspaceRoot $workspaceRoot
@@ -52,7 +86,7 @@ Assert-Test "Get-TestLabPluginDisplayVersion parses manifest reliably" {
     }
 }
 
-# Test 2: Convert-ToRemoteShellCommand encodes complex single-line commands
+# Test: Convert-ToRemoteShellCommand encodes complex single-line commands
 Assert-Test "Convert-ToRemoteShellCommand Base64 encodes commands with shell metacharacters" {
     . (Join-Path $testlabScriptsRoot "run-matrix.ps1")
 
@@ -76,7 +110,7 @@ Assert-Test "Convert-ToRemoteShellCommand Base64 encodes commands with shell met
     }
 }
 
-# Test 3: Remote shell command escaping with quotes and awk syntax
+# Test: Remote shell command escaping with quotes and awk syntax
 Assert-Test "Convert-ToRemoteShellCommand preserves nested quotes and dollar syntax" {
     . (Join-Path $testlabScriptsRoot "run-matrix.ps1")
 
@@ -94,7 +128,7 @@ Assert-Test "Convert-ToRemoteShellCommand preserves nested quotes and dollar syn
     }
 }
 
-# Test 4: Settle command bash syntax validation (via WSL if available)
+# Test: Settle command bash syntax validation (via WSL if available)
 Assert-Test "Settle command has valid bash syntax" {
     $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
     if (-not $wsl) {
@@ -111,7 +145,7 @@ Assert-Test "Settle command has valid bash syntax" {
     }
 }
 
-# Test 5: Lab local config and small matrix parsing
+# Test: Lab local config and small matrix parsing
 Assert-Test "Lab config and matrix small configs parse valid JSON" {
     $labConfigPath = Join-Path $workspaceRoot "testlab\config\lab.local.json"
     $matrixPath = Join-Path $workspaceRoot "testlab\config\matrix.small.json"
@@ -125,6 +159,28 @@ Assert-Test "Lab config and matrix small configs parse valid JSON" {
     if (Test-Path -LiteralPath $matrixPath) {
         $matrixJson = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $matrixPath).ProviderPath) | ConvertFrom-Json
         if (-not $matrixJson.cells -or $matrixJson.cells.Count -eq 0) { throw "matrix.small.json has no cells" }
+    }
+}
+
+# ---------------- Optional Scenario Test Suites ----------------
+if ($IncludeScenarios) {
+    Write-Host "`n=== Running Standalone Scenario Test Suites ===" -ForegroundColor Cyan
+    foreach ($scenarioSuite in @("Scenarios.Lifecycle.Tests.ps1", "Scenarios.Smoke.Tests.ps1")) {
+        $suitePath = Join-Path $testsRoot $scenarioSuite
+        if (Test-Path -LiteralPath $suitePath) {
+            $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $suitePath 2>&1
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                $script:testsPassed++
+                $script:testsRun++
+                Write-Host "  [PASS] Scenario suite ($scenarioSuite)" -ForegroundColor Green
+            } else {
+                $script:testsFailed++
+                $script:testsRun++
+                Write-Host "  [FAIL] Scenario suite ($scenarioSuite)" -ForegroundColor Red
+                Write-Host "         $($output -join "`n")" -ForegroundColor DarkRed
+            }
+        }
     }
 }
 

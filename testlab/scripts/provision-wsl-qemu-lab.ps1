@@ -1055,12 +1055,12 @@ cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
 set -euo pipefail
 
 # Guard Unraid rc.sshd against port bind race during delayed service reloads
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -1162,8 +1162,8 @@ while [ "$attempts" -gt 0 ]; do
 
             if [ "$bb_ready" -eq 1 ] && [ "$receiver_ready" -eq 1 ]; then
                 # Wait until post-boot service reloads (scheduled at +20s by network init) complete
-                uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 60)
-                if [ "$uptime_secs" -lt 45 ]; then
+                uptime_secs=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 60)
+                if [ -n "$uptime_secs" ] && [ "$uptime_secs" -lt 45 ] 2>/dev/null; then
                     sleep $((45 - uptime_secs))
                 fi
                 while pidof -x reload_services >/dev/null 2>&1; do
@@ -1180,6 +1180,12 @@ while [ "$attempts" -gt 0 ]; do
                         /usr/sbin/sshd >/dev/null 2>&1 || true
                     fi
                 fi
+                for _ in $(seq 1 30); do
+                    if ! pgrep -x sshd >/dev/null 2>&1; then
+                        /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+                    fi
+                    sleep 2
+                done
                 exit 0
             fi
         fi
@@ -1229,12 +1235,12 @@ else
     printf 'USE_SSH="yes"\n' > "$ident_cfg"
 fi
 
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -1324,12 +1330,12 @@ else
     printf 'USE_SSH="yes"\n' > "$ident_cfg"
 fi
 
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi

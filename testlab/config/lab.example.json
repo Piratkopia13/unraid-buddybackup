@@ -53,7 +53,7 @@
     }
   },
   "timeouts": {
-    "sshReadySeconds": 300,
+    "sshReadySeconds": 120,
     "rebootSettleSeconds": 30
   },
   "wslQemu": {

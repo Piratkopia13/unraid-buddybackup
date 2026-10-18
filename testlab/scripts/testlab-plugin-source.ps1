@@ -14,7 +14,7 @@ function Get-TestLabWorkspaceRoot {
     param([string]$ScriptRoot)
 
     if ([string]::IsNullOrWhiteSpace($ScriptRoot)) {
-        throw "ScriptRoot is required to resolve the testlab workspace root."
+        $ScriptRoot = $PSScriptRoot
     }
 
     return [System.IO.Path]::GetFullPath((Join-Path $ScriptRoot "..\.."))
@@ -59,6 +59,10 @@ function Invoke-TestLabGitCommand {
 function Get-TestLabPluginDisplayVersion {
     param([string]$WorkspaceRoot)
 
+    if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        $WorkspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    }
+
     $pluginManifestPath = Join-Path $WorkspaceRoot "buddybackup.plg"
     if (-not (Test-Path -LiteralPath $pluginManifestPath)) {
         throw "Missing BuddyBackup manifest: $pluginManifestPath"
@@ -84,6 +88,10 @@ function Get-TestLabBuildCacheRoot {
         [string]$ConfiguredBuildCacheRoot
     )
 
+    if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        $WorkspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    }
+
     if ([string]::IsNullOrWhiteSpace($ConfiguredBuildCacheRoot)) {
         return Join-Path $WorkspaceRoot ".testlab/build-cache"
     }
@@ -93,6 +101,10 @@ function Get-TestLabBuildCacheRoot {
 
 function Get-TestLabDependencyPackagePaths {
     param([string]$WorkspaceRoot)
+
+    if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        $WorkspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    }
 
     $depsRoot = Join-Path $WorkspaceRoot "deps"
     if (-not (Test-Path -LiteralPath $depsRoot)) {
@@ -198,12 +210,19 @@ function Get-TestLabWorkspaceBuildInfo {
         [switch]$ForceRebuild
     )
 
+    if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        $WorkspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
+    }
+
     $buildCacheRoot = Get-TestLabBuildCacheRoot -WorkspaceRoot $WorkspaceRoot -ConfiguredBuildCacheRoot $ConfiguredBuildCacheRoot
     $head = Invoke-TestLabGitCommand -WorkspaceRoot $WorkspaceRoot -Arguments @("rev-parse", "HEAD")
     $shortHead = Invoke-TestLabGitCommand -WorkspaceRoot $WorkspaceRoot -Arguments @("rev-parse", "--short", "HEAD")
     $describe = Invoke-TestLabGitCommand -WorkspaceRoot $WorkspaceRoot -Arguments @("describe", "--always")
     $displayVersion = Get-TestLabPluginDisplayVersion -WorkspaceRoot $WorkspaceRoot
 
+    if ($null -eq $script:TestLabWorkspaceBuildInfoCache) {
+        $script:TestLabWorkspaceBuildInfoCache = @{}
+    }
     $cacheKey = "{0}|{1}" -f $WorkspaceRoot, $shortHead.Output.Trim()
     if (-not $ForceRebuild -and $script:TestLabWorkspaceBuildInfoCache.ContainsKey($cacheKey)) {
         return $script:TestLabWorkspaceBuildInfoCache[$cacheKey]
@@ -260,6 +279,10 @@ function Resolve-TestLabPluginRequest {
     $requested = [string]$RequestedValue
     if ([string]::IsNullOrWhiteSpace($requested)) {
         throw "A plugin request value is required."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        $WorkspaceRoot = Get-TestLabWorkspaceRoot -ScriptRoot $PSScriptRoot
     }
 
     if ($requested -match '^(?i)(workspace-build|current-commit)$') {

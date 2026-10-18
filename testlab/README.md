@@ -9,20 +9,79 @@ This folder contains the first implementation of a reproducible, script-first te
 - Explicit lifecycle scenarios for fresh install and post-reboot validation.
 - Dry-run-first execution with explicit `-Execute` paths for live provisioning and test actions.
 
-## Current status
+## Architecture & Modular Design
 
-This initial implementation provides:
+The testlab is structured into a clean, 5-layer modular architecture designed for maintainability, independent testability, and fast iteration:
 
-- Host bootstrap script.
-- Lab config templates.
-- Windows-local WSL/QEMU provisioning path with artifact-backed SSH readiness checks.
-- Post-SSH base guest setup for the local provider (BuddyBackup plugin install verification, and ZFS pool + datasets).
-- Matrix-time base setup verification checks for plugin install health and ZFS baseline.
-- Manual-provider provisioning probe with JSON readiness report.
-- Small matrix definition.
-- Matrix runner with lifecycle scenario hooks and per-cell artifacts.
-- Scenario scripts for fresh install and reboot checks.
-- Dedicated functional smoke runner for reciprocal backup and restore checks against the live local lab.
+```text
+┌─────────────────────────────────────────────────────────┐
+│ Layer 5: Orchestrators (scripts/run-matrix.ps1, etc.)    │
+└───────────────────────────┬─────────────────────────────┘
+                            │ delegates cells to
+┌───────────────────────────▼─────────────────────────────┐
+│ Layer 4: Standalone Scenarios (scenarios/Scenario-*.ps1) │
+└───────────────────────────┬─────────────────────────────┘
+                            │ imports
+┌───────────────────────────▼─────────────────────────────┐
+│ Layer 3: Guest Management (modules/TestLab.Guest)       │
+├─────────────────────────────────────────────────────────┤
+│ Layer 2: Transport & Platform (TestLab.Transport/Platform)│
+├─────────────────────────────────────────────────────────┤
+│ Layer 1: Core Foundation (modules/TestLab.Core)         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Module Hierarchy (`testlab/modules/`)
+1. **`TestLab.Core`**:
+   - `FileSystem.ps1`: Safe workspace resolution (`Get-TestLabWorkspaceRoot`), path normalization, directory creation.
+   - `Logging.ps1`: Structured logging, timestamped formatters, execution wrappers.
+   - `Config.ps1`: JSON configuration loading, object accessors (`Get-ObjectValue`), node connection resolvers.
+2. **`TestLab.Platform`**:
+   - `WslProvider.ps1`: WSL command invocation, Windows-to-WSL path translations, root bash runners.
+   - `NetworkManager.ps1`: Port availability testing, free port allocation, gateway IP resolution.
+   - `QemuVmManager.ps1`: QEMU VM process management, disk creation, VM teardown.
+3. **`TestLab.Transport`**:
+   - `Connection.ps1`: Node connection representation, SSH parameter resolution.
+   - `RemoteBash.ps1`: Safe script block quoting, remote execution with retry logic (`Invoke-RemoteBash`).
+   - `RemoteUpload.ps1`: Multi-file transfer with WSL `wslpath` caching (`Send-RemoteFiles`).
+   - `WaitProbes.ps1`: Polling probes with bounded timeouts (`Wait-ForRemoteSuccess`).
+4. **`TestLab.Guest`**:
+   - `UnraidLifecycle.ps1`: WebGUI readiness, manual access verification, boot ID detection, reboot cycling.
+   - `PluginManager.ps1`: Display version parsing, `.txz` workspace compilation, remote staging, plugin install runner.
+   - `ZfsManager.ps1`: Pool and dataset creation, encryption key handling, dataset destroy/scrub.
+   - `UpgradeStateManager.ps1`: Pre/post upgrade state snapshots, JSON normalization, state diffing.
+
+### Standalone Scenarios (`testlab/scenarios/`)
+All test scenarios are self-contained CLI scripts that can be executed directly or dispatched by matrix orchestrators:
+- **`Scenario-FreshInstall.ps1`**: Installs BuddyBackup on `nodeA` and `nodeB`, verifying plugin health and binaries.
+- **`Scenario-PostReboot.ps1`**: Snapshots state, triggers guest reboot, waits for SSH/boot ID transition, and verifies state persistence across reboot.
+- **`Scenario-UpgradePreservesConfig.ps1`**: Installs a baseline version, seeds realistic configuration, upgrades in-place, and verifies configuration integrity.
+- **`Scenario-FunctionalSmoke.ps1`**: Bidirectional reciprocal backup and restore validation between `nodeA` and `nodeB`.
+- **`Scenario-MultiDataset.ps1`**: Multi-dataset hot-standby replication and telemetry isolation.
+- **`Scenario-GenericSmoke.ps1`**: Remote replication push and snapshot restore with a non-Unraid OpenZFS host (`nodeC`).
+
+### Running Scenarios Standalone
+Any scenario can be executed directly in dry-run or live execution mode:
+```powershell
+# Run fresh install scenario dry-run
+./testlab/scenarios/Scenario-FreshInstall.ps1 -LabConfig testlab/config/lab.local.json
+
+# Run post-reboot verification against live nodes
+./testlab/scenarios/Scenario-PostReboot.ps1 -LabConfig testlab/config/lab.local.json -Execute
+
+# Run upgrade preservation test
+./testlab/scenarios/Scenario-UpgradePreservesConfig.ps1 -LabConfig testlab/config/lab.local.json -UpgradeFrom 2026.05.02 -UpgradeTo workspace-build -Execute
+```
+
+### Running Test Suites (`testlab/tests/`)
+The testlab includes a fast unit and regression test runner (< 3 seconds execution):
+```powershell
+# Run core, transport, guest module tests and regression checks
+./testlab/tests/Run-HarnessTests.ps1
+
+# Include scenario dry-run tests
+./testlab/tests/Run-HarnessTests.ps1 -IncludeScenarios
+```
 
 ## Quick start
 
