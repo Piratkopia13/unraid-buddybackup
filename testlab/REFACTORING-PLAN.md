@@ -204,9 +204,39 @@ Every test scenario is an independently executable script taking standard parame
    - Update `testlab/README.md` with instructions for running individual scenarios.
    - Remove deprecated, orphaned scripts (`scenario-fresh-install.ps1`, `scenario-post-reboot.ps1`).
 
+## 7. Performance & Speed Optimization Strategy (Zero Regressions & Fast Paths)
+
+While the primary focus of this refactor is modularity, readability, and reliability, **maintaining or improving execution speed is an explicit requirement**.
+
+Modularizing PowerShell code into `.psm1` / focused helper scripts introduces negligible runtime overhead (< 20 ms during script loading). Crucially, the modular architecture unlocks five concrete speedups that were previously difficult to implement inside the monoliths:
+
+### 1. Smart / Idempotent Provisioning (Fast Node Reuse)
+* **Current Bottleneck**: Currently, `provision-lab.ps1` invokes `probe-wsl-qemu-unraid.ps1`, which destroys `/tmp/buddybackup-qemu-*`, reformats the FAT32 boot image, reinstalls syslinux, and reboots both VMs from scratch every time. This takes **3 to 5 minutes** even when the VMs are already running the correct Unraid version.
+* **Optimization**: In `TestLab.Platform`, introduce an idempotent readiness probe. If QEMU processes are alive, SSH responds, and `cat /etc/unraid-version` matches the requested version in `lab.local.json`, provisioning skips disk recreation and reboot. It simply verifies ZFS and resets plugin state, bringing provision verification down from **~4 minutes to < 5 seconds**.
+
+### 2. Batched Remote Command Invocations (Reducing SSH Handshake Overhead)
+* **Current Bottleneck**: On Windows, spawning native `ssh.exe` involves process creation, TCP handshakes, and SSH key exchange (`curve25519-sha256`), taking ~150–300 ms per command. Over 100 remote commands in a matrix run, **30 to 50 seconds** are spent purely on process startup and SSH negotiation.
+  * For example, `base-setup-verify` runs 4 separate SSH commands per node (plugin check, zpool check, plain dataset check, encrypted dataset check), requiring 8 separate SSH connection cycles per cell.
+* **Optimization**: In `TestLab.Transport`, multi-step verification checks are batched into a single composite bash script executed in one SSH call, returning structured JSON or exit status. This cuts 8 SSH process spawns per cell down to 2, saving ~50 connection handshakes across a 7-cell matrix run.
+
+### 3. Guest Dependency Staging Cache (Skip Redundant SCP of `deps/`)
+* **Current Bottleneck**: Each matrix cell using `workspace-build` uploads `buddybackup.txz` plus all 6 package archives in `deps/` (mbuffer, perl packages) to both nodes via SCP. While `buddybackup.txz` changes with code edits, `deps/` packages are static third-party binaries.
+* **Optimization**: `TestLab.Guest\PluginManager` checks if `/boot/config/plugins/buddybackup-testlab-staging/<commitSha>/deps/` already exists on the guest and contains matching file counts/sizes. If already staged, it skips uploading the `deps/` tarballs, saving **10–20 seconds per cell**.
+
+### 4. Adaptive Polling Loops (1s $\to$ 2s instead of flat 5s sleeps)
+* **Current Bottleneck**: Polling loops throughout `run-matrix.ps1` and smoke tests currently use hardcoded `Start-Sleep -Seconds 5`. If a command or service settles after 1.2 seconds, the harness wastes 3.8 seconds sleeping.
+* **Optimization**: `Wait-UntilReady` in `TestLab.Transport` uses adaptive polling: starting at 1-second intervals for the first 5 attempts, then backing off to 2s and 3s. Across dozens of scenario wait points, this shaves **15–30 seconds** off scenario runtimes.
+
+### 5. Developer Fast Paths (Running Scenarios in Isolation)
+* **The Biggest Speedup**: By decoupling scenarios into standalone CLI executables (`testlab/scenarios/`), engineers and AI agents debugging a failure (e.g. reboot persistence or multi-dataset replication) no longer need to execute the full 15-minute release gate. Running an individual scenario takes **30–60 seconds**.
+
+### Performance Guardrails (Zero-Regression Guarantee)
+* **Harness Benchmark**: `testlab/tests/Run-HarnessTests.ps1` must maintain an execution time of **< 3 seconds**.
+* **Stage Durations in Manifests**: The release gate already records timestamps and stage durations in `manifest.json`. During Phase 4 validation, before-and-after stage runtimes will be compared to ensure total execution time has not regressed.
+
 ---
 
-## 6. Handoff Verification Checklist
+## 8. Handoff Verification Checklist
 
 Any engineer or agent continuing this work should verify the baseline using these commands:
 
@@ -215,7 +245,7 @@ Any engineer or agent continuing this work should verify the baseline using thes
 ./testlab/tests/Run-HarnessTests.ps1
 
 # 2. Run the release gate preflight and matrix dry-run (< 30 seconds)
-./testlab/scripts/run-release-gate.ps1 -LabConfig testlab/config/lab.local.json -MatrixProfile release-default -AllowDirtyWorktree
+./testlab/scripts/run-release-gate.ps1 -LabConfig testlab/config/lab.local.json -MatrixProfile release-default
 
 # 3. If live VMs are running, test individual reboot validation:
 # (Once Phase 3 is implemented):
