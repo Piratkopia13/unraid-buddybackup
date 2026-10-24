@@ -126,10 +126,11 @@ function Invoke-NodeBashScript {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
+        [string]$LoggedCommand = $null,
         [switch]$DoExecute
     )
 
-    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -LoggedCommand $LoggedCommand -DoExecute:$DoExecute
     $outputLines = if ($res.Output -is [array]) { $res.Output } elseif ($null -ne $res.Output) { @([string]$res.Output -split "`r?`n") } else { @() }
     return [pscustomobject]@{
         node     = $NodeConnection.NodeName
@@ -147,6 +148,7 @@ function Invoke-NodeBashScriptWithRetry {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
+        [string]$LoggedCommand = $null,
         [int]$MaxAttempts = 6,
         [int]$RetryDelaySeconds = 8,
         [switch]$DoExecute
@@ -156,7 +158,7 @@ function Invoke-NodeBashScriptWithRetry {
     $result = $null
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -LoggedCommand $LoggedCommand -DoExecute:$DoExecute
         $attempts += $result
         if ($result.success) {
             break
@@ -1055,7 +1057,7 @@ if ([System.IO.Path]::GetExtension($reportsDir) -eq '.json') {
 } else {
     $reportPath = Join-Path $reportsDir ("functional-smoke-{0}.json" -f $runId)
 }
-Ensure-TestLabDir $reportsDir
+$null = Ensure-TestLabDir $reportsDir
 
 $snapshotRunId = $runId.Replace("-", "_")
 $senderPlan | Add-Member -NotePropertyName sourceSnapshot -NotePropertyValue "$($senderPlan.sourceDataset)@functional_smoke_${snapshotRunId}_nodeA"

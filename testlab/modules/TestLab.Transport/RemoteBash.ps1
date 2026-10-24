@@ -291,6 +291,9 @@ function Invoke-RemoteBashUpload {
         [Parameter(Mandatory = $false)]
         [string]$Label = "remote-bash-upload",
 
+        [Parameter(Mandatory = $false)]
+        [string]$LoggedCommand = $null,
+
         [switch]$DoExecute,
         [int]$TimeoutSeconds = 0,
         [switch]$StreamOutput,
@@ -300,7 +303,16 @@ function Invoke-RemoteBashUpload {
     $scriptName = "buddybackup-testlab-{0}.sh" -f ([Guid]::NewGuid().ToString("N").Substring(0, 12))
     $remotePath = "/tmp/$scriptName"
     $localPath = Join-Path ([System.IO.Path]::GetTempPath()) $scriptName
-    $commandForLogs = if ([string]::IsNullOrWhiteSpace($BashScript)) { "upload $scriptName and run with bash" } else { $BashScript }
+    $argString = if ($Arguments -and $Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
+    $commandForLogs = if (-not [string]::IsNullOrWhiteSpace($LoggedCommand)) {
+        $LoggedCommand
+    } elseif ($BashScript -match '\r|\n' -or $BashScript.Length -gt 160) {
+        "bash <$Label>$argString"
+    } elseif (-not [string]::IsNullOrWhiteSpace($BashScript)) {
+        $BashScript
+    } else {
+        "upload $scriptName and run with bash$argString"
+    }
 
     if (-not $DoExecute) {
         $quotedRemotePath = Convert-ToRemoteSingleQuotedArgument -Value $remotePath
@@ -380,6 +392,9 @@ function Invoke-RemoteBash {
         [Parameter(Mandatory = $false)]
         [string]$Label = "remote-bash",
 
+        [Parameter(Mandatory = $false)]
+        [string]$LoggedCommand = $null,
+
         [switch]$DoExecute,
         [int]$TimeoutSeconds = 0,
         [switch]$StreamOutput,
@@ -395,15 +410,25 @@ function Invoke-RemoteBash {
             -BashScript $BashScript `
             -Arguments $Arguments `
             -Label $Label `
+            -LoggedCommand $LoggedCommand `
             -DoExecute:$DoExecute `
             -TimeoutSeconds $TimeoutSeconds `
             -StreamOutput:$StreamOutput `
             -StreamLabel $StreamLabel
     }
 
+    $argString = if ($Arguments -and $Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
+    $commandForLogs = if (-not [string]::IsNullOrWhiteSpace($LoggedCommand)) {
+        $LoggedCommand
+    } elseif ($BashScript -match '\r|\n' -or $BashScript.Length -gt 160) {
+        "bash <$Label>$argString"
+    } else {
+        $BashScript
+    }
+
     return Invoke-RemoteCommand -NodeConnection $NodeConnection `
         -Command $remoteCommand `
-        -LoggedCommand $BashScript `
+        -LoggedCommand $commandForLogs `
         -Label $Label `
         -DoExecute:$DoExecute `
         -TimeoutSeconds $TimeoutSeconds `

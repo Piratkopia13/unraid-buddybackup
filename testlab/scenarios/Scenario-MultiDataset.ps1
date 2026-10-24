@@ -58,10 +58,11 @@ function Invoke-NodeBashScript {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
+        [string]$LoggedCommand = $null,
         [switch]$DoExecute
     )
 
-    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -LoggedCommand $LoggedCommand -DoExecute:$DoExecute
     $outputLines = if ($res.Output -is [array]) { $res.Output } elseif ($null -ne $res.Output) { @([string]$res.Output -split "`r?`n") } else { @() }
     return [pscustomobject]@{
         node     = $NodeConnection.NodeName
@@ -116,7 +117,7 @@ if ([System.IO.Path]::GetExtension($reportsDir) -eq '.json') {
 } else {
     $reportPath = Join-Path $reportsDir ("scenario-multi-dataset-{0}.json" -f $runId)
 }
-Ensure-TestLabDir $reportsDir
+$null = Ensure-TestLabDir $reportsDir
 
 $actions = @()
 $scenarioSuccess = $true

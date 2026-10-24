@@ -111,10 +111,11 @@ function Invoke-NodeBashScript {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
+        [string]$LoggedCommand = $null,
         [switch]$DoExecute
     )
 
-    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+    $res = Invoke-RemoteBash -NodeConnection $NodeConnection -BashScript $ScriptContent -Arguments $Arguments -Label $Label -LoggedCommand $LoggedCommand -DoExecute:$DoExecute
     $outputLines = if ($res.Output -is [array]) { $res.Output } elseif ($null -ne $res.Output) { @([string]$res.Output -split "`r?`n") } else { @() }
     return [pscustomobject]@{
         node     = $NodeConnection.NodeName
@@ -153,6 +154,7 @@ function Invoke-NodeBashScriptWithRetry {
         [string]$ScriptContent,
         [string[]]$Arguments,
         [string]$Label,
+        [string]$LoggedCommand = $null,
         [int]$MaxAttempts = 4,
         [int]$RetryDelaySeconds = 10,
         [switch]$DoExecute
@@ -162,7 +164,7 @@ function Invoke-NodeBashScriptWithRetry {
     $result = $null
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -DoExecute:$DoExecute
+        $result = Invoke-NodeBashScript -NodeConnection $NodeConnection -ScriptContent $ScriptContent -Arguments $Arguments -Label $Label -LoggedCommand $LoggedCommand -DoExecute:$DoExecute
         $attempts += $result
         if ($result.success) {
             break
@@ -604,7 +606,7 @@ if ([System.IO.Path]::GetExtension($reportsDir) -eq '.json') {
 } else {
     $reportPath = Join-Path $reportsDir ("generic-smoke-{0}.json" -f $runId)
 }
-Ensure-TestLabDir $reportsDir
+$null = Ensure-TestLabDir $reportsDir
 
 $snapshotRunId = $runId.Replace("-", "_")
 $genericSnapshotName = "generic_smoke_${snapshotRunId}"
@@ -632,12 +634,13 @@ try {
     Write-Host "[testlab] Generic smoke starting: nodeA localhost:$($unraidConnection.Port), nodeC localhost:$($genericConnection.Port)"
 
     Write-Host "[testlab] Generic smoke: preparing datasets and snapshot on nodeC"
-    $genericPrep = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent (New-GenericNodePrepScript) -Arguments @(
+    $prepArgs = @(
         $genericPool,
         $genericDatasetRootName,
         $genericSnapshotName,
         $pushDestinationDataset
-    ) -Label "nodeC-prep" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
+    )
+    $genericPrep = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent (New-GenericNodePrepScript) -Arguments $prepArgs -Label "nodeC-prep" -LoggedCommand ("nodeC-prep {0}" -f ($prepArgs -join ' ')) -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $genericPrep
     Assert-CommandSucceeded -Result $genericPrep -FailureMessage "Generic node preparation failed on nodeC."
 
@@ -648,17 +651,18 @@ try {
     $unraidPublicKey = (($keyResult.output | ForEach-Object { [string]$_ }) -join "`n").Trim()
 
     Write-Host "[testlab] Generic smoke: running generic_host_setup.sh receiver on nodeC"
-    $receiverSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent $setupScriptContent -Arguments @(
+    $receiverSetupArgs = @(
         "--user", $genericCfg.genericUser,
         "--dataset", $genericReceiveParent,
         "--port", $genericCfg.genericSshPort,
         "--pubkey", $unraidPublicKey
-    ) -Label "nodeC-generic-setup-receiver" -MaxAttempts 2 -DoExecute:$Execute
+    )
+    $receiverSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $genericConnection -ScriptContent $setupScriptContent -Arguments $receiverSetupArgs -Label "nodeC-generic-setup-receiver" -LoggedCommand ("generic_host_setup.sh {0}" -f ($receiverSetupArgs -join ' ')) -MaxAttempts 2 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $receiverSetup
     Assert-CommandSucceeded -Result $receiverSetup -FailureMessage "generic_host_setup.sh receiver failed on nodeC."
 
     Write-Host "[testlab] Generic smoke: preparing nodeA backup entries"
-    $unraidSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $unraidConnection -ScriptContent (New-UnraidGenericSetupScript) -Arguments @(
+    $unraidSetupArgs = @(
         "nodeA",
         $unraidSourceDataset,
         $unraidSourceMountpoint,
@@ -673,7 +677,8 @@ try {
         [string]$genericConnection.Port,
         $genericCfg.nodeCAliasIp,
         $pushUid
-    ) -Label "nodeA-generic-setup" -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
+    )
+    $unraidSetup = Invoke-NodeBashScriptWithRetry -NodeConnection $unraidConnection -ScriptContent (New-UnraidGenericSetupScript) -Arguments $unraidSetupArgs -Label "nodeA-generic-setup" -LoggedCommand ("nodeA-generic-setup {0} -> {1}" -f $unraidSourceDataset, $pushDestinationDataset) -MaxAttempts 4 -RetryDelaySeconds 10 -DoExecute:$Execute
     Add-ReportAction -Report $report -Result $unraidSetup
     Assert-CommandSucceeded -Result $unraidSetup -FailureMessage "Unraid nodeA generic setup failed."
     $unraidSourceSnapshot = "$unraidSourceDataset@generic_smoke_${snapshotRunId}"
