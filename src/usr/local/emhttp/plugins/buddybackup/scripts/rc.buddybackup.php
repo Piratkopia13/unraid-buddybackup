@@ -38,8 +38,18 @@ $_SERVER['PATH'] = $normalized_path;
 $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
+$log_file_path = getenv('LOGFILE') ?: "/var/log/buddybackup.log";
 $rc = $empath."/scripts/rc.buddybackup";
 $managed_known_hosts_path = "$plugin_path/buddybackup_known_hosts";
+
+function ensure_log_file() {
+    global $log_file_path;
+    $log_dir = dirname($log_file_path);
+    if (is_dir($log_dir) && !file_exists($log_file_path)) {
+        @touch($log_file_path);
+        @chmod($log_file_path, 0644);
+    }
+}
 
 function BB_LOG($msg) {
     global $plugin;
@@ -49,13 +59,13 @@ function BB_ERR($msg) {
     global $plugin;
     global $log_script;
     syslog(LOG_ERR, "$plugin: ERROR: $msg");
-    exec('echo "'.$msg.'" | '.$log_script);
+    exec('printf %s ' . escapeshellarg((string)$msg . "\n") . ' | ' . $log_script);
 }
 function BB_WARN($msg) {
     global $plugin;
     global $log_script;
     syslog(LOG_WARNING, "$plugin: WARN: $msg");
-    exec('echo "'.$msg.'" | '.$log_script);
+    exec('printf %s ' . escapeshellarg((string)$msg . "\n") . ' | ' . $log_script);
 }
 function BB_VERBOSE($msg) {
     global $verbose;
@@ -831,6 +841,7 @@ function update() {
     global $incoming_config_path;
     global $tmp_recv_dataset_path;
 
+    ensure_log_file();
     ensure_incoming_config_migrated();
 
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
@@ -1267,10 +1278,14 @@ function update_backups_from_config() {
 }
 
 function start_long_running_task_echo_pid($cmd) {
+    ensure_log_file();
+    putenv("BUDDYBACKUP_DIRECT_LOG=1");
+    $_ENV['BUDDYBACKUP_DIRECT_LOG'] = '1';
+    $_SERVER['BUDDYBACKUP_DIRECT_LOG'] = '1';
     $descriptorspec = [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w']
+        0 => ['file', '/dev/null', 'r'],
+        1 => ['file', '/dev/null', 'w'],
+        2 => ['file', '/dev/null', 'w']
     ];
     $proc = proc_open($cmd, $descriptorspec, $pipes);
     $proc_details = proc_get_status($proc);

@@ -76,7 +76,10 @@
 
     switch ($_POST["cmd"]) {
         case 'get_log':
-            echo file_get_contents("/var/log/buddybackup.log");
+            $log_file = getenv('LOGFILE') ?: "/var/log/buddybackup.log";
+            if (is_file($log_file) && is_readable($log_file)) {
+                echo file_get_contents($log_file);
+            }
             break;
         case 'remove_sanoid_section':
             remove_sanoid_section($_POST["section"]);
