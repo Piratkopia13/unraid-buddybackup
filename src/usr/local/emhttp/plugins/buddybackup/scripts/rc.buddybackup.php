@@ -857,7 +857,6 @@ function update() {
     }
 
     passthru($rc.' update');    
-    update_backups_from_config();
 
     update_sanoid_conf();
 
@@ -881,6 +880,8 @@ function update() {
     } else {
         disable_sanoid_cron();
     }
+
+    update_backups_from_config();
 
     sync_incoming_buddies();
 }
@@ -1010,27 +1011,23 @@ function update_sanoid_conf() {
                 }
             }
 
-            if ($pre_hook !== '' || $post_hook !== '') {
+            $has_pre_hook = ($pre_hook !== '') ? '1' : '0';
+
+            if ($pre_hook !== '') {
                 $sanoid_conf_content .= "    script_timeout = $hook_timeout\n";
             }
 
-            if ($post_hook !== '' && $trigger !== '') {
-                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+            if ($post_hook !== '' || $trigger !== '') {
+                if ($pre_hook !== '' && $post_hook !== '') {
+                    $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                }
                 $escaped_post_hook = addcslashes($post_hook, "\\\"$`");
                 $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
-                if ($hook_scope === 'daily') {
-                    $post_cmd .= " \"daily\"";
+                if ($has_pre_hook === '1') {
+                    $post_cmd .= " \"$hook_scope\" \"1\"";
+                } else if ($hook_scope !== '') {
+                    $post_cmd .= " \"$hook_scope\"";
                 }
-                $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
-            } else if ($post_hook !== '') {
-                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
-                $post_hook = format_sanoid_hook_command($post_hook);
-                if ($hook_scope === 'daily') {
-                    $post_hook = $daily_filter . $post_hook;
-                }
-                $sanoid_conf_content .= "    post_snapshot_script = $post_hook\n";
-            } else if ($trigger !== '') {
-                $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"\" \"30\" \"$trigger\"";
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             }
         }
@@ -1054,7 +1051,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=$plugin_path --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");

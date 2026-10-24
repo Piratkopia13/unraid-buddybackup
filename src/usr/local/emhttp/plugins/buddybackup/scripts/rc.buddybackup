@@ -432,8 +432,28 @@ run_snapshot_post_hook_and_trigger() {
     local post_hook="${2:-}"
     local hook_timeout="${3:-30}"
     local trigger_uid="${4:-}"
-    local hook_scope="${5:-}"
+    local arg5="${5:-}"
+    local arg6="${6:-}"
+    local hook_scope=""
+    local has_pre_hook="0"
     local nchan="snapshot"
+
+    if [[ "${arg5}" == "daily" || "${arg5}" == "all" ]]; then
+        hook_scope="${arg5}"
+        if [[ "${arg6}" == "1" || "${arg6}" == "0" ]]; then
+            has_pre_hook="${arg6}"
+        fi
+    elif [[ "${arg5}" == "1" || "${arg5}" == "0" ]]; then
+        has_pre_hook="${arg5}"
+        if [[ "${arg6}" == "daily" || "${arg6}" == "all" ]]; then
+            hook_scope="${arg6}"
+        fi
+    else
+        hook_scope="${arg5}"
+        if [[ "${arg6}" == "1" || "${arg6}" == "0" ]]; then
+            has_pre_hook="${arg6}"
+        fi
+    fi
 
     # If post_hook or hook_scope wasn't supplied, load from snapshots.cfg for this dataset
     if [[ -z "${post_hook}" && -n "${dataset}" ]] || [[ -z "${hook_scope}" && -n "${dataset}" ]]; then
@@ -445,6 +465,56 @@ run_snapshot_post_hook_and_trigger() {
         if [[ -z "${hook_scope}" ]]; then
             hook_scope="${SNAP_HOOK_SCOPE:-}"
         fi
+        if [[ -n "${SNAP_PRE_HOOK}" ]]; then
+            has_pre_hook="1"
+        fi
+    fi
+
+    # Check whether the snapshot reported by Sanoid was actually created
+    local snapshot_created=true
+    local expected_snap=""
+    local snap_identifier="${SANOID_SNAPNAME:-${SANOID_SNAPNAMES:-}}"
+    local snap_first=""
+
+    if [[ -n "${snap_identifier}" ]]; then
+        snap_first="${snap_identifier%%,*}"
+        snap_first="${snap_first%% *}"
+        if [[ "${snap_first}" == *"@"* ]]; then
+            expected_snap="${snap_first}"
+        else
+            expected_snap="${dataset}@${snap_first}"
+        fi
+
+        if command -v zfs >/dev/null 2>&1; then
+            if ! zfs list -H -o name -t snapshot "${expected_snap}" >/dev/null 2>&1; then
+                if ! zfs list -H -o name -t snapshot "${expected_snap}_dst_1" >/dev/null 2>&1; then
+                    snapshot_created=false
+                fi
+            fi
+        else
+            snapshot_created=false
+        fi
+    fi
+
+    if [[ "${SANOID_PRE_FAILURE:-0}" != "0" ]]; then
+        snapshot_created=false
+    fi
+
+    if [[ "${snapshot_created}" == "false" ]]; then
+        logger "Skipping snapshot trigger for dataset '${dataset}': snapshot '${expected_snap:-unknown}' was not created" -t"${plugin}"
+        # If pre_hook ran successfully (SANOID_PRE_FAILURE=0) and has_pre_hook=1, thaw must still run on an existing dataset
+        if [[ -n "${post_hook}" && "${has_pre_hook}" == "1" && "${SANOID_PRE_FAILURE:-0}" == "0" ]]; then
+            if zfs list -H -o name "${dataset}" >/dev/null 2>&1; then
+                logger "Running thaw post-hook for dataset '${dataset}' after failed snapshot" -t"${plugin}"
+                run_hook "${post_hook}" "${hook_timeout}" "post-snapshot" "${nchan}"
+                local post_status=$?
+                if [[ ${post_status} -ne 0 ]]; then
+                    logger "Post-snapshot hook '${post_hook}' failed with exit code ${post_status}" -t"${plugin}"
+                fi
+            fi
+        fi
+        trap - EXIT INT TERM HUP
+        return 0
     fi
 
     logger "Running snapshot post-hook and trigger for dataset '${dataset}'" -t"${plugin}"
@@ -480,6 +550,9 @@ run_snapshot_post_hook_and_trigger() {
 }
 
 run_sanoid_cron() {
+    local unraid_version_file="${BUDDYBACKUP_UNRAID_VERSION_FILE:-/etc/unraid-version}"
+    local var_ini_file="${BUDDYBACKUP_VAR_INI_FILE:-/var/local/emhttp/var.ini}"
+
     # Guard against early boot or offline pool states where zfs/zpool is missing,
     # pools are not imported yet, or the Unraid array is in transition.
     if ! command -v zpool >/dev/null 2>&1 || ! command -v zfs >/dev/null 2>&1; then
@@ -503,15 +576,16 @@ run_sanoid_cron() {
     done
 
     local conf_file="${conf_dir}/sanoid.conf"
-    if [[ ! -f "${conf_file}" ]]; then
+    if [[ ! -s "${conf_file}" ]]; then
         return 0
     fi
 
-    # If running on Unraid, check if emhttp is actively starting or stopping the array.
-    # When fsState is "Starting", pool imports and mount operations are in flight.
-    if [[ -f "/etc/unraid-version" && -f "/var/local/emhttp/var.ini" ]]; then
-        if grep -qs '^fsState="Starting"' /var/local/emhttp/var.ini || \
-           grep -qs '^mdState="STARTING"' /var/local/emhttp/var.ini; then
+    # On Unraid, wait until emhttpd has created var.ini and is not in a transition state
+    if [[ -f "${unraid_version_file}" ]]; then
+        if [[ ! -f "${var_ini_file}" ]]; then
+            return 0
+        fi
+        if grep -Eq '^[[:space:]]*(fsState="(Starting|Stopping|Formatting|Copying|Clearing)"|mdState="(STARTING|STOPPING)")' "${var_ini_file}" 2>/dev/null; then
             return 0
         fi
     fi
@@ -522,24 +596,31 @@ run_sanoid_cron() {
         return 0
     fi
 
-    # Ensure at least one configured dataset section in sanoid.conf belongs to an imported pool
-    local has_available_pool=false
-    local section
-    local dataset_pool
-    while IFS= read -r section; do
-        section="${section#[}"
-        section="${section%]}"
-        section=$(echo "${section}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        [[ -z "${section}" ]] && continue
-        [[ "${section}" =~ ^template_ ]] && continue
-        dataset_pool="${section%%/*}"
-        if echo "${imported_pools}" | grep -Fqx "${dataset_pool}"; then
-            has_available_pool=true
-            break
+    # Require that every non-template section [pool/dataset] in sanoid.conf has its pool imported and dataset present
+    local has_configured_section=false
+    local line=""
+    local section=""
+    local pool_name=""
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ "${line}" =~ ^[[:space:]]*\[([^]]+)\][[:space:]]*$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            section="${section#"${section%%[![:space:]]*}"}"
+            section="${section%"${section##*[![:space:]]}"}"
+            if [[ -z "${section}" || "${section}" == template_* ]]; then
+                continue
+            fi
+            has_configured_section=true
+            pool_name="${section%%/*}"
+            if [[ -z "${pool_name}" ]] || ! printf '%s\n' "${imported_pools}" | grep -Fqx -- "${pool_name}"; then
+                return 0
+            fi
+            if ! zfs list -H -o name "${section}" >/dev/null 2>&1; then
+                return 0
+            fi
         fi
-    done < <(grep -E '^[[:space:]]*\[' "${conf_file}" 2>/dev/null)
+    done < "${conf_file}"
 
-    if [[ "${has_available_pool}" != "true" ]]; then
+    if [[ "${has_configured_section}" != "true" ]]; then
         return 0
     fi
 
@@ -548,6 +629,7 @@ run_sanoid_cron() {
         return 1
     fi
 
+    export PATH="${PATH:-/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
     trap - EXIT INT TERM HUP
     exec "${sanoid_bin}" "$@"
 }
@@ -2531,7 +2613,7 @@ case "$1" in
         create_snapshot_and_send "${2}" "${3}" "${4}" "${5}" "${6}" "${7}" "${8}" "${9}" "${10}" "${11:-}" "${12:-}" "${13:-30}" "${14:-abort}"
 	;;
     ('run_snapshot_post_hook_and_trigger')
-        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}" "${6:-}"
+        run_snapshot_post_hook_and_trigger "${2}" "${3}" "${4:-30}" "${5:-}" "${6:-}" "${7:-}"
     ;;
     ('test_connection')
         test_connection_cmd "${2}" "${3}" "${4:-22}"

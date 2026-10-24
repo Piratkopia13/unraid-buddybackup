@@ -100,8 +100,8 @@ subtest 'rc.buddybackup.php generates complete Sanoid hook directives' => sub {
     );
     like(
         $php,
-        qr/format_sanoid_hook_command\s*\(\s*\$post_hook\s*\)/,
-        'wraps standalone post_hook via format_sanoid_hook_command()'
+        qr/run_snapshot_post_hook_and_trigger.*post_hook/,
+        'routes post_hook through run_snapshot_post_hook_and_trigger'
     );
 };
 
@@ -234,7 +234,7 @@ PHP
         like($abort_sec, qr/pre_snapshot_script = \/usr\/local\/bin\/freeze\.sh/, 'abort sec has pre_snapshot_script');
         like($abort_sec, qr/no_inconsistent_snapshot = 1/, 'abort sec has no_inconsistent_snapshot = 1');
         like($abort_sec, qr/force_post_snapshot_script = 1/, 'abort sec has force_post_snapshot_script = 1');
-        like($abort_sec, qr/post_snapshot_script = \/usr\/local\/bin\/thaw\.sh/, 'abort sec has post_snapshot_script');
+        like($abort_sec, qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_abort" "\/usr\/local\/bin\/thaw\.sh" "15" "" "" "1"/, 'abort sec sets post_snapshot_script to run_snapshot_post_hook_and_trigger');
         like($abort_sec, qr/script_timeout = 15/, 'abort sec has script_timeout = 15');
 
         # Permutation 2: snap_warn (pre only + timeout 25 + warn)
@@ -249,9 +249,9 @@ PHP
         my ($post_sec) = $generated =~ /\[tank\/workload_post_only\](.*?)(?=\n\[|\z)/s;
         ok(defined $post_sec, 'section [tank/workload_post_only] exists');
         unlike($post_sec, qr/pre_snapshot_script/, 'post only sec does NOT have pre_snapshot_script');
-        like($post_sec, qr/force_post_snapshot_script = 1/, 'post only sec has force_post_snapshot_script = 1');
-        like($post_sec, qr/post_snapshot_script = \/usr\/local\/bin\/thaw\.sh/, 'post only sec has post_snapshot_script');
-        like($post_sec, qr/script_timeout = 35/, 'post only sec has script_timeout = 35');
+        unlike($post_sec, qr/force_post_snapshot_script/, 'post only sec does NOT have force_post_snapshot_script');
+        like($post_sec, qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_post_only" "\/usr\/local\/bin\/thaw\.sh" "35"/, 'post only sec sets post_snapshot_script to run_snapshot_post_hook_and_trigger');
+        unlike($post_sec, qr/script_timeout/, 'post only sec does NOT set script_timeout (managed internally by wrapper)');
 
         # Permutation 4: snap_trigger_only (trigger only, no hooks)
         my ($trig_sec) = $generated =~ /\[tank\/workload_trigger_only\](.*?)(?=\n\[|\z)/s;
@@ -267,8 +267,8 @@ PHP
         # Permutation 5: snap_chained (post hook + trigger -> chained runner)
         my ($chain_sec) = $generated =~ /\[tank\/workload_chained\](.*?)(?=\n\[|\z)/s;
         ok(defined $chain_sec, 'section [tank/workload_chained] exists');
-        like($chain_sec, qr/force_post_snapshot_script = 1/, 'chained sec has force_post_snapshot_script = 1');
-        like($chain_sec, qr/script_timeout = 45/, 'chained sec has script_timeout = 45');
+        unlike($chain_sec, qr/force_post_snapshot_script/, 'chained sec without pre_hook does NOT have force_post_snapshot_script');
+        unlike($chain_sec, qr/script_timeout/, 'chained sec without pre_hook does NOT set script_timeout');
         like(
             $chain_sec,
             qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_chained" "\/usr\/local\/bin\/thaw\.sh" "45" "uid_trig_100"/,
@@ -390,13 +390,13 @@ PHP
             'pre_snapshot_script on boot with #!/bin/bash preserves /bin/bash interpreter'
         );
 
-        # 3. standalone post hook -> /bin/sh '/path/to/boot/hook_sh.sh'
+        # 3. standalone post hook -> routes through run_snapshot_post_hook_and_trigger
         my ($post_sec) = $generated =~ /\[tank\/workload_boot_post\](.*?)(?=\n\[|\z)/s;
         ok(defined $post_sec, 'section [tank/workload_boot_post] exists');
         like(
             $post_sec,
-            qr/post_snapshot_script = \/bin\/sh '\Q$boot_script_sh\E'/,
-            'standalone post_snapshot_script on boot is wrapped with shebang interpreter'
+            qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_boot_post" "\Q$boot_script_sh\E" "25"/,
+            'standalone post_snapshot_script on boot routes through run_snapshot_post_hook_and_trigger'
         );
 
         # 4. daily scope boot hook -> prepends daily filter and wraps with bash
@@ -485,11 +485,28 @@ SH
 cat > /dev/null
 SH
 
+    my $mock_zfs = File::Spec->catfile($bin_dir, 'zfs');
+    $write_script->($mock_zfs, <<'SH');
+#!/bin/bash
+if [[ "$*" == *"-t snapshot"* ]]; then
+    if [[ "${MOCK_SNAPSHOT_EXISTS:-1}" == "1" ]]; then
+        exit 0
+    else
+        exit 1
+    fi
+fi
+if [[ "${MOCK_DATASET_EXISTS:-1}" == "0" ]]; then
+    exit 1
+fi
+exit 0
+SH
+
     my $harness = File::Spec->catfile($workdir, 'harness.sh');
     my $harness_body = <<'SH';
 #!/bin/bash
 set -o pipefail
 plugin="buddybackup"
+export PATH="$MOCK_BIN:$PATH"
 export CHAIN_EVENT_LOG
 export empath="$MOCK_EMPATH"
 
@@ -499,7 +516,7 @@ logger() { :; }
 write() { :; }
 
 t_start=$(date +%s)
-run_snapshot_post_hook_and_trigger "$DATASET" "$THAW_HOOK" "30" "$TRIGGER_UID"
+run_snapshot_post_hook_and_trigger "$DATASET" "$THAW_HOOK" "30" "$TRIGGER_UID" "${HOOK_SCOPE:-}" "${HAS_PRE_HOOK:-0}"
 ret=$?
 t_returned=$(date +%s)
 duration=$(( t_returned - t_start ))
@@ -511,14 +528,22 @@ SH
 
     my $run_harness = sub {
         my (%env) = @_;
+        local $ENV{PATH}                    = "$bin_dir:$ENV{PATH}";
+        local $ENV{MOCK_BIN}                = $bin_dir;
         local $ENV{CHAIN_EVENT_LOG}         = $log_file;
         local $ENV{MOCK_EMPATH}             = $mock_empath;
         local $ENV{FUNCTIONS_FILE}          = $functions_file;
         local $ENV{DATASET}                 = $env{dataset} // 'tank/appdata';
         local $ENV{THAW_HOOK}               = $thaw_hook;
         local $ENV{TRIGGER_UID}             = $env{trigger} // 'trig_abc123';
+        local $ENV{HOOK_SCOPE}              = $env{hook_scope} // '';
+        local $ENV{HAS_PRE_HOOK}            = $env{has_pre_hook} // '0';
         local $ENV{SIMULATED_THAW_EXIT}     = $env{thaw_exit} // '0';
         local $ENV{SIMULATED_BACKUP_DELAY}  = $env{backup_delay} // '0';
+        local $ENV{SANOID_SNAPNAME}         = $env{sanoid_snapname};
+        local $ENV{SANOID_PRE_FAILURE}      = $env{sanoid_pre_failure};
+        local $ENV{MOCK_SNAPSHOT_EXISTS}    = $env{mock_snap_exists} // '1';
+        local $ENV{MOCK_DATASET_EXISTS}     = $env{mock_dataset_exists} // '1';
         unlink $log_file if -e $log_file;
         my $out = `bash "$harness" 2>&1`;
         my $log = -e $log_file ? slurp($log_file) : '';
@@ -549,6 +574,52 @@ SH
         is(scalar(@lines), 2, 'two events logged after background replication completed');
         is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed first');
         is($lines[1], 'trigger_dispatched uid=trig_abc123', 'trigger backup completed in background');
+    };
+
+    subtest 'snapshot exists in ZFS: executes thaw and dispatches trigger' => sub {
+        my ($log, $out) = $run_harness->(
+            sanoid_snapname  => 'autosnap_2026-10-24_12:00:00_daily',
+            mock_snap_exists => 1,
+            has_pre_hook     => 0,
+        );
+        my @lines = grep { length } split /\n/, $log;
+        is(scalar(@lines), 2, 'both thaw and trigger events logged when snapshot exists');
+        is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed first');
+        is($lines[1], 'trigger_dispatched uid=trig_abc123', 'trigger backup dispatched second');
+    };
+
+    subtest 'snapshot does NOT exist in ZFS and no pre_hook: skips both thaw and trigger' => sub {
+        my ($log, $out) = $run_harness->(
+            sanoid_snapname  => 'autosnap_2026-10-24_12:00:00_daily',
+            mock_snap_exists => 0,
+            has_pre_hook     => 0,
+        );
+        my @lines = grep { length } split /\n/, $log;
+        is(scalar(@lines), 0, 'no events logged when snapshot failed and no pre_hook was configured');
+    };
+
+    subtest 'snapshot does NOT exist in ZFS but pre_hook succeeded: executes thaw, skips trigger' => sub {
+        my ($log, $out) = $run_harness->(
+            sanoid_snapname     => 'autosnap_2026-10-24_12:00:00_daily',
+            mock_snap_exists    => 0,
+            has_pre_hook        => 1,
+            sanoid_pre_failure  => 0,
+            mock_dataset_exists => 1,
+        );
+        my @lines = grep { length } split /\n/, $log;
+        is(scalar(@lines), 1, 'only thaw hook logged (unfreezes app, blocks backup trigger)');
+        is($lines[0], 'post_thaw_hook_executed', 'thaw hook executed to unfreeze application');
+    };
+
+    subtest 'pre_hook failed (SANOID_PRE_FAILURE=1): skips both thaw and trigger' => sub {
+        my ($log, $out) = $run_harness->(
+            sanoid_snapname    => 'autosnap_2026-10-24_12:00:00_daily',
+            mock_snap_exists   => 0,
+            has_pre_hook       => 1,
+            sanoid_pre_failure => 1,
+        );
+        my @lines = grep { length } split /\n/, $log;
+        is(scalar(@lines), 0, 'no events logged when pre_hook failed');
     };
 };
 

@@ -296,15 +296,19 @@ PHP
         );
         like(
             $daily_sec,
-            qr/post_snapshot_script = \[ -n "\$\{SANOID_TYPES:-\}" \] && case "\$\{SANOID_TYPES\}" in \*daily\*\) ;; \*\) exit 0;; esac; \/usr\/local\/bin\/thaw\.sh/,
-            'post_snapshot_script has SANOID_TYPES guard for daily scope'
+            qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_daily_hooks" "\/usr\/local\/bin\/thaw\.sh" "30" "" "daily" "1"/,
+            'post_snapshot_script routes through run_snapshot_post_hook_and_trigger with daily scope'
         );
 
         # 4. scoped_hooks_all (no SANOID_TYPES guard when scope is all)
         my ($all_sec) = $generated =~ /\[tank\/workload_all_hooks\](.*?)(?=\n\[|\z)/s;
         ok(defined $all_sec, 'section [tank/workload_all_hooks] exists');
         like($all_sec, qr/pre_snapshot_script = \/usr\/local\/bin\/freeze\.sh/, 'all scope pre-hook has no SANOID_TYPES guard');
-        like($all_sec, qr/post_snapshot_script = \/usr\/local\/bin\/thaw\.sh/, 'all scope post-hook has no SANOID_TYPES guard');
+        like(
+            $all_sec,
+            qr/post_snapshot_script = \/usr\/local\/emhttp\/plugins\/buddybackup\/scripts\/rc\.buddybackup run_snapshot_post_hook_and_trigger "tank\/workload_all_hooks" "\/usr\/local\/bin\/thaw\.sh" "30" "" "all" "1"/,
+            'all scope post-hook routes through run_snapshot_post_hook_and_trigger'
+        );
 
         # 5. scoped_chained_daily (passes daily hook_scope to run_snapshot_post_hook_and_trigger)
         my ($chain_sec) = $generated =~ /\[tank\/workload_chained_daily\](.*?)(?=\n\[|\z)/s;
@@ -557,13 +561,19 @@ CONF
 
     # Helper to execute run_sanoid_cron
     my $run_check = sub {
-        my ($zpool_script, $extra_env) = @_;
+        my ($zpool_script, $extra_env, $zfs_script) = @_;
         $extra_env //= {};
+        $zfs_script //= 'exit 0';
 
         open my $zpfh, '>', $mock_zpool or die "Cannot write $mock_zpool: $!";
         print $zpfh "#!/bin/bash\n" . $zpool_script . "\n";
         close $zpfh;
         chmod 0755, $mock_zpool;
+
+        open my $zffh, '>', $mock_zfs or die "Cannot write $mock_zfs: $!";
+        print $zffh "#!/bin/bash\n" . $zfs_script . "\n";
+        close $zffh;
+        chmod 0755, $mock_zfs;
 
         my $env_str = join(' ', map { "$_=\"$extra_env->{$_}\"" } keys %$extra_env);
         my $cmd = sprintf(
@@ -590,27 +600,111 @@ CONF
     is($code2, 0, 'exited 0 when configured pools are not imported');
     ok(!-f $log_file, 'sanoid was not invoked when neither system_cache_ssd nor disk7 is imported');
 
-    # 3. Configured pool IS imported (e.g. system_cache_ssd)
+    # 3. Partial multi-pool import (only 1 of 2 pools imported: system_cache_ssd imported, disk7 missing)
     unlink $log_file if -f $log_file;
-    my ($code3, $out3) = $run_check->("echo system_cache_ssd; exit 0");
-    is($code3, 0, 'exited 0 when configured pool is imported');
-    ok(-f $log_file, 'sanoid was invoked when configured pool is imported');
+    my ($code3_partial, $out3_partial) = $run_check->("echo system_cache_ssd; exit 0");
+    is($code3_partial, 0, 'exited 0 during partial multi-pool import');
+    ok(!-f $log_file, 'sanoid was not invoked when disk7 is not yet imported (guards Issue #40 multi-pool race)');
+
+    # 4. ALL configured pools are imported (system_cache_ssd and disk7) and datasets exist
+    unlink $log_file if -f $log_file;
+    my ($code3, $out3) = $run_check->("printf '%s\\n' system_cache_ssd disk7; exit 0");
+    is($code3, 0, 'exited 0 when all configured pools are imported');
+    ok(-f $log_file, 'sanoid was invoked when all configured pools and datasets are imported');
     my $log_content = -f $log_file ? slurp($log_file) : '';
     like($log_content, qr/sanoid_invoked\s+--cache-ttl=60\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
 
-    # 4. Strict literal pool matching (e.g. pool with dot: tank.fast vs tankafast)
+    # 5. Pools imported, but a configured dataset does not exist in zfs list
+    unlink $log_file if -f $log_file;
+    my ($code_missing_ds, $out_missing_ds) = $run_check->(
+        "printf '%s\\n' system_cache_ssd disk7; exit 0",
+        {},
+        'if [[ "$*" == *"disk7/zfs_backups/tower-vm"* ]]; then exit 1; fi; exit 0;'
+    );
+    is($code_missing_ds, 0, 'exited 0 when a configured dataset is missing from zfs list');
+    ok(!-f $log_file, 'sanoid was not invoked when a configured dataset does not exist in zfs list');
+
+    # 6. Unraid boot & array transition guards
+    my $mock_unraid = File::Spec->catfile($workdir, 'unraid-version');
+    open my $ufh, '>', $mock_unraid or die "Cannot write $mock_unraid: $!";
+    print $ufh "version=\"7.1.0\"\n";
+    close $ufh;
+
+    my $mock_var_ini = File::Spec->catfile($workdir, 'var.ini');
+
+    # 6a. Early Unraid boot: unraid-version exists, but var.ini does NOT exist yet
+    unlink $mock_var_ini if -f $mock_var_ini;
+    unlink $log_file if -f $log_file;
+    my ($code_unraid_no_ini, $out_unraid_no_ini) = $run_check->(
+        "printf '%s\\n' system_cache_ssd disk7; exit 0",
+        {
+            BUDDYBACKUP_UNRAID_VERSION_FILE => $mock_unraid,
+            BUDDYBACKUP_VAR_INI_FILE => $mock_var_ini,
+        }
+    );
+    is($code_unraid_no_ini, 0, 'exited 0 on Unraid when var.ini does not exist yet (early boot)');
+    ok(!-f $log_file, 'sanoid was not invoked during early Unraid boot before emhttpd creates var.ini');
+
+    # 6b. Unraid transition states in var.ini: Starting, Stopping, Formatting, STARTING
+    for my $state ('Starting', 'Stopping', 'Formatting') {
+        open my $vfh, '>', $mock_var_ini or die "Cannot write $mock_var_ini: $!";
+        print $vfh "fsState=\"$state\"\nmdState=\"STARTED\"\n";
+        close $vfh;
+
+        unlink $log_file if -f $log_file;
+        my ($code_trans, $out_trans) = $run_check->(
+            "printf '%s\\n' system_cache_ssd disk7; exit 0",
+            {
+                BUDDYBACKUP_UNRAID_VERSION_FILE => $mock_unraid,
+                BUDDYBACKUP_VAR_INI_FILE => $mock_var_ini,
+            }
+        );
+        is($code_trans, 0, "exited 0 on Unraid when fsState=\"$state\"");
+        ok(!-f $log_file, "sanoid was not invoked when fsState=\"$state\"");
+    }
+
+    open my $vfh, '>', $mock_var_ini or die "Cannot write $mock_var_ini: $!";
+    print $vfh "fsState=\"Started\"\nmdState=\"STARTING\"\n";
+    close $vfh;
+    unlink $log_file if -f $log_file;
+    my ($code_md_start, $out_md_start) = $run_check->(
+        "printf '%s\\n' system_cache_ssd disk7; exit 0",
+        {
+            BUDDYBACKUP_UNRAID_VERSION_FILE => $mock_unraid,
+            BUDDYBACKUP_VAR_INI_FILE => $mock_var_ini,
+        }
+    );
+    is($code_md_start, 0, 'exited 0 on Unraid when mdState="STARTING"');
+    ok(!-f $log_file, 'sanoid was not invoked when mdState="STARTING"');
+
+    # 6c. Unraid array fully started: fsState="Started" and mdState="STARTED"
+    open my $vfh_ok, '>', $mock_var_ini or die "Cannot write $mock_var_ini: $!";
+    print $vfh_ok "fsState=\"Started\"\nmdState=\"STARTED\"\n";
+    close $vfh_ok;
+    unlink $log_file if -f $log_file;
+    my ($code_started, $out_started) = $run_check->(
+        "printf '%s\\n' system_cache_ssd disk7; exit 0",
+        {
+            BUDDYBACKUP_UNRAID_VERSION_FILE => $mock_unraid,
+            BUDDYBACKUP_VAR_INI_FILE => $mock_var_ini,
+        }
+    );
+    is($code_started, 0, 'exited 0 on Unraid when fsState="Started"');
+    ok(-f $log_file, 'sanoid was invoked on Unraid when array is Started and all pools imported');
+
+    # 7. Strict literal pool matching (e.g. pool with dot: tank.fast vs tankafast)
     my $conf_dot = File::Spec->catfile($conf_dir, 'sanoid.conf');
     open my $cdfh, '>', $conf_dot or die "Cannot write $conf_dot: $!";
     print $cdfh "[tank.fast/appdata]\n    use_template = production\n";
     close $cdfh;
 
-    # 4a. Pool matching regex wildcard (tankafast) does NOT invoke sanoid
+    # 7a. Pool matching regex wildcard (tankafast) does NOT invoke sanoid
     unlink $log_file if -f $log_file;
     my ($code4a, $out4a) = $run_check->("echo tankafast; exit 0");
     is($code4a, 0, 'exited 0 when pool name only matches regex wildcard');
     ok(!-f $log_file, 'sanoid was not invoked when pool tankafast does not literally match tank.fast');
 
-    # 4b. Exact literal pool match (tank.fast) DOES invoke sanoid
+    # 7b. Exact literal pool match (tank.fast) DOES invoke sanoid
     unlink $log_file if -f $log_file;
     my ($code4b, $out4b) = $run_check->("echo tank.fast; exit 0");
     is($code4b, 0, 'exited 0 when pool name literally matches tank.fast');
