@@ -59,7 +59,7 @@ Before conducting deep analysis, categorize the incoming request:
 
 1.  **Distinguish Feature Requests vs. Bug Reports**:
     *   **Bug Report**: The application already intends to support the capability, but it behaves unexpectedly, errors, crashes, or regressed.  
-        *Action*: Do **not** plan this as a new feature. Direct the user to the debugging and defect resolution process.
+        *Action*: Do **not** plan this as a new feature. Direct the user to the debugging and defect resolution process, and enforce the **Regression & Test Coverage Mandate**: whenever a bug or issue is found, an automated reproduction/regression test must be added (wherever possible across `t/*.t`, PHP unit tests, `testlab`, or WebGUI DevTools tests) to prevent any similar issue from happening in the future and to actively increase test coverage in the affected area.
     *   **Feature Request**: The application functions as built, but a new capability, workflow, configuration toggle, or architectural change is proposed.  
         *Action*: Proceed to Phase 1.
 2.  **Clarify Ambiguities**:
@@ -143,6 +143,7 @@ Never guess file paths or internal architectures. Actively inspect the codebase:
 1.  Use search tools (`run_command`, `view_file`) to locate relevant code, classes, functions, and configuration files.
 2.  Map existing entry points, UI pages, backend scripts, and data flow.
 3.  Check repository rules (e.g., [AGENTS.md](file:///y:/AGENTS.md)) to identify any untouchable vendor directories or mandatory wrapper conventions.
+4.  **Audit Existing Test Coverage & Latent Bugs**: Inspect existing tests (`t/*.t`, `testlab/scripts`) covering the target code paths. Note any latent bugs, fragile logic, or test coverage gaps in the areas being modified or where issues were discovered so that test coverage is systematically expanded.
 
 ### 3.2 Determine Code Placement
 Determine where the new code fits naturally into the existing structure:
@@ -177,14 +178,14 @@ Explicitly architect the safety and security controls into the plan before writi
 *   **Least Privilege & Credential Hygiene**: Maintain restrictive file permissions (`0600` for keys), preserve `restrict_zfs` boundaries, and prevent credential leaks into logs or WebGUI markup.
 
 ### 3.6 Mandate Multi-Modal Regression & Bug Prevention Tests
-To permanently reduce the chance of introducing new issues or repeating past failures, the plan **must** specify automated tests for any identified bugs, edge cases, regression risks, and backward compatibility. Choose the test modality that best fits the defect:
+To permanently reduce the chance of introducing new issues or repeating past failures, the plan **must** specify automated tests for any identified bugs, edge cases, regression risks, and backward compatibility, and **must actively increase test coverage wherever issues or coverage gaps are found**. Choose the test modality that best fits the defect or capability:
 *   **Perl TAP Tests (`t/*.t`)**: For CLI commands, argument parsing, wrapper logic, system hooks, and cross-version compatibility (executed via `prove -v t/...`). When remote command signatures change, mandate updates to `t/backwards_compat.t` to test both current and legacy allowlists.
 *   **Unit / Syntax Tests**: For isolated PHP functions, utility logic, and syntax checks (e.g., `t/php_syntax_and_eval.t`).
 *   **Testlab Integration Tests**: For WSL/QEMU multi-node scenarios, ZFS pool setups, replication, daemon operations, and in-place upgrade verification (`testlab/scripts/...`, specifically the `upgrade-preserves-config` scenario).
 *   **WebGUI Navigation Tests**: For web UI forms, button clicks, DOM assertions, and error banners using Chrome DevTools MCP (guided by the [testlab-web-navigation](file:///y:/.agent/skills/testlab-web-navigation/SKILL.md) skill).
 *   **Custom / Diagnostic Harnesses**: For specialized timing, mock endpoints, or race-condition simulations.
 
-Every bug, regression risk, or backward compatibility requirement identified must be explicitly mapped to a target test file and assertion.
+Every bug, adjacent issue discovered during inspection, regression risk, or backward compatibility requirement identified must be explicitly mapped to a target test file and assertion so that neither the exact bug nor anything similar can recur silently.
 
 ### 3.7 Produce the Handoff-Ready Implementation Plan
 Generate the plan using the structure in [Implementation Plan Template](./templates/implementation-plan-template.md):
