@@ -633,6 +633,27 @@ $report = [ordered]@{
 try {
     Write-Host "[testlab] Generic smoke starting: nodeA localhost:$($unraidConnection.Port), nodeC localhost:$($genericConnection.Port)"
 
+    Write-Host "[testlab] Generic smoke: checking nodeC free space"
+    $freeSpaceCheck = Invoke-NodeSshCommand -NodeConnection $genericConnection -Command 'df -Pk / | awk ''NR==2 {print $4}''' -Label "nodeC-free-space-check" -DoExecute:$Execute
+    Add-ReportAction -Report $report -Result $freeSpaceCheck
+    Assert-CommandSucceeded -Result $freeSpaceCheck -FailureMessage "Failed to read free space on nodeC."
+    if ($Execute) {
+        $freeSpaceKb = $null
+        foreach ($line in @($freeSpaceCheck.output)) {
+            if ([string]$line -match '^\s*(\d+)\s*$') {
+                $freeSpaceKb = [long]$Matches[1]
+                break
+            }
+        }
+        if ($null -eq $freeSpaceKb) {
+            throw "Unable to parse the free space reported by nodeC:`n$(Get-ResultOutputText -Result $freeSpaceCheck)"
+        }
+        if ($freeSpaceKb -lt 262144) {
+            $freeSpaceMiB = [int]($freeSpaceKb / 1024)
+            throw "nodeC root filesystem has only $freeSpaceMiB MiB free, so uploads to /tmp (for example generic_host_setup.sh) will fail. Grow the boot disk with ./testlab/scripts/provision-nodec-wsl-qemu.ps1 -Execute (default -BootDiskGB 12) and re-run the generic smoke."
+        }
+    }
+
     Write-Host "[testlab] Generic smoke: preparing datasets and snapshot on nodeC"
     $prepArgs = @(
         $genericPool,

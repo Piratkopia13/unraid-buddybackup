@@ -6,7 +6,9 @@ Provisions a throwaway generic OpenZFS host (nodeC) inside the WSL/QEMU testlab 
 Boots a cloud image (Ubuntu 24.04 by default; Debian cloud images work via -ImageUrl) inside the
 WSL distro used by the local provider, forwards its SSH to a localhost port (default 2224), injects
 the lab SSH public key for root via cloud-init, installs OpenZFS and creates the pool that
-run-generic-smoke.ps1 expects.
+run-generic-smoke.ps1 expects. The boot disk is grown to -BootDiskGB (default 12G) and the root
+filesystem is expanded, because the stock cloud image disk fills up after ZFS/kernel upgrades and
+breaks uploads to /tmp.
 
 Defaults to dry-run; pass -Execute to make changes. Re-running against a live nodeC is a health
 check (it reuses the existing disks and verifies SSH + pool). Use -Teardown to stop the VM and
@@ -23,6 +25,7 @@ param(
     [string]$VmRoot = "/var/lib/buddybackup-nodec",
     [int]$MemoryMB = 3072,
     [int]$Cpus = 2,
+    [int]$BootDiskGB = 12,
     [int]$DataDiskGB = 8,
     [int]$SshReadySeconds = 420,
     [switch]$Recreate,
@@ -268,6 +271,7 @@ image_url="$2"
 recreate="$3"
 data_gb="$4"
 pubkey_b64="$5"
+boot_gb="$6"
 
 mkdir -p "$vm_root"
 
@@ -285,6 +289,57 @@ if [ ! -f "$boot_image" ]; then
   rm -f "$tmp_image"
   curl -fL --retry 3 --retry-delay 5 -o "$tmp_image" "$image_url"
   mv "$tmp_image" "$boot_image"
+fi
+
+# The stock cloud image ships a ~3.5G disk which is too small for apt upgrades
+# (OpenZFS, kernel packages) and fills up, breaking scp uploads to /tmp. Grow
+# the boot disk before launch; cloud-init's growpart/resizefs extends the root
+# filesystem on the next boot.
+target_boot_bytes=$((boot_gb * 1024 * 1024 * 1024))
+
+stop_vm_for_resize() {
+  if [ -f "$vm_root/qemu.pid" ]; then
+    vm_pid=$(cat "$vm_root/qemu.pid" 2>/dev/null || true)
+    if [ -n "$vm_pid" ] && kill -0 "$vm_pid" 2>/dev/null; then
+      echo "stopping-vm-for-resize=$vm_pid"
+      kill "$vm_pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        if ! kill -0 "$vm_pid" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
+      kill -9 "$vm_pid" 2>/dev/null || true
+    fi
+    rm -f "$vm_root/qemu.pid"
+  fi
+}
+
+read_boot_bytes() {
+  # -U (force share) lets us read the size while QEMU holds its write lock.
+  # The JSON also reports the child file node's virtual-size, so take the max.
+  qemu-img info "$@" --output=json "$boot_image" |
+    sed -n 's/.*"virtual-size":[[:space:]]*\([0-9][0-9]*\).*/\1/p' |
+    sort -n | tail -n 1
+}
+
+current_boot_bytes=$(read_boot_bytes -U || true)
+if [ -z "$current_boot_bytes" ]; then
+  stop_vm_for_resize
+  current_boot_bytes=$(read_boot_bytes || true)
+fi
+
+if [ -z "$current_boot_bytes" ]; then
+  echo "ERROR: unable to determine the virtual size of $boot_image" >&2
+  exit 1
+fi
+
+if [ "$current_boot_bytes" -lt "$target_boot_bytes" ]; then
+  stop_vm_for_resize
+  qemu-img resize "$boot_image" "${boot_gb}G" >/dev/null
+  echo "resized-boot-disk=${current_boot_bytes}->${target_boot_bytes}"
+else
+  echo "boot-disk-size-ok=${current_boot_bytes}"
 fi
 
 if [ ! -f "$data_image" ]; then
@@ -466,6 +521,36 @@ zfs version
 echo "zfs-ready"
 '@
 
+$ensureRootSpaceScript = @'
+set -euo pipefail
+
+# Extend the root partition/filesystem after the boot disk was grown in the
+# host-side prepare step. cloud-init normally does this on boot, but replay it
+# here so an already-provisioned nodeC (or a cloud-init failure) still ends up
+# with usable space for package upgrades and testlab uploads.
+# growpart stages temp files in /tmp, which is on the full root filesystem, so
+# point it at the /run tmpfs instead.
+export TMPDIR=/run
+root_source=$(findmnt -n -o SOURCE /)
+root_disk=$(lsblk -no PKNAME "$root_source" | head -n 1)
+root_partnum=$(cat "/sys/class/block/$(basename "$root_source")/partition" 2>/dev/null || true)
+
+if [ -n "$root_disk" ] && [ -n "$root_partnum" ]; then
+  growpart "/dev/$root_disk" "$root_partnum" || true
+fi
+
+resize2fs "$root_source" || true
+
+df -Pk / | awk 'NR==1 || NR==2'
+avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+if [ -z "$avail_kb" ] || [ "$avail_kb" -lt 262144 ]; then
+  echo "ERROR: nodeC root filesystem has only ${avail_kb:-unknown} KiB free. Resize the nodeC boot disk (provision-nodec-wsl-qemu.ps1 -BootDiskGB) before running the generic smoke." >&2
+  exit 1
+fi
+
+echo "root-space-ok"
+'@
+
 $resolvedLabConfig = Resolve-TestLabPath $LabConfig
 if (-not (Test-Path -LiteralPath $resolvedLabConfig)) {
     throw "Missing lab config: $resolvedLabConfig"
@@ -570,6 +655,8 @@ $report = [ordered]@{
     distro      = $Distro
     vmRoot      = $VmRoot
     sshPort     = [int]$SshPort
+    bootDiskGB  = [int]$BootDiskGB
+    dataDiskGB  = [int]$DataDiskGB
     poolName    = $resolvedPool
     datasetRoot = $resolvedDatasetRoot
     imageUrl    = $ImageUrl
@@ -601,7 +688,7 @@ try {
 
         Write-Host "[testlab] Preparing cloud image, data disk and cloud-init seed (first run downloads the image)"
         $recreateFlag = if ($Recreate) { "1" } else { "0" }
-        $prepResult = Invoke-NodecWslScript -Label "prepare-disks" -ScriptContent $prepareDisksScript -Arguments @($VmRoot, $ImageUrl, $recreateFlag, [string]$DataDiskGB, $publicKeyB64) -DoExecute:$Execute
+        $prepResult = Invoke-NodecWslScript -Label "prepare-disks" -ScriptContent $prepareDisksScript -Arguments @($VmRoot, $ImageUrl, $recreateFlag, [string]$DataDiskGB, $publicKeyB64, [string]$BootDiskGB) -DoExecute:$Execute
         Add-NodecAction -Report $report -Result $prepResult
         Assert-NodecSuccess -Result $prepResult -FailureMessage "nodeC disk/seed preparation failed."
 
@@ -647,6 +734,11 @@ try {
             $dryProbe = Invoke-NodeSshCommand -NodeConnection $nodecConnection -Command "echo nodec-ready" -Label "ssh-probe" -DoExecute:$false
             Add-NodecAction -Report $report -Result $dryProbe
         }
+
+        Write-Host "[testlab] Ensuring nodeC root filesystem fills the boot disk"
+        $rootSpaceResult = Invoke-NodeBashScript -NodeConnection $nodecConnection -ScriptContent $ensureRootSpaceScript -Label "ensure-root-space" -DoExecute:$Execute
+        Add-NodecAction -Report $report -Result $rootSpaceResult
+        Assert-NodecSuccess -Result $rootSpaceResult -FailureMessage "nodeC root filesystem has too little free space. Re-run with -BootDiskGB to grow the boot disk."
 
         Write-Host "[testlab] Installing OpenZFS on nodeC and creating pool '$resolvedPool' (first run can take several minutes)"
         $zfsResult = Invoke-NodeBashScript -NodeConnection $nodecConnection -ScriptContent $ensureZfsScript -Arguments @($resolvedPool) -Label "ensure-zfs-pool" -DoExecute:$Execute
