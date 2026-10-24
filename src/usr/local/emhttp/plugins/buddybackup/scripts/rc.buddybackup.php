@@ -1135,6 +1135,28 @@ function scan_remote_known_hosts($host, $port) {
     return implode("\n", $keys);
 }
 
+// Returns the name of the first required field that is missing or blank in a
+// backups.cfg entry, or null when the entry has everything needed to be scheduled.
+// Only required fields are checked: optional fields (hooks, hook settings,
+// destination user/port, flags added by newer versions) may legitimately be
+// saved as empty strings and must never prevent a backup from being scheduled.
+function backup_cfg_missing_required_field($cfg) {
+    if (!is_array($cfg)) {
+        return 'type';
+    }
+    $required = array('type', 'source_dataset', 'destination_dataset', 'backup_cron');
+    $type = trim((string)($cfg['type'] ?? ''));
+    if ($type === 'remote' || $type === 'remote_generic') {
+        $required[] = 'destination_host';
+    }
+    foreach ($required as $key) {
+        if (trim((string)($cfg[$key] ?? '')) === '') {
+            return $key;
+        }
+    }
+    return null;
+}
+
 function update_backups_from_config() {
     BB_LOG("Updating backup cronjobs");
     global $managed_known_hosts_path;
@@ -1211,27 +1233,15 @@ function update_backups_from_config() {
             $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
         }
 
-        $allow_empty = array();
-        if ($is_local) {
-            $allow_empty = array('destination_host');
-        } else if ($type == 'remote_generic') {
-            $allow_empty = array('destination_user', 'destination_port');
-        } else if ($type == 'remote') {
-            $allow_empty = array('destination_port');
+        if (($cfg["enable"] ?? '') != "yes") {
+            BB_VERBOSE("Skipped backup uid $uid because it is disabled");
+            continue;
         }
-
-        $any_empty = false;
-        foreach ($cfg as $key => $value) {
-            if (empty($value)) {
-                if (in_array($key, $allow_empty, true)) continue;
-
-                $any_empty = true;
-                BB_VERBOSE("Skipped backup uid $uid because of empty field $key");
-                break;
-            }
-        }
-        if ($cfg["enable"] != "yes" || $any_empty) {
-            BB_VERBOSE("Skipped backup uid $uid");
+        $missing_field = backup_cfg_missing_required_field($cfg);
+        if ($missing_field !== null) {
+            // BB_WARN passes its message through a shell; only log a sanitized uid.
+            $safe_uid = preg_replace('/[^A-Za-z0-9_-]/', '?', (string)$uid);
+            BB_WARN("Not scheduling backup uid $safe_uid because required field '$missing_field' is empty");
             continue;
         }
 

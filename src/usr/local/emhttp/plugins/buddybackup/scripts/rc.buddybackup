@@ -23,19 +23,29 @@ unraid_notify() {
     /usr/local/emhttp/webGui/scripts/notify -s "BuddyBackup" -d "$1" -i "$2"
 }
 
+# Publishes messages to the given nchan channel only (no console output).
+nchan_publish() {
+    local nchan="$1"
+    shift  # Shift arguments to access messages
+
+    if [[ -z "$nchan" ]]; then
+        return 0
+    fi
+
+    local url="http://localhost/pub/buddybackup-${nchan}?buffer_length=10"
+    local socket="/var/run/nginx.socket"
+
+    for message in "$@"; do
+        curl -o /dev/null --unix-socket "${socket}" -X POST -d "${message}" "${url}" >/dev/null 2>&1
+    done
+}
+
 # Default output is console, use optional parameter "nchan" to write to that nchan channel as well
 write() {
     local nchan="$1"
     shift  # Shift arguments to access messages
 
-    if [[ -n "$nchan" ]]; then
-        local url="http://localhost/pub/buddybackup-${nchan}?buffer_length=10"
-        local socket="/var/run/nginx.socket"
-
-        for message in "$@"; do
-            curl -o /dev/null --unix-socket "${socket}" -X POST -d "${message}" "${url}" >/dev/null 2>&1
-        done
-    fi
+    nchan_publish "${nchan}" "$@"
     
     for message in "$@"; do
         echo "${message}"
@@ -329,13 +339,23 @@ run_hook() {
     logger "Running ${label} hook '${hook_cmd}' (timeout ${hook_timeout}s)" -t"${plugin}"
     write "${nchan}" "Running ${label} hook (timeout ${hook_timeout}s).."
 
-    local hook_output=""
-    hook_output=$(timeout "${hook_timeout}" bash -c "${exec_cmd}" 2>&1)
-    local hook_status=$?
-
-    if [[ -n "${hook_output}" ]]; then
-        write "${nchan}" "${hook_output}"
-    fi
+    # Stream hook output line by line as it is produced so that log.sh stamps every
+    # line with the time it was actually emitted (a hook that sleeps between steps
+    # must not have all of its output logged with the completion timestamp).
+    # Lines are echoed to the console immediately; the nchan channel receives the
+    # complete output once in a single message after the hook finishes, so a chatty
+    # hook cannot slow itself down (and hit its timeout) through per-line curl calls.
+    timeout "${hook_timeout}" bash -c "${exec_cmd}" 2>&1 | {
+        hook_nchan_output=""
+        while IFS= read -r hook_line || [[ -n "${hook_line}" ]]; do
+            write "" "${hook_line}"
+            hook_nchan_output+="${hook_line}"$'\n'
+        done
+        if [[ -n "${hook_nchan_output}" ]]; then
+            nchan_publish "${nchan}" "${hook_nchan_output%$'\n'}"
+        fi
+    }
+    local hook_status=${PIPESTATUS[0]}
 
     if [[ ${hook_status} -eq 0 ]]; then
         logger "${label} hook '${hook_cmd}' finished successfully" -t"${plugin}"
