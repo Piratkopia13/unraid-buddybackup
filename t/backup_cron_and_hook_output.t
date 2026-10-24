@@ -291,4 +291,110 @@ SH
     like($log, qr/: status=124$/m, 'timeout exit status 124 is propagated');
 };
 
+# ---------------------------------------------------------------------------
+# Log file creation after boot & manual WebGUI backup logging (echopid mode)
+# ---------------------------------------------------------------------------
+subtest 'log.sh and manual WebGUI backups create and populate missing buddybackup.log' => sub {
+    my $workdir = tempdir(CLEANUP => 1);
+    my $log_file = File::Spec->catfile($workdir, 'buddybackup.log');
+
+    # 1. log.sh creates the log file even when stdin is empty (e.g. quiet sanoid cron right after boot)
+    unlink $log_file;
+    ok(!-e $log_file, 'precondition: log file does not exist after reboot');
+    {
+        local $ENV{LOGFILE} = $log_file;
+        system('bash', '-c', 'bash "$0" </dev/null', $log_sh);
+    }
+    ok(-f $log_file, 'log.sh creates missing log file even when zero lines are received');
+    is(slurp($log_file), '', 'newly touched log file is empty');
+
+    # 2. write() with BUDDYBACKUP_DIRECT_LOG=1 (set by start_long_running_task_echo_pid)
+    #    creates and appends to missing log file, while cron mode (unset) only echoes to stdout
+    unlink $log_file;
+    my $rc = slurp($rc_script);
+    my $cut = index($rc, '# read our configuration.');
+    $rc = substr($rc, 0, $cut) if $cut >= 0;
+    my $functions_file = File::Spec->catfile($workdir, 'rc.functions.sh');
+    spew($functions_file, $rc, 0755);
+
+    my $mock_empath = File::Spec->catdir($workdir, 'empath');
+    make_path(File::Spec->catdir($mock_empath, 'scripts'));
+    spew(File::Spec->catfile($mock_empath, 'scripts', 'log.sh'), slurp($log_sh), 0755);
+
+    my $write_harness = File::Spec->catfile($workdir, 'write_harness.sh');
+    spew($write_harness, <<'SH', 0755);
+#!/bin/bash
+plugin="buddybackup"
+empath="$MOCK_EMPATH"
+source "$FUNCTIONS_FILE"
+nchan_publish() { :; }
+write "send" $'\nSuccessfully synced backup to buddy!'
+write "send" "[[rc.buddybackup finished]]"
+SH
+
+    {
+        local $ENV{LOGFILE} = $log_file;
+        local $ENV{MOCK_EMPATH} = $mock_empath;
+        local $ENV{FUNCTIONS_FILE} = $functions_file;
+        local $ENV{BUDDYBACKUP_DIRECT_LOG} = '1';
+        system('bash', $write_harness);
+    }
+    ok(-f $log_file, 'BUDDYBACKUP_DIRECT_LOG=1 creates missing log file on manual backup');
+    my $manual_log = -f $log_file ? slurp($log_file) : '';
+    like($manual_log, qr/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d: Successfully synced backup to buddy!$/m,
+        'manual backup completion message is timestamped and written to buddybackup.log');
+
+    # 3. Verify cron mode (BUDDYBACKUP_DIRECT_LOG unset) does not write directly inside write()
+    unlink $log_file;
+    {
+        local $ENV{LOGFILE} = $log_file;
+        local $ENV{MOCK_EMPATH} = $mock_empath;
+        local $ENV{FUNCTIONS_FILE} = $functions_file;
+        delete $ENV{BUDDYBACKUP_DIRECT_LOG};
+        system('bash', '-c', 'bash "$0" >/dev/null', $write_harness);
+    }
+    ok(!-e $log_file, 'cron mode (BUDDYBACKUP_DIRECT_LOG unset) leaves logging to the outer cron pipeline without duplicating');
+
+    SKIP: {
+        skip 'php CLI is required for start_long_running_task_echo_pid and ensure_log_file tests', 5 if !$php_available;
+
+        unlink $log_file;
+        my $php_runner = File::Spec->catfile($workdir, 'manual_task.php');
+        spew($php_runner, <<"PHP");
+<?php
+putenv('LOGFILE=$log_file');
+\$_ENV['LOGFILE'] = '$log_file';
+require_once '$rc_php';
+\$log_file_path = '$log_file';
+ensure_log_file();
+echo "\\nTOUCHED=" . (file_exists('$log_file') ? '1' : '0') . "\\n";
+unlink('$log_file');
+clearstatcache();
+ob_start();
+start_long_running_task_echo_pid('MOCK_EMPATH=' . escapeshellarg('$mock_empath') . ' FUNCTIONS_FILE=' . escapeshellarg('$functions_file') . ' LOGFILE=' . escapeshellarg('$log_file') . ' bash ' . escapeshellarg('$write_harness'));
+\$pid = trim(ob_get_clean());
+echo "PID=\$pid\\n";
+for (\$i = 0; \$i < 30; \$i++) {
+    clearstatcache(true, '$log_file');
+    if (file_exists('$log_file') && filesize('$log_file') > 0) {
+        break;
+    }
+    usleep(50000);
+}
+PHP
+        my $out = `php "$php_runner" 2>&1`;
+        like($out, qr/^TOUCHED=1$/m, 'ensure_log_file() creates missing buddybackup.log') or diag($out);
+        like($out, qr/^PID=\d+$/m, 'start_long_running_task_echo_pid() echoes numeric child PID') or diag($out);
+        ok(-f $log_file, 'start_long_running_task_echo_pid() creates and populates buddybackup.log');
+        my $task_log = -f $log_file ? slurp($log_file) : '';
+        like($task_log, qr/Successfully synced backup to buddy!/,
+            'task launched via start_long_running_task_echo_pid() logs output to buddybackup.log');
+
+        # Verify api.php get_log safe behavior when log file does not exist yet
+        my $api_php = slurp(File::Spec->catfile($plugin_dir, 'api.php'));
+        like($api_php, qr/is_file\(\$log_file\)\s*&&\s*is_readable\(\$log_file\)/,
+            'api.php guards file_get_contents on missing log file');
+    }
+};
+
 done_testing();

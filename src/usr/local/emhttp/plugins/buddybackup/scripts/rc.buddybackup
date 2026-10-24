@@ -46,6 +46,10 @@ write() {
     shift  # Shift arguments to access messages
 
     nchan_publish "${nchan}" "$@"
+
+    if [[ "${BUDDYBACKUP_DIRECT_LOG:-}" == "1" ]]; then
+        append_to_buddybackup_log "$@"
+    fi
     
     for message in "$@"; do
         echo "${message}"
