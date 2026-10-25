@@ -788,6 +788,14 @@ function Compare-UpgradeStateSnapshots {
         $beforeValue = $Before.$propertyName
         $afterValue = $After.$propertyName
 
+        if ($propertyName -eq 'knownHostsKeyTypes') {
+            $missingTypes = @(@($beforeValue) | Where-Object { $_ -and (@($afterValue) -notcontains $_) })
+            if ($missingTypes.Count -gt 0) {
+                $differences += "knownHostsKeyTypes: missing in after state: $($missingTypes -join ', ')"
+            }
+            continue
+        }
+
         if ($beforeValue -is [System.Array] -or $afterValue -is [System.Array]) {
             $beforeText = (@($beforeValue) | Sort-Object) -join ', '
             $afterText = (@($afterValue) | Sort-Object) -join ', '

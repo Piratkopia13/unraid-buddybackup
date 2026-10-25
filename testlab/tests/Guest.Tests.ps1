@@ -386,6 +386,25 @@ Assert-Test "Compare-UpgradeStateSnapshots detects scalar and array alterations"
     if ($compArray.Error -notmatch "backupSections:") {
         throw "Unexpected error message for array alteration: $($compArray.Error)"
     }
+
+    # Known host key types are a superset check: scans may discover an extra
+    # algorithm, but an algorithm present before the upgrade must not vanish.
+    $supersetState = $baseState.PSObject.Copy()
+    $supersetState.knownHostsKeyTypes = @("ssh-ed25519", "ssh-rsa")
+    $compSuperset = Compare-UpgradeStateSnapshots -NodeName "nodeA" -Before $baseState -After $supersetState
+    if (-not $compSuperset.Success) {
+        throw "Expected added known_hosts key types to be accepted, got: $($compSuperset.Error)"
+    }
+
+    $subsetState = $baseState.PSObject.Copy()
+    $subsetState.knownHostsKeyTypes = @()
+    $compSubset = Compare-UpgradeStateSnapshots -NodeName "nodeA" -Before $baseState -After $subsetState
+    if ($compSubset.Success) {
+        throw "Expected comparison to fail when a known_hosts key type disappears"
+    }
+    if ($compSubset.Error -notmatch "knownHostsKeyTypes:") {
+        throw "Unexpected error message for known_hosts key type loss: $($compSubset.Error)"
+    }
 }
 
 # ---------------------------------------------------------------------------
