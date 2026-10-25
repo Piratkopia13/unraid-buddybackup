@@ -19,7 +19,7 @@
       "name": "buddybackup-node-b",
       "host": "127.0.0.1",
       "port": 2223,
-      "unraidVersion": "7.2.6",
+      "unraidVersion": "7.3.4",
       "pluginVersion": "2026.05.02"
     },
     "nodeC": {
@@ -42,7 +42,7 @@
     "currentCandidatePlugin": "workspace-build",
     "previousReleaseVersion": "2026.05.02",
     "previousCertifiedUnraidVersion": "7.2.6",
-    "latestSupportedUnraidVersion": "7.2.6",
+    "latestSupportedUnraidVersion": "7.3.4",
     "versionPolicy": {
       "mode": "require"
     },
@@ -60,12 +60,14 @@
     "distro": "Ubuntu",
     "cacheRoot": ".testlab/cache",
     "networkDeviceModel": "virtio-net-pci",
-    "imageSizeMB": 1024,
+    "imageSizeMB": 1536,
     "dataDiskSizeGB": 3,
     "bootWaitSeconds": 120,
     "unraidDownloadUrlTemplate": "https://releases.unraid.net/stable/unraid-{version}.zip",
     "unraidDownloadUrls": {
-      "7.3.0": "https://releases.unraid.net/dl/stable/7.3.0/56144fb963526391630f54b842b30727b159e1bc0375142e34f265daa29d49f7/unRAIDServer-7.3.0-x86_64.zip"
+      "7.2.6": "https://releases.unraid.net/dl/stable/7.2.6/47e3458147ba122b3f0dbdb22f955fa1c25bea55b38ff749cfd7cb50b0ba3339/unRAIDServer-7.2.6-x86_64.zip",
+      "7.3.0": "https://releases.unraid.net/dl/stable/7.3.0/56144fb963526391630f54b842b30727b159e1bc0375142e34f265daa29d49f7/unRAIDServer-7.3.0-x86_64.zip",
+      "7.3.4": "https://releases.unraid.net/dl/stable/7.3.4/ae8169459e2277e8d450b9a590c18f747dd8eaa50ebc54743a36cadd093cbfb8/unRAIDServer-7.3.4-x86_64.zip"
     }
   },
   "setup": {

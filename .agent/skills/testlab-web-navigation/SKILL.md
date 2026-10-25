@@ -21,7 +21,7 @@ The test lab runs dual Unraid virtual machine instances inside WSL2 (`Ubuntu`) u
 | Node | Unraid Version | HTTP WebGUI | HTTPS WebGUI | SSH (Localhost) | Instance Name |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **nodeA** | `7.2.6` (Certified baseline) | `http://127.0.0.1:8080` | `https://127.0.0.1:8443` | Port `2222` | `buddybackup-node-a` |
-| **nodeB** | `7.3.0` (Latest release) | `http://127.0.0.1:8081` | `https://127.0.0.1:8444` | Port `2223` | `buddybackup-node-b` |
+| **nodeB** | `7.3.4` (Latest release) | `http://127.0.0.1:8081` | `https://127.0.0.1:8444` | Port `2223` | `buddybackup-node-b` |
 
 ### Default Credentials
 - **Username:** `root`

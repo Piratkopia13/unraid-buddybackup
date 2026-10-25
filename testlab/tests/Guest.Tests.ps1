@@ -422,6 +422,19 @@ Assert-Test "Manual access commands format properly and lifecycle dry-run succee
     if (-not $zfsDestroy.Success) { throw "Dry-run Ensure-ZfsDatasetAbsent failed" }
 }
 
+# ---------------------------------------------------------------------------
+# Test 9: Post-Reboot Ready Command Shadow Check
+# ---------------------------------------------------------------------------
+Assert-Test "BuddyBackup post-reboot ready command enforces unlocked shadow account check" {
+    $readyCmd = Get-BuddyBackupPostRebootReadyCommand
+    if ($readyCmd -notmatch 'awk -F: ''BEGIN\{rc=1\} \$1=="buddybackup"') {
+        throw "Post-reboot ready command missing awk shadow account check for buddybackup"
+    }
+    if ($readyCmd -notmatch '\(\$2 ~ /\^\[!\*\]/\)') {
+        throw "Post-reboot ready command missing locked password check in shadow"
+    }
+}
+
 Write-Host "--------------------------------------------------"
 $summaryColor = if ($testsFailed -eq 0) { "Green" } else { "Red" }
 Write-Host "Guest Tests: $testsRun Total | $testsPassed Passed | $testsFailed Failed" -ForegroundColor $summaryColor

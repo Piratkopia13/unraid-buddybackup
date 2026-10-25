@@ -373,8 +373,8 @@ elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBack
 fi
 
 if [ "$receiver_configured" -eq 1 ]; then
-    if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
-        echo "buddybackup user is not ready in /etc/shadow" >&2
+    if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
+        echo "buddybackup user is not ready or locked in /etc/shadow" >&2
         exit 1
     fi
 
@@ -771,11 +771,11 @@ while [ "$attempts" -gt 0 ]; do
 
             receiver_ready=1
             if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             fi

@@ -134,6 +134,10 @@ function Convert-ToRemoteShellCommand {
         return $Command
     }
 
+    if ($Command -match '^printf ''%s'' ''[A-Za-z0-9+/=]+'' \| base64 -d \| bash') {
+        return $Command
+    }
+
     if ($Command -match '[\r\n\"''\$\(\)\{\}\;\|\&\<\>\`\\]') {
         $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
         $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
@@ -1151,11 +1155,11 @@ while [ "$attempts" -gt 0 ]; do
 
             receiver_ready=1
             if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             fi
@@ -1373,10 +1377,18 @@ echo "encrypted_dataset=$encrypted_dataset"
 echo "encrypted_dataset_encryption=$encryption_value"
 '@
     $zfsScriptNormalized = ($zfsScript -replace "`r`n", "`n").Trim()
-    $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScriptNormalized))
-    $zfsCommand = "printf '%s' '$zfsScriptB64' | base64 -d | bash -s -- '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
-    $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -PreviewCommand "configure ZFS base setup (passphrase redacted)" -DoExecute:$DoExecute
-    $results += $zfsSetupResult
+    $tempScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "buddybackup-zfs-setup.sh"
+    [System.IO.File]::WriteAllText($tempScriptPath, $zfsScriptNormalized, (New-Object System.Text.UTF8Encoding($false)))
+    $zfsSetupResult = $null
+    try {
+        $uploadResult = Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($tempScriptPath) -RemoteDirectory "/tmp" -Label "zfs-script-upload" -DoExecute:$DoExecute
+        $results += $uploadResult
+        $zfsCommand = "bash '/tmp/buddybackup-zfs-setup.sh' '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
+        $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -PreviewCommand "configure ZFS base setup (passphrase redacted)" -DoExecute:$DoExecute
+        $results += $zfsSetupResult
+    } finally {
+        Remove-Item -LiteralPath $tempScriptPath -Force -ErrorAction SilentlyContinue
+    }
     if (-not $zfsSetupResult.success) {
         $zfsSetupOutput = (($zfsSetupResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
         if ([string]::IsNullOrWhiteSpace($zfsSetupOutput)) {

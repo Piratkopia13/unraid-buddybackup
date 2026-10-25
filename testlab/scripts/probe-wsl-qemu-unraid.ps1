@@ -5,7 +5,7 @@ param(
     [string]$SshPrivateKeyPath = ".testlab/lab_key",
     [string]$InstanceName = "probe",
     [string]$NetworkDeviceModel = "virtio-net-pci",
-    [int]$ImageSizeMB = 1024,
+    [int]$ImageSizeMB = 1536,
     [int]$DataDiskSizeGB = 3,
     [int]$BootWaitSeconds = 35,
     [int]$HostSshPort = 2222,
@@ -617,11 +617,11 @@ fi
 
             receiver_ready=1
             if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             fi
