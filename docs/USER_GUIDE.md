@@ -113,7 +113,7 @@ Wake the remote destination server before replication starts and wait for its SS
 ```bash
 #!/bin/bash
 TARGET_MAC="AA:BB:CC:DD:EE:FF"
-TARGET_HOST="192.168.1.50"
+TARGET_HOST="192.0.2.50"
 TARGET_PORT="22"
 
 echo "Sending Wake-on-LAN magic packet to ${TARGET_MAC}..."

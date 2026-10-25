@@ -431,7 +431,7 @@ run_and_write_output() {
 if [[ "$HARNESS_TYPE" == "local" ]]; then
     send_local_backup "tank/data" "no" "tank/backups" "$TASK_UID" "no" "$PRE_HOOK" "$POST_HOOK" "$TIMEOUT" "$MODE"
 elif [[ "$HARNESS_TYPE" == "remote" ]]; then
-    send_backup "remote" "tank/data" "no" "192.168.1.50" "tank/remote_backups" "$TASK_UID" "user" "22" "no" "$PRE_HOOK" "$POST_HOOK" "$TIMEOUT" "$MODE"
+    send_backup "remote" "tank/data" "no" "192.0.2.50" "tank/remote_backups" "$TASK_UID" "user" "22" "no" "$PRE_HOOK" "$POST_HOOK" "$TIMEOUT" "$MODE"
 fi
 SH
     $write_script->($harness, $harness_body);

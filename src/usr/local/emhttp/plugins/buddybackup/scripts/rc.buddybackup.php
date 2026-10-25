@@ -73,8 +73,8 @@ function BB_VERBOSE($msg) {
 }
 function ENSURE_SUCCESS($b) {
     if (!$b) {
-        debug_print_backtrace();
-        die("Error!");
+        BB_ERR("A required filesystem operation failed");
+        die("Error!\n");
     }
 }
 

@@ -92,8 +92,8 @@ require_once '$rc_php';
     'destination_host' => '', 'destination_dataset' => 'tank/backup', 'backup_cron' => '0 4 * * *',
     'pre_backup_script' => '', 'post_backup_script' => '', 'hook_timeout' => '', 'hook_failure_mode' => '',
 );
-\$base_remote = array_merge(\$base_local, array('type' => 'remote', 'destination_host' => '10.0.0.2', 'destination_user' => '', 'destination_port' => ''));
-\$base_generic = array_merge(\$base_local, array('type' => 'remote_generic', 'destination_host' => '10.0.0.3', 'destination_user' => '', 'destination_port' => ''));
+\$base_remote = array_merge(\$base_local, array('type' => 'remote', 'destination_host' => '192.0.2.2', 'destination_user' => '', 'destination_port' => ''));
+\$base_generic = array_merge(\$base_local, array('type' => 'remote_generic', 'destination_host' => '192.0.2.3', 'destination_user' => '', 'destination_port' => ''));
 \$cases = array(
     'local_blank_optional'   => \$base_local,
     'remote_blank_optional'  => \$base_remote,
