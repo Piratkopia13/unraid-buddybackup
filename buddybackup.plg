@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.10.18">
+  <!ENTITY version      "2026.10.25">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "6b64cbc99abc3877e398fa0b6b01547f">
+  <!ENTITY pkgMD5        "9bc3a9e6d89ef16d61472cc0936d022d">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,13 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.10.25
+- Fix scheduled backups being silently dropped when optional fields (pre/post-backup scripts, destination user) were saved empty
+- Stream pre/post-backup hook output line by line so the live log shows accurate per-line timestamps
+- Verify each snapshot exists in ZFS before running post-snapshot hooks or triggering backup tasks, and hold Sanoid while the array is starting or configured pools are not yet imported [#40](https://github.com/Piratkopia13/unraid-buddybackup/issues/40)
+- Repair the receiving buddybackup account after reboot so OpenSSH 9.8+ no longer rejects replication with an "account is locked" error
+- Create /var/log/buddybackup.log automatically on boot, log manual WebGUI backup tasks to it, and show a placeholder when the log is empty
 
 ###2026.10.18
 - Fix automated backups triggered by snapshots to prevent premature termination and false failure alerts [#36](https://github.com/Piratkopia13/unraid-buddybackup/issues/36)

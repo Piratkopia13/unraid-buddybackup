@@ -389,7 +389,7 @@ Configure when status indicators turn warning or alert on the dashboard and task
 
 ### 5. Log
 
-Displays live output from `/var/log/buddybackup.log`, streaming updates every 2 seconds. Useful for monitoring active replications and diagnosing connection or delegation issues.
+Displays live output from `/var/log/buddybackup.log`, streaming updates every 2 seconds. Useful for monitoring active replications and diagnosing connection or delegation issues. The log file is created automatically at plugin startup, manual WebGUI actions (connection tests, *Send backup now*, restores) are appended to it as they run, and an empty log shows a placeholder instead of a blank panel.
 
 ![Replication Log Viewer](images/screenshot_08_log_viewer.png)
 
