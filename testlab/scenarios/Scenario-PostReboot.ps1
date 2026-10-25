@@ -131,20 +131,6 @@ try {
             }
 
             $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
-            if (-not $stateCompare.Success -and $stateCompare.Error -like "*KeyMaterialSha256*") {
-                for ($attempt = 1; $attempt -le 5; $attempt++) {
-                    Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-reboot for $($node.Name) (attempt $attempt)"
-                    Start-Sleep -Seconds 2
-                    $refreshResult = Invoke-RemoteCommand -NodeConnection $node.Connection -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "$($node.Name)-post-reboot-refresh-retry-$attempt" -DoExecute:$Execute
-                    $results += $refreshResult
-                    $afterSnapshot = Get-UpgradeStateSnapshot -NodeName $node.Name -NodeConnection $node.Connection -DoExecute:$Execute
-                    $results += $afterSnapshot.Result
-                    $stateCompare = Compare-UpgradeStateSnapshots -NodeName $node.Name -Before $nodeSnapshots[$node.Name].Before -After $afterSnapshot.Snapshot
-                    if ($stateCompare.Success -or ($stateCompare.Error -notlike "*KeyMaterialSha256*")) {
-                        break
-                    }
-                }
-            }
 
             $results += [pscustomobject]@{
                 Label    = "$($node.Name)-post-reboot-state-compare"

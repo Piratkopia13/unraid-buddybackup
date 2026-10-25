@@ -318,6 +318,7 @@ set -euo pipefail
 
 plugin_root="/boot/config/plugins/buddybackup"
 plugin_cfg="$plugin_root/buddybackup.cfg"
+incoming_cfg="$plugin_root/incoming.cfg"
 backups_cfg="$plugin_root/backups.cfg"
 snapshots_cfg="$plugin_root/snapshots.cfg"
 managed_known_hosts="$plugin_root/buddybackup_known_hosts"
@@ -370,6 +371,34 @@ line_or_empty() {
     local path="$2"
     if [ -f "$path" ]; then
         awk -F= -v expected="$key" '$1==expected {print $0}' "$path" | tail -n 1
+    fi
+}
+
+value_or_empty() {
+    local key="$1"
+    local path="$2"
+    if [ -f "$path" ]; then
+        awk -F= -v expected="$key" '
+            $1==expected {
+                value=$2
+                gsub(/^[ \t]+|[ \t]+$/, "", value)
+                gsub(/^"|"$/, "", value)
+                print value
+            }' "$path" | tail -n 1
+    fi
+}
+
+values_or_empty() {
+    local key="$1"
+    local path="$2"
+    if [ -f "$path" ]; then
+        awk -F= -v expected="$key" '
+            $1==expected {
+                value=$2
+                gsub(/^[ \t]+|[ \t]+$/, "", value)
+                gsub(/^"|"$/, "", value)
+                print value
+            }' "$path" | LC_ALL=C sort -u | awk 'BEGIN { separator="" } { printf "%s%s", separator, $0; separator="," }'
     fi
 }
 
@@ -426,6 +455,58 @@ for key in \
     fi
 done
 
+incoming_cfg_present=no
+if [ -f "$incoming_cfg" ]; then
+    incoming_cfg_present=yes
+fi
+echo "incoming_cfg_present=$incoming_cfg_present"
+
+# Receiver state moved from flat keys in buddybackup.cfg to incoming.cfg.
+# Report the effective values so upgrades across that migration stay comparable.
+receive_enable=""
+receive_destinations=""
+receive_ssh_key_count=0
+if [ "$incoming_cfg_present" = "yes" ]; then
+    receive_enable=$(value_or_empty enable "$incoming_cfg")
+    receive_destinations=$(values_or_empty destination_dataset "$incoming_cfg")
+    receive_ssh_key_count=$(awk -F= '
+        $1=="ssh_key" {
+            value=$2
+            gsub(/^[ \t]+|[ \t]+$/, "", value)
+            gsub(/^"|"$/, "", value)
+            if (value != "") count++
+        }
+        END { print count + 0 }
+    ' "$incoming_cfg")
+fi
+
+if [ -z "$receive_enable" ]; then
+    legacy_enable=$(value_or_empty ReceiveBackups "$plugin_cfg")
+    if [ "$legacy_enable" = "enable" ]; then
+        receive_enable="yes"
+    elif [ -n "$legacy_enable" ]; then
+        receive_enable="no"
+    fi
+fi
+if [ -z "$receive_destinations" ]; then
+    receive_destinations=$(values_or_empty ReceiveDestinationDataset "$plugin_cfg")
+fi
+if [ "$receive_ssh_key_count" -eq 0 ]; then
+    receive_ssh_key_count=$(awk -F= '
+        $1=="DestinationPubSSHKey" {
+            value=$2
+            gsub(/^[ \t]+|[ \t]+$/, "", value)
+            gsub(/^"|"$/, "", value)
+            if (value != "") count++
+        }
+        END { print count + 0 }
+    ' "$plugin_cfg")
+fi
+
+echo "receive_enable=$receive_enable"
+echo "receive_destinations=$receive_destinations"
+echo "receive_ssh_key_count=$receive_ssh_key_count"
+
 emit_sections "$backups_cfg" "backup_section"
 emit_sections "$snapshots_cfg" "snapshot_section"
 
@@ -440,10 +521,17 @@ done | sort | while IFS= read -r value; do
 done
 
 known_hosts_lines=0
+known_hosts_key_types=""
 if [ -f "$managed_known_hosts" ]; then
     known_hosts_lines=$(grep -cve '^[[:space:]]*$' "$managed_known_hosts" || true)
+    known_hosts_key_types=$(awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        NF >= 3 { print $2 }
+    ' "$managed_known_hosts" | LC_ALL=C sort -u | awk 'BEGIN { separator="" } { printf "%s%s", separator, $0; separator="," }')
 fi
 echo "known_hosts_line_count=$known_hosts_lines"
+echo "known_hosts_key_types=$known_hosts_key_types"
 
 buddybackup_user_present=no
 if id buddybackup >/dev/null 2>&1; then
@@ -492,10 +580,15 @@ function ConvertFrom-UpgradeStateOutput {
         knownHostsSha256                 = ""
         knownHostsKeyMaterialSha256      = ""
         knownHostsLineCount              = 0
+        knownHostsKeyTypes               = @()
         authorizedKeysSha256             = ""
         authorizedKeysKeyMaterialSha256  = ""
         sanoidConfSha256                 = ""
         sanoidConfContainsReceiveDataset = "no"
+        incomingCfgPresent               = "no"
+        receiveEnable                    = ""
+        receiveDestinations              = @()
+        receiveSshKeyCount               = 0
         buddybackupUserPresent           = "no"
         allowUsersContainsBuddybackup    = "no"
         matchUserBuddybackup             = "no"
@@ -520,10 +613,15 @@ function ConvertFrom-UpgradeStateOutput {
             "known_hosts_sha256" { $snapshot.knownHostsSha256 = $value }
             "known_hosts_key_material_sha256" { $snapshot.knownHostsKeyMaterialSha256 = $value }
             "known_hosts_line_count" { $snapshot.knownHostsLineCount = if ([string]::IsNullOrWhiteSpace($value)) { 0 } else { [int]$value } }
+            "known_hosts_key_types" { $snapshot.knownHostsKeyTypes += @($value -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
             "authorized_keys_sha256" { $snapshot.authorizedKeysSha256 = $value }
             "authorized_keys_key_material_sha256" { $snapshot.authorizedKeysKeyMaterialSha256 = $value }
             "sanoid_conf_sha256" { $snapshot.sanoidConfSha256 = $value }
             "sanoid_conf_contains_receive_dataset" { $snapshot.sanoidConfContainsReceiveDataset = $value }
+            "incoming_cfg_present" { $snapshot.incomingCfgPresent = $value }
+            "receive_enable" { $snapshot.receiveEnable = $value }
+            "receive_destinations" { $snapshot.receiveDestinations += @($value -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
+            "receive_ssh_key_count" { $snapshot.receiveSshKeyCount = if ([string]::IsNullOrWhiteSpace($value)) { 0 } else { [int]$value } }
             "buddybackup_user_present" { $snapshot.buddybackupUserPresent = $value }
             "allow_users_contains_buddybackup" { $snapshot.allowUsersContainsBuddybackup = $value }
             "match_user_buddybackup" { $snapshot.matchUserBuddybackup = $value }
@@ -540,6 +638,8 @@ function ConvertFrom-UpgradeStateOutput {
     $snapshot.backupSections = @($snapshot.backupSections | Sort-Object -Unique)
     $snapshot.snapshotSections = @($snapshot.snapshotSections | Sort-Object -Unique)
     $snapshot.backupCrons = @($snapshot.backupCrons | Sort-Object -Unique)
+    $snapshot.knownHostsKeyTypes = @($snapshot.knownHostsKeyTypes | Sort-Object -Unique)
+    $snapshot.receiveDestinations = @($snapshot.receiveDestinations | Sort-Object -Unique)
 
     return [pscustomobject]$snapshot
 }
@@ -614,8 +714,6 @@ function Test-UpgradeStateSnapshot {
     }
 
     $expectedPluginLines = @(
-        'ReceiveBackups="enable"',
-        ('ReceiveDestinationDataset="{0}"' -f $Plan.ReceiveRootDataset),
         'UtcTimezone="yes"',
         ('AllowUnencryptedRemoteBackups="{0}"' -f $AllowUnencryptedRemoteBackups)
     )
@@ -623,6 +721,19 @@ function Test-UpgradeStateSnapshot {
         if ($Snapshot.pluginCfgLines -notcontains $expectedLine) {
             $errors += "missing plugin cfg line $expectedLine"
         }
+    }
+
+    if ($Snapshot.receiveEnable -ne "yes") {
+        $errors += "receiver mode is not enabled (receive_enable=$($Snapshot.receiveEnable))"
+    }
+    if (@($Snapshot.receiveDestinations) -notcontains $Plan.ReceiveRootDataset) {
+        $errors += "receiver destination dataset $($Plan.ReceiveRootDataset) is missing"
+    }
+    if ([int]$Snapshot.receiveSshKeyCount -lt 1) {
+        $errors += "receiver buddy SSH key is missing"
+    }
+    if (@($Snapshot.knownHostsKeyTypes).Count -eq 0) {
+        $errors += "managed known_hosts contains no host keys"
     }
 
     foreach ($expectedSection in @($Plan.RemoteBackupUid, $Plan.LocalBackupUid)) {
@@ -658,9 +769,12 @@ function Compare-UpgradeStateSnapshots {
         'backupsCfgSha256',
         'snapshotsCfgSha256',
         'senderKeySha256',
-        'knownHostsKeyMaterialSha256',
+        'knownHostsKeyTypes',
         'authorizedKeysKeyMaterialSha256',
         'sanoidConfContainsReceiveDataset',
+        'receiveEnable',
+        'receiveDestinations',
+        'receiveSshKeyCount',
         'buddybackupUserPresent',
         'allowUsersContainsBuddybackup',
         'matchUserBuddybackup',

@@ -205,10 +205,15 @@ sender_key_sha256=keyhash123
 known_hosts_sha256=khash456
 known_hosts_key_material_sha256=khmathash789
 known_hosts_line_count=4
+known_hosts_key_types=ecdsa-sha2-nistp256,ssh-ed25519,ssh-rsa
 authorized_keys_sha256=akhash012
 authorized_keys_key_material_sha256=akmathash345
 sanoid_conf_sha256=sanoidhash678
 sanoid_conf_contains_receive_dataset=yes
+incoming_cfg_present=yes
+receive_enable=yes
+receive_destinations=bbpool/buddybackup/upgrade/receive-nodeA
+receive_ssh_key_count=1
 buddybackup_user_present=yes
 allow_users_contains_buddybackup=yes
 match_user_buddybackup=yes
@@ -234,6 +239,11 @@ backup_cron=backup-aupglc01.cron
     if ($snapshot.knownHostsSha256 -ne "khash456") { throw "knownHostsSha256 mismatch" }
     if ($snapshot.knownHostsKeyMaterialSha256 -ne "khmathash789") { throw "knownHostsKeyMaterialSha256 mismatch" }
     if ($snapshot.knownHostsLineCount -ne 4) { throw "knownHostsLineCount mismatch: expected 4, got $($snapshot.knownHostsLineCount)" }
+    if (@($snapshot.knownHostsKeyTypes).Count -ne 3) { throw "Expected 3 knownHostsKeyTypes, got $($snapshot.knownHostsKeyTypes.Count)" }
+    if ($snapshot.incomingCfgPresent -ne "yes") { throw "incomingCfgPresent mismatch" }
+    if ($snapshot.receiveEnable -ne "yes") { throw "receiveEnable mismatch" }
+    if (@($snapshot.receiveDestinations) -notcontains "bbpool/buddybackup/upgrade/receive-nodeA") { throw "receiveDestinations mismatch" }
+    if ($snapshot.receiveSshKeyCount -ne 1) { throw "receiveSshKeyCount mismatch: expected 1, got $($snapshot.receiveSshKeyCount)" }
     if ($snapshot.authorizedKeysSha256 -ne "akhash012") { throw "authorizedKeysSha256 mismatch" }
     if ($snapshot.authorizedKeysKeyMaterialSha256 -ne "akmathash345") { throw "authorizedKeysKeyMaterialSha256 mismatch" }
     if ($snapshot.sanoidConfSha256 -ne "sanoidhash678") { throw "sanoidConfSha256 mismatch" }
@@ -261,9 +271,12 @@ Assert-Test "Compare-UpgradeStateSnapshots passes when states are identical" {
         backupsCfgSha256                 = "abc"
         snapshotsCfgSha256               = "def"
         senderKeySha256                  = "ghi"
-        knownHostsKeyMaterialSha256      = "jkl"
+        knownHostsKeyTypes               = @("ssh-ed25519")
         authorizedKeysKeyMaterialSha256  = "mno"
         sanoidConfContainsReceiveDataset = "yes"
+        receiveEnable                    = "yes"
+        receiveDestinations              = @("ds1")
+        receiveSshKeyCount               = 1
         buddybackupUserPresent           = "yes"
         allowUsersContainsBuddybackup    = "yes"
         matchUserBuddybackup             = "yes"
@@ -277,9 +290,12 @@ Assert-Test "Compare-UpgradeStateSnapshots passes when states are identical" {
         backupsCfgSha256                 = "abc"
         snapshotsCfgSha256               = "def"
         senderKeySha256                  = "ghi"
-        knownHostsKeyMaterialSha256      = "jkl"
+        knownHostsKeyTypes               = @("ssh-ed25519")
         authorizedKeysKeyMaterialSha256  = "mno"
         sanoidConfContainsReceiveDataset = "yes"
+        receiveEnable                    = "yes"
+        receiveDestinations              = @("ds1")
+        receiveSshKeyCount               = 1
         buddybackupUserPresent           = "yes"
         allowUsersContainsBuddybackup    = "yes"
         matchUserBuddybackup             = "yes"
@@ -300,9 +316,12 @@ Assert-Test "Compare-UpgradeStateSnapshots detects scalar and array alterations"
         backupsCfgSha256                 = "abc"
         snapshotsCfgSha256               = "def"
         senderKeySha256                  = "ghi"
-        knownHostsKeyMaterialSha256      = "jkl"
+        knownHostsKeyTypes               = @("ssh-ed25519")
         authorizedKeysKeyMaterialSha256  = "mno"
         sanoidConfContainsReceiveDataset = "yes"
+        receiveEnable                    = "yes"
+        receiveDestinations              = @("ds1")
+        receiveSshKeyCount               = 1
         buddybackupUserPresent           = "yes"
         allowUsersContainsBuddybackup    = "yes"
         matchUserBuddybackup             = "yes"
@@ -317,9 +336,12 @@ Assert-Test "Compare-UpgradeStateSnapshots detects scalar and array alterations"
         backupsCfgSha256                 = "CHANGED"
         snapshotsCfgSha256               = "def"
         senderKeySha256                  = "ghi"
-        knownHostsKeyMaterialSha256      = "jkl"
+        knownHostsKeyTypes               = @("ssh-ed25519")
         authorizedKeysKeyMaterialSha256  = "mno"
         sanoidConfContainsReceiveDataset = "yes"
+        receiveEnable                    = "yes"
+        receiveDestinations              = @("ds1")
+        receiveSshKeyCount               = 1
         buddybackupUserPresent           = "yes"
         allowUsersContainsBuddybackup    = "yes"
         matchUserBuddybackup             = "yes"
@@ -342,9 +364,12 @@ Assert-Test "Compare-UpgradeStateSnapshots detects scalar and array alterations"
         backupsCfgSha256                 = "abc"
         snapshotsCfgSha256               = "def"
         senderKeySha256                  = "ghi"
-        knownHostsKeyMaterialSha256      = "jkl"
+        knownHostsKeyTypes               = @("ssh-ed25519")
         authorizedKeysKeyMaterialSha256  = "mno"
         sanoidConfContainsReceiveDataset = "yes"
+        receiveEnable                    = "yes"
+        receiveDestinations              = @("ds1")
+        receiveSshKeyCount               = 1
         buddybackupUserPresent           = "yes"
         allowUsersContainsBuddybackup    = "yes"
         matchUserBuddybackup             = "yes"

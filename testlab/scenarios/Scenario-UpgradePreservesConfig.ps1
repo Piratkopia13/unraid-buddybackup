@@ -188,20 +188,6 @@ try {
 
         if ($senderBefore.Snapshot -and $senderAfter.Snapshot) {
             $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
-            if (-not $senderCompare.Success -and $senderCompare.Error -like "*KeyMaterialSha256*") {
-                for ($attempt = 1; $attempt -le 5; $attempt++) {
-                    Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeA (attempt $attempt)"
-                    Start-Sleep -Seconds 2
-                    $refreshResult = Invoke-RemoteCommand -NodeConnection $sender -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeA-post-upgrade-refresh-retry-$attempt" -DoExecute:$Execute
-                    $results += $refreshResult
-                    $senderAfter = Get-UpgradeStateSnapshot -NodeName 'nodeA' -NodeConnection $sender -DoExecute:$Execute
-                    $results += $senderAfter.Result
-                    $senderCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeA' -Before $senderBefore.Snapshot -After $senderAfter.Snapshot
-                    if ($senderCompare.Success -or ($senderCompare.Error -notlike "*KeyMaterialSha256*")) {
-                        break
-                    }
-                }
-            }
             $results += [pscustomobject]@{
                 Label    = 'nodeA-upgrade-state-compare'
                 Command  = 'compare pre-upgrade and post-upgrade BuddyBackup state'
@@ -213,20 +199,6 @@ try {
 
         if ($receiverBefore.Snapshot -and $receiverAfter.Snapshot) {
             $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
-            if (-not $receiverCompare.Success -and $receiverCompare.Error -like "*KeyMaterialSha256*") {
-                for ($attempt = 1; $attempt -le 5; $attempt++) {
-                    Write-Host "[testlab] Refreshing BuddyBackup known_hosts post-upgrade for nodeB (attempt $attempt)"
-                    Start-Sleep -Seconds 2
-                    $refreshResult = Invoke-RemoteCommand -NodeConnection $receiver -Command "/usr/local/emhttp/plugins/buddybackup/scripts/rc.buddybackup.php update" -Label "nodeB-post-upgrade-refresh-retry-$attempt" -DoExecute:$Execute
-                    $results += $refreshResult
-                    $receiverAfter = Get-UpgradeStateSnapshot -NodeName 'nodeB' -NodeConnection $receiver -DoExecute:$Execute
-                    $results += $receiverAfter.Result
-                    $receiverCompare = Compare-UpgradeStateSnapshots -NodeName 'nodeB' -Before $receiverBefore.Snapshot -After $receiverAfter.Snapshot
-                    if ($receiverCompare.Success -or ($receiverCompare.Error -notlike "*KeyMaterialSha256*")) {
-                        break
-                    }
-                }
-            }
             $results += [pscustomobject]@{
                 Label    = 'nodeB-upgrade-state-compare'
                 Command  = 'compare pre-upgrade and post-upgrade BuddyBackup state'
