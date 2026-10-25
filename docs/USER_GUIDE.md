@@ -113,7 +113,7 @@ Wake the remote destination server before replication starts and wait for its SS
 ```bash
 #!/bin/bash
 TARGET_MAC="AA:BB:CC:DD:EE:FF"
-TARGET_HOST="192.168.1.50"
+TARGET_HOST="192.0.2.50"
 TARGET_PORT="22"
 
 echo "Sending Wake-on-LAN magic packet to ${TARGET_MAC}..."
@@ -389,7 +389,7 @@ Configure when status indicators turn warning or alert on the dashboard and task
 
 ### 5. Log
 
-Displays live output from `/var/log/buddybackup.log`, streaming updates every 2 seconds. Useful for monitoring active replications and diagnosing connection or delegation issues.
+Displays live output from `/var/log/buddybackup.log`, streaming updates every 2 seconds. Useful for monitoring active replications and diagnosing connection or delegation issues. The log file is created automatically at plugin startup, manual WebGUI actions (connection tests, *Send backup now*, restores) are appended to it as they run, and an empty log shows a placeholder instead of a blank panel.
 
 ![Replication Log Viewer](images/screenshot_08_log_viewer.png)
 

@@ -478,7 +478,9 @@ subtest "SSH port support for BuddyBackup remote host type" => sub {
 
     like($rc_content, qr/if\s*\(\$cfg\['type'\]\s*==\s*'remote'\)\s*\{\s*\$identity\s*=\s*normalize_remote_identity\('buddybackup',\s*\$cfg\['destination_port'\]/s, "rc.buddybackup.php normalizes destination_port for remote send_backup");
     like($rc_content, qr/else\s*if\s*\(\$type\s*==\s*'remote'\)\s*\{\s*\$identity\s*=\s*normalize_remote_identity\('buddybackup',\s*\$cfg\['destination_port'\]/s, "rc.buddybackup.php resolves destination_port for remote known_hosts during update");
-    like($rc_content, qr/else\s*if\s*\(\$type\s*==\s*'remote'\)\s*\{\s*\$allow_empty\s*=\s*array\('destination_port'\);/s, "rc.buddybackup.php allows empty destination_port for remote type in update");
+    my ($required_fn) = $rc_content =~ /function backup_cfg_missing_required_field\s*\(.*?\n\}/s;
+    ok(defined $required_fn, "rc.buddybackup.php defines backup_cfg_missing_required_field for scheduling validation");
+    unlike($required_fn // '', qr/destination_port/, "rc.buddybackup.php allows empty destination_port for remote type in update (port is not a required field)");
 
     my $rc_sh = File::Spec->catfile($plugin_dir, "scripts", "rc.buddybackup");
     open my $sfh, "<", $rc_sh or die "Cannot open $rc_sh: $!";

@@ -5,7 +5,7 @@ param(
     [string]$SshPrivateKeyPath = ".testlab/lab_key",
     [string]$InstanceName = "probe",
     [string]$NetworkDeviceModel = "virtio-net-pci",
-    [int]$ImageSizeMB = 1024,
+    [int]$ImageSizeMB = 1536,
     [int]$DataDiskSizeGB = 3,
     [int]$BootWaitSeconds = 35,
     [int]$HostSshPort = 2222,
@@ -97,8 +97,36 @@ if [ -f "$pid_file" ]; then
   rm -f "$pid_file"
 fi
 
-pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+self_pid=$$
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+done
 rm -f "$work_root/qemu-monitor.sock"
+
+# Unmount any mounts inside work_root (deepest first)
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
+# Detach any loop devices associated with files inside work_root
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        if [ -f /proc/mounts ]; then
+          awk -v dev="$loop_dev" '$1 == dev || index($1, dev "p") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+          done
+        fi
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
 '@
 
     $stopResult = Invoke-WslRootBash -Distro $Distro -ScriptContent $stopScript -Arguments @($WslWorkingRoot)
@@ -355,6 +383,20 @@ if ! require_command qemu-system-x86_64 || ! require_command losetup || ! requir
 fi
 
 log_step "Preparing WSL work root $work_root"
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
 rm -rf "$work_root"
 mkdir -p "$work_root/mnt"
 
@@ -373,10 +415,10 @@ parted -s "$image_path" set 1 boot on
 loop_device=$(losetup --find --show -P "$image_path")
 cleanup_loop() {
   if mountpoint -q "$mount_dir"; then
-    umount "$mount_dir" || true
+    umount "$mount_dir" 2>/dev/null || umount -l "$mount_dir" 2>/dev/null || true
   fi
   if [ -n "${loop_device:-}" ]; then
-    losetup -d "$loop_device" || true
+    losetup -d "$loop_device" 2>/dev/null || true
   fi
 }
 trap cleanup_loop EXIT
@@ -419,12 +461,12 @@ else
 fi
 
 # BuddyBackup testlab: guard Unraid rc.sshd against port bind race during delayed service reloads
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -575,11 +617,11 @@ fi
 
             receiver_ready=1
             if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             fi
@@ -600,7 +642,7 @@ if [ -f "$mount_dir/syslinux/syslinux.cfg" ]; then
 fi
 
 sync
-umount "$mount_dir"
+umount "$mount_dir" 2>/dev/null || umount -l "$mount_dir" 2>/dev/null || true
 
 log_step "Installing syslinux bootloader"
 chmod +x "$payload_root/syslinux/syslinux_linux"
@@ -608,7 +650,7 @@ run_quietly_allowing_geometry_warning "$payload_root/syslinux/syslinux_linux" -f
 dd if="$payload_root/syslinux/mbr.bin" of="$loop_device" conv=notrunc status=none
 run_quietly_allowing_geometry_warning fsck.fat -a "${loop_device}p1" || true
 sync
-losetup -d "$loop_device"
+losetup -d "$loop_device" 2>/dev/null || true
 loop_device=""
 trap - EXIT
 

@@ -134,13 +134,17 @@ function Convert-ToRemoteShellCommand {
         return $Command
     }
 
-    if ($Command -notmatch "[`r`n]") {
+    if ($Command -match '^printf ''%s'' ''[A-Za-z0-9+/=]+'' \| base64 -d \| bash') {
         return $Command
     }
 
-    $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
-    $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
-    return "printf '%s' '$commandB64' | base64 -d | bash"
+    if ($Command -match '[\r\n\"''\$\(\)\{\}\;\|\&\<\>\`\\]') {
+        $normalizedCommand = ($Command -replace "`r`n", "`n").Trim()
+        $commandB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalizedCommand))
+        return "printf '%s' '$commandB64' | base64 -d | bash"
+    }
+
+    return $Command
 }
 
 function Convert-ToRemoteSingleQuotedArgument {
@@ -1055,12 +1059,12 @@ cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
 set -euo pipefail
 
 # Guard Unraid rc.sshd against port bind race during delayed service reloads
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -1151,19 +1155,19 @@ while [ "$attempts" -gt 0 ]; do
 
             receiver_ready=1
             if [ -f "$plugin_root/incoming.cfg" ] && grep -Eq '^[[:space:]]*enable="?yes"?' "$plugin_root/incoming.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             elif [ -f "$plugin_root/buddybackup.cfg" ] && grep -Eq '^[[:space:]]*ReceiveBackups="?enable"?' "$plugin_root/buddybackup.cfg"; then
-                if ! grep -q '^buddybackup:' /etc/shadow 2>/dev/null; then
+                if ! awk -F: 'BEGIN{rc=1} $1=="buddybackup" { rc=($2 ~ /^[!*]/)?1:0; exit } END{exit rc}' /etc/shadow 2>/dev/null; then
                     receiver_ready=0
                 fi
             fi
 
             if [ "$bb_ready" -eq 1 ] && [ "$receiver_ready" -eq 1 ]; then
                 # Wait until post-boot service reloads (scheduled at +20s by network init) complete
-                uptime_secs=$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 60)
-                if [ "$uptime_secs" -lt 45 ]; then
+                uptime_secs=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 60)
+                if [ -n "$uptime_secs" ] && [ "$uptime_secs" -lt 45 ] 2>/dev/null; then
                     sleep $((45 - uptime_secs))
                 fi
                 while pidof -x reload_services >/dev/null 2>&1; do
@@ -1180,6 +1184,12 @@ while [ "$attempts" -gt 0 ]; do
                         /usr/sbin/sshd >/dev/null 2>&1 || true
                     fi
                 fi
+                for _ in $(seq 1 30); do
+                    if ! pgrep -x sshd >/dev/null 2>&1; then
+                        /etc/rc.d/rc.sshd start >/dev/null 2>&1 || true
+                    fi
+                    sleep 2
+                done
                 exit 0
             fi
         fi
@@ -1229,12 +1239,12 @@ else
     printf 'USE_SSH="yes"\n' > "$ident_cfg"
 fi
 
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -1324,12 +1334,12 @@ else
     printf 'USE_SSH="yes"\n' > "$ident_cfg"
 fi
 
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V3' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V3\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -1367,10 +1377,18 @@ echo "encrypted_dataset=$encrypted_dataset"
 echo "encrypted_dataset_encryption=$encryption_value"
 '@
     $zfsScriptNormalized = ($zfsScript -replace "`r`n", "`n").Trim()
-    $zfsScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($zfsScriptNormalized))
-    $zfsCommand = "printf '%s' '$zfsScriptB64' | base64 -d | bash -s -- '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
-    $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -PreviewCommand "configure ZFS base setup (passphrase redacted)" -DoExecute:$DoExecute
-    $results += $zfsSetupResult
+    $tempScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "buddybackup-zfs-setup.sh"
+    [System.IO.File]::WriteAllText($tempScriptPath, $zfsScriptNormalized, (New-Object System.Text.UTF8Encoding($false)))
+    $zfsSetupResult = $null
+    try {
+        $uploadResult = Invoke-NodeUpload -NodeConnection $NodeConnection -LocalPaths @($tempScriptPath) -RemoteDirectory "/tmp" -Label "zfs-script-upload" -DoExecute:$DoExecute
+        $results += $uploadResult
+        $zfsCommand = "bash '/tmp/buddybackup-zfs-setup.sh' '$passphraseB64' '$poolName' '$datasetRoot' '$plainDataset' '$encryptedDataset'"
+        $zfsSetupResult = Invoke-NodeSshCommand -NodeConnection $NodeConnection -Command $zfsCommand -Label "zfs-base-setup" -PreviewCommand "configure ZFS base setup (passphrase redacted)" -DoExecute:$DoExecute
+        $results += $zfsSetupResult
+    } finally {
+        Remove-Item -LiteralPath $tempScriptPath -Force -ErrorAction SilentlyContinue
+    }
     if (-not $zfsSetupResult.success) {
         $zfsSetupOutput = (($zfsSetupResult.output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
         if ([string]::IsNullOrWhiteSpace($zfsSetupOutput)) {
@@ -1455,7 +1473,11 @@ function Stop-WslLabInstance {
         [switch]$DoExecute
     )
 
-    $workRoot = "/tmp/buddybackup-qemu-$InstanceName"
+    $workRoot = if ($InstanceName.StartsWith("/")) {
+        $InstanceName
+    } else {
+        "/tmp/buddybackup-qemu-$InstanceName"
+    }
     if (-not $DoExecute) {
         Write-Host "[dry-run] Would stop WSL/QEMU instance '$InstanceName' at $workRoot"
         return
@@ -1479,12 +1501,59 @@ if [ -f "$pid_file" ]; then
   fi
 fi
 
-pkill -f "$work_root/unraid-boot.img" 2>/dev/null || true
+self_pid=$$
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill "$pid" 2>/dev/null || true
+  fi
+done
 for i in $(seq 1 30); do
-  pgrep -f "$work_root/unraid-boot.img" >/dev/null 2>&1 || break
+  remaining=0
+  for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+    if [ "$pid" != "$self_pid" ]; then
+      remaining=1
+      break
+    fi
+  done
+  [ "$remaining" -eq 0 ] && break
   sleep 0.1
 done
-pkill -9 -f "$work_root/unraid-boot.img" 2>/dev/null || true
+for pid in $(pgrep -f "$work_root" 2>/dev/null || true); do
+  if [ "$pid" != "$self_pid" ]; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+done
+
+# Unmount any mounts inside work_root (deepest first)
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
+# Detach any loop devices associated with files inside work_root
+if command -v losetup >/dev/null 2>&1; then
+  losetup -a 2>/dev/null | while IFS=: read -r loop_dev rest; do
+    case "$rest" in
+      *"($work_root"*)
+        if [ -f /proc/mounts ]; then
+          awk -v dev="$loop_dev" '$1 == dev || index($1, dev "p") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+          done
+        fi
+        losetup -d "$loop_dev" 2>/dev/null || true
+        ;;
+    esac
+  done
+fi
+
+# Secondary pass to ensure all mounts under work_root are detached
+if [ -f /proc/mounts ] && [ -d "$work_root" ]; then
+  awk -v prefix="$work_root" '$2 == prefix || index($2, prefix "/") == 1 { print $2 }' /proc/mounts | sort -r -u | while IFS= read -r mp; do
+    umount -l "$mp" 2>/dev/null || true
+  done
+fi
+
 rm -rf "$work_root"
 '@
 

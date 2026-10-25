@@ -38,8 +38,18 @@ $_SERVER['PATH'] = $normalized_path;
 $empath = "/usr/local/emhttp/plugins/buddybackup";
 $sanoid_bin = "$empath/deps/sanoid";
 $log_script = "$empath/scripts/log.sh";
+$log_file_path = getenv('LOGFILE') ?: "/var/log/buddybackup.log";
 $rc = $empath."/scripts/rc.buddybackup";
 $managed_known_hosts_path = "$plugin_path/buddybackup_known_hosts";
+
+function ensure_log_file() {
+    global $log_file_path;
+    $log_dir = dirname($log_file_path);
+    if (is_dir($log_dir) && !file_exists($log_file_path)) {
+        @touch($log_file_path);
+        @chmod($log_file_path, 0644);
+    }
+}
 
 function BB_LOG($msg) {
     global $plugin;
@@ -49,13 +59,13 @@ function BB_ERR($msg) {
     global $plugin;
     global $log_script;
     syslog(LOG_ERR, "$plugin: ERROR: $msg");
-    exec('echo "'.$msg.'" | '.$log_script);
+    exec('printf %s ' . escapeshellarg((string)$msg . "\n") . ' | ' . $log_script);
 }
 function BB_WARN($msg) {
     global $plugin;
     global $log_script;
     syslog(LOG_WARNING, "$plugin: WARN: $msg");
-    exec('echo "'.$msg.'" | '.$log_script);
+    exec('printf %s ' . escapeshellarg((string)$msg . "\n") . ' | ' . $log_script);
 }
 function BB_VERBOSE($msg) {
     global $verbose;
@@ -63,8 +73,8 @@ function BB_VERBOSE($msg) {
 }
 function ENSURE_SUCCESS($b) {
     if (!$b) {
-        debug_print_backtrace();
-        die("Error!");
+        BB_ERR("A required filesystem operation failed");
+        die("Error!\n");
     }
 }
 
@@ -831,6 +841,7 @@ function update() {
     global $incoming_config_path;
     global $tmp_recv_dataset_path;
 
+    ensure_log_file();
     ensure_incoming_config_migrated();
 
     $plugin_cfg = parse_ini_file($plugin_config_path, false);
@@ -857,7 +868,6 @@ function update() {
     }
 
     passthru($rc.' update');    
-    update_backups_from_config();
 
     update_sanoid_conf();
 
@@ -881,6 +891,8 @@ function update() {
     } else {
         disable_sanoid_cron();
     }
+
+    update_backups_from_config();
 
     sync_incoming_buddies();
 }
@@ -1010,27 +1022,23 @@ function update_sanoid_conf() {
                 }
             }
 
-            if ($pre_hook !== '' || $post_hook !== '') {
+            $has_pre_hook = ($pre_hook !== '') ? '1' : '0';
+
+            if ($pre_hook !== '') {
                 $sanoid_conf_content .= "    script_timeout = $hook_timeout\n";
             }
 
-            if ($post_hook !== '' && $trigger !== '') {
-                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+            if ($post_hook !== '' || $trigger !== '') {
+                if ($pre_hook !== '' && $post_hook !== '') {
+                    $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
+                }
                 $escaped_post_hook = addcslashes($post_hook, "\\\"$`");
                 $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"$escaped_post_hook\" \"$hook_timeout\" \"$trigger\"";
-                if ($hook_scope === 'daily') {
-                    $post_cmd .= " \"daily\"";
+                if ($has_pre_hook === '1') {
+                    $post_cmd .= " \"$hook_scope\" \"1\"";
+                } else if ($hook_scope !== '') {
+                    $post_cmd .= " \"$hook_scope\"";
                 }
-                $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
-            } else if ($post_hook !== '') {
-                $sanoid_conf_content .= "    force_post_snapshot_script = 1\n";
-                $post_hook = format_sanoid_hook_command($post_hook);
-                if ($hook_scope === 'daily') {
-                    $post_hook = $daily_filter . $post_hook;
-                }
-                $sanoid_conf_content .= "    post_snapshot_script = $post_hook\n";
-            } else if ($trigger !== '') {
-                $post_cmd = "$rc run_snapshot_post_hook_and_trigger \"$dataset\" \"\" \"30\" \"$trigger\"";
                 $sanoid_conf_content .= "    post_snapshot_script = $post_cmd\n";
             }
         }
@@ -1054,7 +1062,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=\"$plugin_path\" --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=$plugin_path --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
@@ -1135,6 +1143,28 @@ function scan_remote_known_hosts($host, $port) {
     return implode("\n", $keys);
 }
 
+// Returns the name of the first required field that is missing or blank in a
+// backups.cfg entry, or null when the entry has everything needed to be scheduled.
+// Only required fields are checked: optional fields (hooks, hook settings,
+// destination user/port, flags added by newer versions) may legitimately be
+// saved as empty strings and must never prevent a backup from being scheduled.
+function backup_cfg_missing_required_field($cfg) {
+    if (!is_array($cfg)) {
+        return 'type';
+    }
+    $required = array('type', 'source_dataset', 'destination_dataset', 'backup_cron');
+    $type = trim((string)($cfg['type'] ?? ''));
+    if ($type === 'remote' || $type === 'remote_generic') {
+        $required[] = 'destination_host';
+    }
+    foreach ($required as $key) {
+        if (trim((string)($cfg[$key] ?? '')) === '') {
+            return $key;
+        }
+    }
+    return null;
+}
+
 function update_backups_from_config() {
     BB_LOG("Updating backup cronjobs");
     global $managed_known_hosts_path;
@@ -1211,27 +1241,15 @@ function update_backups_from_config() {
             $destination_hosts[$destination_host.'|'.$port] = array('host' => $destination_host, 'port' => $port);
         }
 
-        $allow_empty = array();
-        if ($is_local) {
-            $allow_empty = array('destination_host');
-        } else if ($type == 'remote_generic') {
-            $allow_empty = array('destination_user', 'destination_port');
-        } else if ($type == 'remote') {
-            $allow_empty = array('destination_port');
+        if (($cfg["enable"] ?? '') != "yes") {
+            BB_VERBOSE("Skipped backup uid $uid because it is disabled");
+            continue;
         }
-
-        $any_empty = false;
-        foreach ($cfg as $key => $value) {
-            if (empty($value)) {
-                if (in_array($key, $allow_empty, true)) continue;
-
-                $any_empty = true;
-                BB_VERBOSE("Skipped backup uid $uid because of empty field $key");
-                break;
-            }
-        }
-        if ($cfg["enable"] != "yes" || $any_empty) {
-            BB_VERBOSE("Skipped backup uid $uid");
+        $missing_field = backup_cfg_missing_required_field($cfg);
+        if ($missing_field !== null) {
+            // BB_WARN passes its message through a shell; only log a sanitized uid.
+            $safe_uid = preg_replace('/[^A-Za-z0-9_-]/', '?', (string)$uid);
+            BB_WARN("Not scheduling backup uid $safe_uid because required field '$missing_field' is empty");
             continue;
         }
 
@@ -1257,10 +1275,14 @@ function update_backups_from_config() {
 }
 
 function start_long_running_task_echo_pid($cmd) {
+    ensure_log_file();
+    putenv("BUDDYBACKUP_DIRECT_LOG=1");
+    $_ENV['BUDDYBACKUP_DIRECT_LOG'] = '1';
+    $_SERVER['BUDDYBACKUP_DIRECT_LOG'] = '1';
     $descriptorspec = [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w']
+        0 => ['file', '/dev/null', 'r'],
+        1 => ['file', '/dev/null', 'w'],
+        2 => ['file', '/dev/null', 'w']
     ];
     $proc = proc_open($cmd, $descriptorspec, $pipes);
     $proc_details = proc_get_status($proc);

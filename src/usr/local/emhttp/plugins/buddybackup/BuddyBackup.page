@@ -522,9 +522,6 @@ Tag="buddybackup"
     function buddybackup_open_full_log() {
         buddybackup_scroll_to_log();
     }
-    function buddybackup_open_log_modal() {
-        buddybackup_scroll_to_log();
-    }
     $(function() {
         if (window.location.hash === '#buddybackup-log' || window.location.hash === '#log') {
             setTimeout(function() {

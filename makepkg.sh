@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DST_DIR="/mnt/user/sonic/buddybackup_plugin"
+DST_DIR="${DST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SRC_DIR="${DST_DIR}/src"
 
 TMP_DIR="/tmp/buddybackup_${RANDOM}"

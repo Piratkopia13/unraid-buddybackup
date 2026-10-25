@@ -76,6 +76,7 @@ subtest 'static analysis: self-healing receiver user and group setup' => sub {
     # 2. Verify user repair logic
     like($content, qr/usermod -g "\$\{username\}" "\$\{username\}"/, "Ensures primary group is set");
     like($content, qr/usermod -d "\/home\/\$\{username\}" -s \/bin\/bash "\$\{username\}"/, "Restores home directory and bash shell");
+    like($content, qr/usermod -p "\$\{repair_pwd\}" "\$\{username\}"/, "Sets unguessable password hash to clear shadow lock");
     like($content, qr/usermod -U "\$\{username\}"/, "Unlocks account");
 
     # 3. Verify directory permissions and ownership
@@ -197,6 +198,7 @@ SH
     like($log_content, qr/^groupadd -g 1003 buddybackup/m, "groupadd with matching GID 1003 was called");
     like($log_content, qr/^usermod -g buddybackup buddybackup/m, "usermod set primary group to buddybackup");
     like($log_content, qr/^usermod -d \/home\/buddybackup -s \/bin\/bash buddybackup/m, "usermod restored home to /home/buddybackup and shell to /bin/bash");
+    like($log_content, qr/^usermod -p \S+ buddybackup/m, "usermod set random password to ensure account is not locked in shadow");
     like($log_content, qr/^usermod -U buddybackup/m, "usermod unlocked buddybackup account");
     like($log_content, qr/^chmod 700 \/home\/buddybackup \/home\/buddybackup\/\.ssh/m, "chmod 700 secured home and .ssh directory");
     like($log_content, qr/^chown -R buddybackup:buddybackup \/home\/buddybackup\//m, "chown -R set recursive ownership to buddybackup:buddybackup");
