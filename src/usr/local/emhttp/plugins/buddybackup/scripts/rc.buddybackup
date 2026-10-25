@@ -815,7 +815,12 @@ EOF
 
     # Ensure user exists; create if missing
     if ! id "${username}" >/dev/null 2>&1; then
-        local pwd=$(openssl rand -base64 32)
+        local pwd
+        if command -v openssl >/dev/null 2>&1; then
+            pwd=$(openssl rand -base64 32)
+        else
+            pwd=$(head -c 32 /dev/urandom | base64)
+        fi
         useradd -m -s /bin/bash -p "${pwd}" "${username}" >/dev/null 2>&1
     fi
 
@@ -833,7 +838,22 @@ EOF
     fi
     usermod -g "${username}" "${username}" >/dev/null 2>&1 || true
     usermod -d "/home/${username}" -s /bin/bash "${username}" >/dev/null 2>&1 || true
+    local repair_pwd
+    if command -v openssl >/dev/null 2>&1; then
+        repair_pwd=$(openssl rand -base64 32)
+    else
+        repair_pwd=$(head -c 32 /dev/urandom | base64)
+    fi
+    usermod -p "${repair_pwd}" "${username}" >/dev/null 2>&1 || true
     usermod -U "${username}" >/dev/null 2>&1 || true
+
+    if [[ -f /boot/config/shadow ]] && grep -q "^${username}:" /boot/config/shadow 2>/dev/null; then
+        local shadow_entry
+        shadow_entry=$(grep "^${username}:" /etc/shadow 2>/dev/null || true)
+        if [[ -n "${shadow_entry}" ]]; then
+            sed -i "s|^${username}:.*|${shadow_entry}|" /boot/config/shadow 2>/dev/null || true
+        fi
+    fi
 
     mkdir -p "/home/${username}/.ssh" >/dev/null 2>&1
     chmod 700 "/home/${username}" "/home/${username}/.ssh" >/dev/null 2>&1
