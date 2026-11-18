@@ -519,7 +519,8 @@ PHP
     my ($cron) = $out =~ /SANOID_CRON_START\n(.*?)\nSANOID_CRON_END/s;
     ok(defined $cron, 'sanoid.cron upgraded successfully');
     like($cron, qr/^\* \* \* \* \* flock -n \/var\/lock\/buddybackup-sanoid-cron/m, 'upgraded to 1-minute ticker');
-    like($cron, qr/--cache-ttl=60/, 'includes --cache-ttl=60 in upgraded cron');
+    like($cron, qr/--force-update/, 'includes --force-update in upgraded cron');
+    unlike($cron, qr/--cache-ttl=60/, 'does not retain --cache-ttl=60 in upgraded cron');
     unlike($cron, qr/\*\/15/, 'legacy */15 ticker was removed');
 };
 

@@ -1062,7 +1062,7 @@ function enable_sanoid_cron() {
     $tz = ($plugin_cfg["UtcTimezone"] == "yes") ? "TZ=UTC" : "";
     $command_env = "PATH=$buddybackup_path" . ($tz !== "" ? " $tz" : "");
     $cron_content = "# Generated cron settings for plugin buddybackup\n";
-    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --cache-ttl=60 --configdir=$plugin_path --cron\" 2>&1 | $log_script\n";
+    $cron_content .= "* * * * * flock -n /var/lock/buddybackup-sanoid-cron -c \"$command_env $rc run_sanoid_cron --force-update --configdir=$plugin_path --cron\" 2>&1 | $log_script\n";
     ENSURE_SUCCESS(file_put_contents($sanoid_cron_path, $cron_content)!==false);
     BB_VERBOSE("Created $sanoid_cron_path");
     passthru("/usr/local/sbin/update_cron");
