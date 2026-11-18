@@ -42,7 +42,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script    = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php       = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $snap_page_file = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
+my $snap_page_file = File::Spec->catfile($plugin_dir, 'BuddyBackupSnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;
@@ -149,9 +149,9 @@ subtest 'rc.buddybackup.php validates and forwards hook settings' => sub {
     }
 };
 
-subtest 'SnapshotSettings.page exposes the snapshot hook fields' => sub {
+subtest 'BuddyBackupSnapshotSettings.page exposes the snapshot hook fields' => sub {
     foreach my $name (qw(pre_snapshot_script post_snapshot_script hook_timeout hook_failure_mode)) {
-        like($snap_page, qr/name="$name"/, "SnapshotSettings.page has a $name field");
+        like($snap_page, qr/name="$name"/, "BuddyBackupSnapshotSettings.page has a $name field");
     }
 
     like($snap_page, qr/Advanced:\s*snapshot hooks/, 'form has an advanced snapshot hooks section');

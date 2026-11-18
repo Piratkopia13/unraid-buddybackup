@@ -325,7 +325,7 @@ subtest "Section entries collapse and initial expand all toggle state" => sub {
     my %pages = (
         'Backups.page' => 'buddybackup-backup-list',
         'BuddysBackupSettings.page' => 'buddybackup-buddy-list',
-        'SnapshotSettings.page' => 'buddybackup-snapshot-creation-list',
+        'BuddyBackupSnapshotSettings.page' => 'buddybackup-snapshot-creation-list',
     );
 
     for my $pname (sort keys %pages) {
@@ -490,6 +490,21 @@ subtest "SSH port support for BuddyBackup remote host type" => sub {
     like($sh_content, qr/if\s*\[\[\s*\(\s*"\$\{type\}"\s*==\s*"remote"\s*\|\|\s*"\$\{type\}"\s*==\s*"remote_generic"\s*\)\s*\]\]\s*&&\s*\[\[\s*-n\s*"\$\{remote_port\}"\s*&&\s*"\$\{remote_port\}"\s*!=\s*"22"\s*\]\];\s*then\s*port_flag="--sshport=\$\{remote_port\}"/s, "rc.buddybackup sets --sshport flag for remote type when remote_port != 22");
     like($sh_content, qr/test_connection_cmd\s*\(\)\s*\{\s*local host=\$1\s*local destination_dataset=\$2\s*local remote_port="\$\{3:-22\}"/s, "rc.buddybackup test_connection_cmd accepts remote_port parameter");
     like($sh_content, qr/\('test_connection'\)\s*test_connection_cmd "\$\{2\}" "\$\{3\}" "\$\{4:-22\}"/s, "rc.buddybackup dispatches remote_port to test_connection_cmd");
+};
+
+subtest "Snapshot settings page avoids Unraid PageBuilder filename collision (Issue #16)" => sub {
+    my $legacy_snap_page = File::Spec->catfile($plugin_dir, "SnapshotSettings.page");
+    my $scoped_snap_page = File::Spec->catfile($plugin_dir, "BuddyBackupSnapshotSettings.page");
+
+    ok(!-e $legacy_snap_page, "SnapshotSettings.page does not exist (avoids Unraid PageBuilder collision with Snapshots plugin)");
+    ok(-f $scoped_snap_page, "BuddyBackupSnapshotSettings.page exists");
+
+    open my $fh, "<", $scoped_snap_page or die "Cannot open $scoped_snap_page: $!";
+    my $content = do { local $/; <$fh> };
+    close $fh;
+
+    like($content, qr/^Menu="BuddyBackup:2"\r?\n/m, "BuddyBackupSnapshotSettings.page preserves Menu=\"BuddyBackup:2\" header");
+    like($content, qr/^Title="Snapshot creation and pruning"\r?\n/m, "BuddyBackupSnapshotSettings.page preserves Title=\"Snapshot creation and pruning\" header");
 };
 
 done_testing();

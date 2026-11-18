@@ -44,7 +44,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script     = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php        = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $snap_page     = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
+my $snap_page     = File::Spec->catfile($plugin_dir, 'BuddyBackupSnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;

@@ -44,7 +44,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php    = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $snap_page = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
+my $snap_page = File::Spec->catfile($plugin_dir, 'BuddyBackupSnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;
@@ -76,15 +76,15 @@ subtest 'static assertions on scheduling, cron, and WebGUI code' => sub {
     like($rc, qr/run_sanoid_cron\(\)/, 'rc.buddybackup defines run_sanoid_cron()');
     like($rc, qr/['"]?run_sanoid_cron['"]?/, 'rc.buddybackup dispatches run_sanoid_cron');
 
-    # WebGUI SnapshotSettings.page
-    like($page, qr/name=['"]daily_hour['"]/, 'SnapshotSettings.page includes daily_hour dropdown');
-    like($page, qr/name=['"]daily_min['"]/, 'SnapshotSettings.page includes daily_min dropdown');
-    like($page, qr/name=['"]hook_scope['"]/, 'SnapshotSettings.page includes hook_scope dropdown');
-    like($page, qr/Scheduled snapshot time/, 'SnapshotSettings.page uses Scheduled snapshot time label');
-    like($page, qr/fa-clock-o/, 'SnapshotSettings.page includes clock icon in header telemetry badge');
-    like($page, qr/buddybackup-schedule-summary/, 'SnapshotSettings.page includes live dynamic schedule summary container');
-    like($page, qr/format_schedule_time/, 'SnapshotSettings.page defines format_schedule_time JavaScript function');
-    like($page, qr/update_schedule_summary/, 'SnapshotSettings.page defines update_schedule_summary JavaScript function');
+    # WebGUI BuddyBackupSnapshotSettings.page
+    like($page, qr/name=['"]daily_hour['"]/, 'BuddyBackupSnapshotSettings.page includes daily_hour dropdown');
+    like($page, qr/name=['"]daily_min['"]/, 'BuddyBackupSnapshotSettings.page includes daily_min dropdown');
+    like($page, qr/name=['"]hook_scope['"]/, 'BuddyBackupSnapshotSettings.page includes hook_scope dropdown');
+    like($page, qr/Scheduled snapshot time/, 'BuddyBackupSnapshotSettings.page uses Scheduled snapshot time label');
+    like($page, qr/fa-clock-o/, 'BuddyBackupSnapshotSettings.page includes clock icon in header telemetry badge');
+    like($page, qr/buddybackup-schedule-summary/, 'BuddyBackupSnapshotSettings.page includes live dynamic schedule summary container');
+    like($page, qr/format_schedule_time/, 'BuddyBackupSnapshotSettings.page defines format_schedule_time JavaScript function');
+    like($page, qr/update_schedule_summary/, 'BuddyBackupSnapshotSettings.page defines update_schedule_summary JavaScript function');
 };
 
 # ---------------------------------------------------------------------------
