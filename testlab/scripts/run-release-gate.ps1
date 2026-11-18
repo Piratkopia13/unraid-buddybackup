@@ -15,9 +15,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "testlab-logging.ps1")
+. (Join-Path $PSScriptRoot "unraid-payload-cache.ps1")
 . (Join-Path $PSScriptRoot "testlab-plugin-source.ps1")
 . (Join-Path $PSScriptRoot "testlab-repository-history.ps1")
 . (Join-Path $PSScriptRoot "testlab-release-matrix.ps1")
+Import-Module -Name (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\modules\TestLab.Platform\TestLab.Platform.psm1")).ProviderPath -DisableNameChecking
 
 function Require-File {
     param([string]$Path)
@@ -857,6 +859,10 @@ Require-File -Path $nodecProvisionScript
 
 $lab = Get-Json -Path $resolvedLabConfig
 Apply-ReleaseGateOverrides -Lab $lab -CurrentCandidatePlugin $CurrentCandidatePlugin -PreviousReleaseVersion $PreviousReleaseVersion
+$resolvedUnraidVersions = @(Resolve-LabUnraidVersions -Lab $lab -AllowOfflineFallback:(-not $Execute))
+foreach ($resolvedItem in $resolvedUnraidVersions) {
+    Write-Host "[testlab] Resolved $($resolvedItem.Target) '$($resolvedItem.RequestedVersion)' -> '$($resolvedItem.ResolvedVersion)' (source=$($resolvedItem.Source))"
+}
 $labProvider = [string](Get-ObjectValue -Object $lab -Name "provider")
 $genericSmokeCfg = Get-GenericSmokeConfig -Lab $lab
 $resolvedMatrixProfile = $null
@@ -881,7 +887,9 @@ $manifestPath = $null
 
 $safeWorkingDirectory = Get-SafeHostWorkingDirectory
 Push-Location $safeWorkingDirectory
+$wslKeepAlive = $null
 try {
+    $wslKeepAlive = Start-TestLabWslKeepAlive -Lab $lab -DoExecute:$Execute
     $startedAt = Get-Date
     $gitInfo = Get-GitPreflight
     $historyRootPath = Get-HistoryRoot -ConfiguredHistoryRoot $HistoryRoot -Lab $lab
@@ -1255,5 +1263,6 @@ try {
         throw "Release gate failed. Review $manifestPath"
     }
 } finally {
+    Stop-TestLabWslKeepAlive -Process $wslKeepAlive
     Pop-Location
 }

@@ -116,3 +116,53 @@ function Invoke-WslRootBash {
         Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
     }
 }
+
+function Start-TestLabWslKeepAlive {
+    param(
+        $Lab,
+        [switch]$DoExecute,
+        [int]$DurationSeconds = 3600
+    )
+
+    if (-not $DoExecute) {
+        return $null
+    }
+
+    $provider = [string](Get-ObjectValue -Object $Lab -Name "provider")
+    if ($provider -ne "windows-local") {
+        return $null
+    }
+
+    $wslCmd = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if ($null -eq $wslCmd) {
+        return $null
+    }
+
+    $distro = [string](Get-ObjectValue -Object $Lab -Path "wslQemu.distro")
+    if ([string]::IsNullOrWhiteSpace($distro)) {
+        $distro = "Ubuntu"
+    }
+
+    try {
+        return Start-Process -FilePath $wslCmd.Source -ArgumentList @("-d", $distro, "--", "sleep", [string]$DurationSeconds) -PassThru -WindowStyle Hidden
+    } catch {
+        Write-Warning "[testlab] Unable to start WSL keepalive for distro '$distro': $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Stop-TestLabWslKeepAlive {
+    param($Process)
+
+    if ($null -eq $Process) {
+        return
+    }
+
+    try {
+        if (-not $Process.HasExited) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Ignore cleanup errors if the keepalive already exited
+    }
+}

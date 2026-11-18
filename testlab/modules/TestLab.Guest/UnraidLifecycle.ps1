@@ -414,9 +414,20 @@ if [ -f "$plugin_root/backups.cfg" ] && grep -Eq '^destination_host="' "$plugin_
     remote_hosts_configured=1
 fi
 
-if [ "$remote_hosts_configured" -eq 1 ] && ! grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
-    echo "managed known_hosts is not ready" >&2
-    exit 1
+if [ "$remote_hosts_configured" -eq 1 ]; then
+    if ! grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+        echo "managed known_hosts is not ready" >&2
+        exit 1
+    fi
+    if ! grep -Eq 'ssh-ed25519' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+        while IFS= read -r rhost; do
+            [ -n "$rhost" ] || continue
+            if ssh-keyscan -T 2 -t ed25519 "$rhost" 2>/dev/null | grep -q 'ssh-ed25519'; then
+                echo "managed known_hosts is missing ssh-ed25519 for $rhost" >&2
+                exit 1
+            fi
+        done < <(awk -F= '$1=="destination_host" {value=$2; gsub(/^"|"$/, "", value); if (value != "") print value}' "$plugin_root/backups.cfg" 2>/dev/null || true)
+    fi
 fi
 
 echo "buddybackup post-reboot ready"
@@ -576,8 +587,23 @@ fi
 sysctl -w net.ipv4.ip_nonlocal_bind=1 >/dev/null 2>&1 || true
 
 # 2. Maintain PerSourcePenalties no
+if [ ! -f /boot/config/ssh/sshd_config ] && [ -f /etc/ssh/sshd_config ]; then
+    mkdir -p /boot/config/ssh
+    cp -f /etc/ssh/sshd_config /boot/config/ssh/sshd_config
+    chmod 600 /boot/config/ssh/sshd_config 2>/dev/null || true
+fi
+sshd_had_penalties_no=0
+if [ -f /etc/ssh/sshd_config ] && grep -Eiq '^[[:space:]]*PerSourcePenalties[[:space:]]+no([[:space:]]|$)' /etc/ssh/sshd_config; then
+    sshd_had_penalties_no=1
+fi
 ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
 ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+if [ "$sshd_had_penalties_no" -eq 0 ] && [ -r /var/run/sshd.pid ]; then
+    sshd_pid="$(cat /var/run/sshd.pid 2>/dev/null || true)"
+    if [ -n "$sshd_pid" ] && kill -0 "$sshd_pid" 2>/dev/null; then
+        kill -HUP "$sshd_pid" 2>/dev/null || true
+    fi
+fi
 
 # 3. Ensure persistent /boot/config/go has early SSH guard at the top
 if [ -f "$go_file" ]; then
@@ -651,8 +677,23 @@ ensure_sshd_global_option() {
     ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
 }
 
+if [ ! -f /boot/config/ssh/sshd_config ] && [ -f /etc/ssh/sshd_config ]; then
+    mkdir -p /boot/config/ssh
+    cp -f /etc/ssh/sshd_config /boot/config/ssh/sshd_config
+    chmod 600 /boot/config/ssh/sshd_config 2>/dev/null || true
+fi
+sshd_had_penalties_no=0
+if [ -f /etc/ssh/sshd_config ] && grep -Eiq '^[[:space:]]*PerSourcePenalties[[:space:]]+no([[:space:]]|$)' /etc/ssh/sshd_config; then
+    sshd_had_penalties_no=1
+fi
 ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
 ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+if [ "$sshd_had_penalties_no" -eq 0 ] && [ -r /var/run/sshd.pid ]; then
+    sshd_pid="$(cat /var/run/sshd.pid 2>/dev/null || true)"
+    if [ -n "$sshd_pid" ] && kill -0 "$sshd_pid" 2>/dev/null; then
+        kill -HUP "$sshd_pid" 2>/dev/null || true
+    fi
+fi
 #BUDDYBACKUP_SSHD_GUARD_END
 EOF_GUARD
         if [[ "$head_line" =~ ^#! ]]; then
@@ -680,12 +721,12 @@ cat > "$post_boot_refresh_script" <<'EOF_BUDDYBACKUP_POSTBOOT_REFRESH'
 set -euo pipefail
 
 # Guard Unraid rc.sshd against port bind race during delayed service reloads
-if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V4' /etc/rc.d/rc.sshd; then
+if [ -f /etc/rc.d/rc.sshd ] && ! grep -Fq 'BUDDYBACKUP_RACE_GUARD_V5' /etc/rc.d/rc.sshd; then
     if command -v perl >/dev/null 2>&1; then
         perl -0777 -i -pe '
-            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V4\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
+            s/(sshd_reload\(\)\{).*?(_orig_sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n$2/s
             or
-            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V4\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 50 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  local w=0; while [[ \$w -lt 50 ]]; do if \$SSHD 2>\/dev\/null && pgrep -x sshd >\/dev\/null 2>&1; then break; fi; sleep 0.2; w=\$((w+1)); done\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
+            s/(sshd_reload\(\)\{)/$1\n  #BUDDYBACKUP_RACE_GUARD_V5\n  local old_pid=""\n  [[ -r \$PID ]] && old_pid=\$(cat \$PID)\n  if [[ -n "\$old_pid" ]] && kill -0 "\$old_pid" 2>\/dev\/null; then\n    kill "\$old_pid" 2>\/dev\/null || true\n    local k=0; while kill -0 "\$old_pid" 2>\/dev\/null && [[ \$k -lt 30 ]]; do sleep 0.1; k=\$((k+1)); done\n  fi\n  sshd_build\n  sleep 0.5\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then\n    local w=0; while [[ \$w -lt 25 ]]; do if \$SSHD 2>\/dev\/null; then break; fi; sleep 0.2; w=\$((w+1)); done\n  fi\n  if ! pgrep -x sshd >\/dev\/null 2>&1; then \/etc\/rc.d\/rc.sshd start >\/dev\/null 2>&1 || true; fi\n  return 0\n}\n_orig_sshd_reload(){/s
         ' /etc/rc.d/rc.sshd 2>/dev/null || true
     fi
 fi
@@ -721,8 +762,23 @@ ensure_sshd_global_option() {
     ' "$target_file" > "$tmp_file" && mv "$tmp_file" "$target_file"
 }
 
+if [ ! -f /boot/config/ssh/sshd_config ] && [ -f /etc/ssh/sshd_config ]; then
+    mkdir -p /boot/config/ssh
+    cp -f /etc/ssh/sshd_config /boot/config/ssh/sshd_config
+    chmod 600 /boot/config/ssh/sshd_config 2>/dev/null || true
+fi
+sshd_had_penalties_no=0
+if [ -f /etc/ssh/sshd_config ] && grep -Eiq '^[[:space:]]*PerSourcePenalties[[:space:]]+no([[:space:]]|$)' /etc/ssh/sshd_config; then
+    sshd_had_penalties_no=1
+fi
 ensure_sshd_global_option /etc/ssh/sshd_config "PerSourcePenalties no"
 ensure_sshd_global_option /boot/config/ssh/sshd_config "PerSourcePenalties no"
+if [ "$sshd_had_penalties_no" -eq 0 ] && [ -r /var/run/sshd.pid ]; then
+    sshd_pid="$(cat /var/run/sshd.pid 2>/dev/null || true)"
+    if [ -n "$sshd_pid" ] && kill -0 "$sshd_pid" 2>/dev/null; then
+        kill -HUP "$sshd_pid" 2>/dev/null || true
+    fi
+fi
 
 attempts=60
 while [ "$attempts" -gt 0 ]; do
@@ -752,10 +808,15 @@ while [ "$attempts" -gt 0 ]; do
         fi
 
         all_reachable=1
+        ed25519_offered=0
         for rhost in "${remote_hosts[@]}"; do
-            if ! ssh-keyscan -T 3 "$rhost" 2>/dev/null | grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-'; then
+            scan_out="$(ssh-keyscan -T 3 -t ed25519,ecdsa,rsa "$rhost" 2>/dev/null || true)"
+            if ! printf '%s\n' "$scan_out" | grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-'; then
                 all_reachable=0
                 break
+            fi
+            if printf '%s\n' "$scan_out" | grep -q 'ssh-ed25519'; then
+                ed25519_offered=1
             fi
         done
 
@@ -763,7 +824,9 @@ while [ "$attempts" -gt 0 ]; do
             bb_ready=0
             if [ "${#remote_hosts[@]}" -gt 0 ]; then
                 if grep -Eq 'ssh-(ed25519|rsa)|ecdsa-sha2-' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
-                    bb_ready=1
+                    if [ "$ed25519_offered" -eq 0 ] || grep -Eq 'ssh-ed25519' "$plugin_root/buddybackup_known_hosts" 2>/dev/null; then
+                        bb_ready=1
+                    fi
                 fi
             else
                 bb_ready=1

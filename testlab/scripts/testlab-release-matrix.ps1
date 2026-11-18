@@ -1,3 +1,7 @@
+if (-not (Get-Command Resolve-UnraidVersionSpec -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot "unraid-payload-cache.ps1")
+}
+
 function Get-TestLabReleaseMatrixObjectValue {
     param(
         $Object,
@@ -134,6 +138,14 @@ function Get-TestLabReleaseMatrixDefinition {
     }
     if ([string]::IsNullOrWhiteSpace($latestSupportedUnraidVersion)) {
         throw "lab.releaseGate.latestSupportedUnraidVersion is required for release matrix profile '$ProfileName'."
+    }
+
+    $wslCfg = Get-TestLabReleaseMatrixObjectValue -Object $Lab -Name "wslQemu"
+    if (Test-UnraidLatestVersionToken -Version $previousCertifiedUnraidVersion) {
+        $previousCertifiedUnraidVersion = (Resolve-UnraidVersionSpec -Version $previousCertifiedUnraidVersion -WslConfig $wslCfg -AllowOfflineFallback).ResolvedVersion
+    }
+    if (Test-UnraidLatestVersionToken -Version $latestSupportedUnraidVersion) {
+        $latestSupportedUnraidVersion = (Resolve-UnraidVersionSpec -Version $latestSupportedUnraidVersion -WslConfig $wslCfg -AllowOfflineFallback).ResolvedVersion
     }
 
     switch ($normalizedProfile) {
