@@ -42,6 +42,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "wsl-common.ps1")
+. (Join-Path $PSScriptRoot "unraid-payload-cache.ps1")
 
 # Locate lab config
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -59,6 +60,11 @@ if ([string]::IsNullOrWhiteSpace($LabConfig)) {
 
 $resolvedConfigPath = (Resolve-Path $LabConfig).Path
 $configJson = Get-Content -Raw -LiteralPath $resolvedConfigPath | ConvertFrom-Json
+try {
+    Resolve-LabUnraidVersions -Lab $configJson -AllowOfflineFallback | Out-Null
+} catch {
+    # Keep UI status usable even if offline and no fallback URL is configured
+}
 
 # Helper: Test TCP port
 function Test-TcpPort {

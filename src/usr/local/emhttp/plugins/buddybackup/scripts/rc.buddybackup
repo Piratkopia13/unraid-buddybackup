@@ -564,19 +564,21 @@ run_sanoid_cron() {
     fi
 
     local conf_dir="${plugin_path}"
+    local sanoid_args=()
     local prev_arg=""
     local arg
     for arg in "$@"; do
         if [[ "${prev_arg}" == "--configdir" ]]; then
             conf_dir="${arg}"
             prev_arg=""
-            continue
-        fi
-        if [[ "${arg}" =~ ^--configdir=(.*)$ ]]; then
+        elif [[ "${arg}" =~ ^--configdir=(.*)$ ]]; then
             conf_dir="${BASH_REMATCH[1]}"
         elif [[ "${arg}" == "--configdir" ]]; then
             prev_arg="--configdir"
+        elif [[ "${arg}" == "--cache-ttl=60" || "${arg}" == "--force-update" ]]; then
+            continue
         fi
+        sanoid_args+=("${arg}")
     done
 
     local conf_file="${conf_dir}/sanoid.conf"
@@ -635,7 +637,9 @@ run_sanoid_cron() {
 
     export PATH="${PATH:-/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin"
     trap - EXIT INT TERM HUP
-    exec "${sanoid_bin}" "$@"
+    # Always pass --force-update so sanoid refreshes its snapshot cache from ZFS
+    # on every 1-minute cron run (Issue #41).
+    exec "${sanoid_bin}" --force-update "${sanoid_args[@]}"
 }
 
 load_dataset_snapshot_hooks() {

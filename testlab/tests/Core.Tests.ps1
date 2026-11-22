@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Unit tests for TestLab.Core and TestLab.Platform modules.
 
@@ -491,6 +491,91 @@ Assert-Test "Stop-WslLabInstance dry run calculates work root and executes clean
     $dryRunOutput = @(Stop-WslLabInstance -InstanceName "nodeTest" 6>&1)
     # Also test absolute path variant
     $dryRunAbsOutput = @(Stop-WslLabInstance -InstanceName "/tmp/custom-work-root" 6>&1)
+}
+
+# ---------------------------------------------------------------------------
+# Test Group 10: Dynamic Unraid Version & Catalog Resolution
+# ---------------------------------------------------------------------------
+Assert-Test "Resolve-UnraidVersionSpec resolves 'latest' from catalog and prefers config-map URLs" {
+    . (Join-Path $workspaceRoot "testlab\scripts\unraid-payload-cache.ps1")
+
+    $mockCatalog = @(
+        [pscustomobject]@{
+            version = "7.5.0-rc1"
+            public = $true
+            supportStatus = "superseded"
+            url = "https://releases.unraid.net/dl/next/7.5.0-rc1/unRAIDServer-7.5.0-rc1-x86_64.zip"
+        },
+        [pscustomobject]@{
+            version = "7.4.0"
+            public = $true
+            supportStatus = "supported"
+            url = "https://releases.unraid.net/dl/stable/7.4.0/hash740/unRAIDServer-7.4.0-x86_64.zip?utm_source=docs"
+            md5 = "ef3306cbb93cc092cb04a1f158e50397"
+            sha256 = "c988c579fc68b31406d41473a4ad9e2b95ffbdb758ab0cb691669edc0a396c7c"
+        },
+        [pscustomobject]@{
+            version = "7.3.5"
+            public = $true
+            supportStatus = "security-updates"
+            url = "https://releases.unraid.net/dl/stable/7.3.5/hash735/unRAIDServer-7.3.5-x86_64.zip?utm_source=docs"
+        }
+    )
+
+    $wslCfgWithoutOverride = [pscustomobject]@{
+        unraidDownloadUrls = [pscustomobject]@{
+            "7.2.6" = "https://releases.unraid.net/dl/stable/7.2.6/hash726/unRAIDServer-7.2.6-x86_64.zip"
+        }
+    }
+
+    $resolvedLatest = Resolve-UnraidVersionSpec -Version "latest" -WslConfig $wslCfgWithoutOverride -CatalogOverride $mockCatalog
+    if ($resolvedLatest.ResolvedVersion -ne "7.4.0") {
+        throw "Expected 'latest' to resolve to '7.4.0', got '$($resolvedLatest.ResolvedVersion)'"
+    }
+    if ($resolvedLatest.DownloadUrl -ne "https://releases.unraid.net/dl/stable/7.4.0/hash740/unRAIDServer-7.4.0-x86_64.zip") {
+        throw "Expected tracking param stripped from catalog URL, got '$($resolvedLatest.DownloadUrl)'"
+    }
+    if ($resolvedLatest.Source -ne "unraid-catalog") {
+        throw "Expected source 'unraid-catalog', got '$($resolvedLatest.Source)'"
+    }
+
+    # Explicit config-map URL takes precedence over catalog URL for explicit versions
+    $wslCfgWithOverride = [pscustomobject]@{
+        unraidDownloadUrls = [pscustomobject]@{
+            "7.4.0" = "https://custom.local/unraid-7.4.0.zip"
+        }
+    }
+    $resolvedExplicit = Resolve-UnraidVersionSpec -Version "7.4.0" -WslConfig $wslCfgWithOverride -CatalogOverride $mockCatalog
+    if ($resolvedExplicit.DownloadUrl -ne "https://custom.local/unraid-7.4.0.zip" -or $resolvedExplicit.Source -ne "config-map") {
+        throw "Expected config-map override for 7.4.0, got '$($resolvedExplicit.DownloadUrl)' ($($resolvedExplicit.Source))"
+    }
+
+    # Resolve-LabUnraidVersions updates nodeB and releaseGate while leaving nodeA untouched
+    $mockLab = [pscustomobject]@{
+        nodes = [pscustomobject]@{
+            nodeA = [pscustomobject]@{ unraidVersion = "7.2.6" }
+            nodeB = [pscustomobject]@{ unraidVersion = "latest" }
+        }
+        releaseGate = [pscustomobject]@{
+            previousCertifiedUnraidVersion = "7.2.6"
+            latestSupportedUnraidVersion = "latest"
+        }
+        wslQemu = $wslCfgWithoutOverride
+    }
+
+    $changes = @(Resolve-LabUnraidVersions -Lab $mockLab -CatalogOverride $mockCatalog)
+    if ($changes.Count -ne 2) {
+        throw "Expected 2 resolved targets, got $($changes.Count)"
+    }
+    if ($mockLab.nodes.nodeA.unraidVersion -ne "7.2.6") {
+        throw "Expected nodeA to remain '7.2.6', got '$($mockLab.nodes.nodeA.unraidVersion)'"
+    }
+    if ($mockLab.nodes.nodeB.unraidVersion -ne "7.4.0" -or $mockLab.nodes.nodeB.unraidVersionRequested -ne "latest") {
+        throw "Expected nodeB to resolve to '7.4.0' with requested='latest', got '$($mockLab.nodes.nodeB.unraidVersion)' / '$($mockLab.nodes.nodeB.unraidVersionRequested)'"
+    }
+    if ($mockLab.releaseGate.latestSupportedUnraidVersion -ne "7.4.0") {
+        throw "Expected releaseGate.latestSupportedUnraidVersion to resolve to '7.4.0', got '$($mockLab.releaseGate.latestSupportedUnraidVersion)'"
+    }
 }
 
 Write-Host "--------------------------------------------------"

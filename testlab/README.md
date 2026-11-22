@@ -319,8 +319,8 @@ The testlab includes a fast unit and regression test runner (< 3 seconds executi
 - For the local provider, keep `lab.nodes.nodeA.host` and `lab.nodes.nodeB.host` on `127.0.0.1` with distinct SSH-forwarded ports.
 - Default forwarded ports are nodeA `2222` / `8080` / `8443` and nodeB `2223` / `8081` / `8444` for SSH / HTTP / HTTPS. You can override the WebGUI ports with `nodes.nodeA.webGuiHttpPort`, `nodes.nodeA.webGuiHttpsPort`, `nodes.nodeB.webGuiHttpPort`, and `nodes.nodeB.webGuiHttpsPort`.
 - If a preferred WebGUI port is already busy, the probe can fall back to another localhost port for that run. Use the console output or the latest `local-provider-*.json` report instead of assuming the default ports were used.
-- `wslQemu.unraidDownloadUrlTemplate` still works when Unraid exposes a predictable versioned URL pattern.
-- If a newer release uses a hashed direct zip URL instead, set `wslQemu.unraidDownloadUrls.<version>` for that exact version.
+- Setting `nodes.<node>.unraidVersion` or `releaseGate.latestSupportedUnraidVersion` to `"latest"` (or `"latest-supported"`) automatically resolves the latest `supported` public release from Unraid's release catalog (`https://releases.unraid.net/json?includePublic=1`) and discovers its download URL automatically.
+- `wslQemu.unraidDownloadUrls.<version>` overrides or pins an exact direct zip URL for that version (used before catalog lookup), and `wslQemu.unraidDownloadUrlTemplate` remains as a fallback when a predictable URL pattern works.
 - If automatic Unraid zip download still fails, place `unraid-<version>.zip` manually under `.testlab/cache`; the local provider will extract the payload from there.
 - `wslQemu.dataDiskSizeGB` controls the dedicated non-array data disk used for base ZFS setup.
 - `wslQemu.networkDeviceModel` controls the QEMU guest NIC model for the local WSL/QEMU provider. It now defaults to `virtio-net-pci`, and the probe/report records the chosen NIC model and stable MAC address for each guest.

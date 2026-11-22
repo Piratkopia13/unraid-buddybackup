@@ -44,7 +44,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php    = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $snap_page = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
+my $snap_page = File::Spec->catfile($plugin_dir, 'BuddyBackupSnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;
@@ -62,9 +62,10 @@ my $page = slurp($snap_page);
 # 1. Static assertions
 # ---------------------------------------------------------------------------
 subtest 'static assertions on scheduling, cron, and WebGUI code' => sub {
-    # 1-minute ticker with --cache-ttl=60
+    # 1-minute ticker with --force-update (avoids stale/incomplete sanoid cache duplicates, Issue #41)
     like($php, qr/\*\s+\*\s+\*\s+\*\s+\*\s+flock\s+-n\s+\/var\/lock\/buddybackup-sanoid-cron/, 'uses 1-minute cron ticker (* * * * *)');
-    like($php, qr/--cache-ttl=60/, 'includes --cache-ttl=60 flag');
+    like($php, qr/--force-update/, 'includes --force-update flag');
+    unlike($php, qr/--cache-ttl=60/, 'does not retain --cache-ttl=60 flag');
     unlike($php, qr/\*\/15\s+\*\s+\*\s+\*\s+\*\s+flock.*buddybackup-sanoid-cron/, 'does not retain legacy 15-minute cron ticker');
 
     # Helpers in PHP
@@ -75,15 +76,15 @@ subtest 'static assertions on scheduling, cron, and WebGUI code' => sub {
     like($rc, qr/run_sanoid_cron\(\)/, 'rc.buddybackup defines run_sanoid_cron()');
     like($rc, qr/['"]?run_sanoid_cron['"]?/, 'rc.buddybackup dispatches run_sanoid_cron');
 
-    # WebGUI SnapshotSettings.page
-    like($page, qr/name=['"]daily_hour['"]/, 'SnapshotSettings.page includes daily_hour dropdown');
-    like($page, qr/name=['"]daily_min['"]/, 'SnapshotSettings.page includes daily_min dropdown');
-    like($page, qr/name=['"]hook_scope['"]/, 'SnapshotSettings.page includes hook_scope dropdown');
-    like($page, qr/Scheduled snapshot time/, 'SnapshotSettings.page uses Scheduled snapshot time label');
-    like($page, qr/fa-clock-o/, 'SnapshotSettings.page includes clock icon in header telemetry badge');
-    like($page, qr/buddybackup-schedule-summary/, 'SnapshotSettings.page includes live dynamic schedule summary container');
-    like($page, qr/format_schedule_time/, 'SnapshotSettings.page defines format_schedule_time JavaScript function');
-    like($page, qr/update_schedule_summary/, 'SnapshotSettings.page defines update_schedule_summary JavaScript function');
+    # WebGUI BuddyBackupSnapshotSettings.page
+    like($page, qr/name=['"]daily_hour['"]/, 'BuddyBackupSnapshotSettings.page includes daily_hour dropdown');
+    like($page, qr/name=['"]daily_min['"]/, 'BuddyBackupSnapshotSettings.page includes daily_min dropdown');
+    like($page, qr/name=['"]hook_scope['"]/, 'BuddyBackupSnapshotSettings.page includes hook_scope dropdown');
+    like($page, qr/Scheduled snapshot time/, 'BuddyBackupSnapshotSettings.page uses Scheduled snapshot time label');
+    like($page, qr/fa-clock-o/, 'BuddyBackupSnapshotSettings.page includes clock icon in header telemetry badge');
+    like($page, qr/buddybackup-schedule-summary/, 'BuddyBackupSnapshotSettings.page includes live dynamic schedule summary container');
+    like($page, qr/format_schedule_time/, 'BuddyBackupSnapshotSettings.page defines format_schedule_time JavaScript function');
+    like($page, qr/update_schedule_summary/, 'BuddyBackupSnapshotSettings.page defines update_schedule_summary JavaScript function');
 };
 
 # ---------------------------------------------------------------------------
@@ -180,7 +181,8 @@ PHP
         my $generated = `php "$test_php" 2>&1`;
         ok($generated, 'enable_sanoid_cron generated cron file');
         like($generated, qr/^\* \* \* \* \* flock -n \/var\/lock\/buddybackup-sanoid-cron/m, 'cron uses * * * * * ticker');
-        like($generated, qr/--cache-ttl=60/, 'invocation includes --cache-ttl=60');
+        like($generated, qr/--force-update/, 'invocation includes --force-update');
+        unlike($generated, qr/--cache-ttl=60/, 'invocation does NOT include --cache-ttl=60');
         unlike($generated, qr/\*\/15/, 'cron does NOT contain */15');
     };
 
@@ -577,7 +579,7 @@ CONF
 
         my $env_str = join(' ', map { "$_=\"$extra_env->{$_}\"" } keys %$extra_env);
         my $cmd = sprintf(
-            'PATH=%s:$PATH %s sanoid_bin=%s bash %s run_sanoid_cron --cache-ttl=60 --configdir=%s --cron',
+            'PATH=%s:$PATH %s sanoid_bin=%s bash %s run_sanoid_cron --force-update --configdir=%s --cron',
             quotemeta($mock_bin),
             $env_str,
             quotemeta($mock_sanoid),
@@ -612,7 +614,21 @@ CONF
     is($code3, 0, 'exited 0 when all configured pools are imported');
     ok(-f $log_file, 'sanoid was invoked when all configured pools and datasets are imported');
     my $log_content = -f $log_file ? slurp($log_file) : '';
-    like($log_content, qr/sanoid_invoked\s+--cache-ttl=60\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
+    like($log_content, qr/sanoid_invoked\s+--force-update\s+--configdir=.*--cron/, 'sanoid invoked with correct CLI flags');
+
+    # 4b. Legacy --cache-ttl=60 cron invocation is upgraded to --force-update without duplication (Issue #41)
+    unlink $log_file if -f $log_file;
+    my $legacy_cmd = sprintf(
+        'PATH=%s:$PATH sanoid_bin=%s bash %s run_sanoid_cron --cache-ttl=60 --configdir=%s --cron',
+        quotemeta($mock_bin),
+        quotemeta($mock_sanoid),
+        quotemeta($rc_script),
+        quotemeta($conf_dir)
+    );
+    my $legacy_out = `$legacy_cmd 2>&1`;
+    is($? >> 8, 0, 'legacy --cache-ttl=60 invocation exited 0');
+    my $legacy_log = -f $log_file ? slurp($log_file) : '';
+    like($legacy_log, qr/^sanoid_invoked\s+--force-update\s+--configdir=.*--cron$/m, 'legacy --cache-ttl=60 replaced with single --force-update');
 
     # 5. Pools imported, but a configured dataset does not exist in zfs list
     unlink $log_file if -f $log_file;

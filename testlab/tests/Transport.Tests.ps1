@@ -343,8 +343,8 @@ Assert-Test "Invoke-RemoteBash delegates large scripts to upload mechanism in dr
     if ($result.Output -ne "dry-run") {
         throw "Expected dry-run Output == 'dry-run', got '$($result.Output)'"
     }
-    if ($result.Command -ne $largeScript) {
-        throw "Expected Command to record the logged script content"
+    if ($result.Command -ne "bash <large-script-test>") {
+        throw "Expected Command to record summarized upload label 'bash <large-script-test>', got '$($result.Command)'"
     }
 }
 

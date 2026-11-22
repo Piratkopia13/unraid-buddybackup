@@ -28,6 +28,11 @@ $scenariosRoot = Join-Path $workspaceRoot "testlab\scenarios"
 Import-Module -Name (Resolve-Path -LiteralPath (Join-Path $modulesRoot "TestLab.Core\TestLab.Core.psm1")).ProviderPath -DisableNameChecking
 Import-Module -Name (Resolve-Path -LiteralPath (Join-Path $modulesRoot "TestLab.Transport\TestLab.Transport.psm1")).ProviderPath -DisableNameChecking
 Import-Module -Name (Resolve-Path -LiteralPath (Join-Path $modulesRoot "TestLab.Guest\TestLab.Guest.psm1")).ProviderPath -DisableNameChecking
+Import-Module -Name (Resolve-Path -LiteralPath (Join-Path $modulesRoot "TestLab.Platform\TestLab.Platform.psm1")).ProviderPath -DisableNameChecking
+
+if (-not (Get-Command Resolve-LabUnraidVersions -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot "unraid-payload-cache.ps1")
+}
 
 # ---------------- Matrix Validation & Resolution Helpers ----------------
 
@@ -413,6 +418,10 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (-not (Test-Path -LiteralPath $MatrixConfig)) { throw "Missing file: $MatrixConfig" }
 
     $lab = Read-TestLabJson -Path $LabConfig
+    $resolvedUnraidVersions = @(Resolve-LabUnraidVersions -Lab $lab -AllowOfflineFallback:(-not $Execute))
+    foreach ($resolvedItem in $resolvedUnraidVersions) {
+        Write-Host "[testlab] Resolved $($resolvedItem.Target) '$($resolvedItem.RequestedVersion)' -> '$($resolvedItem.ResolvedVersion)' (source=$($resolvedItem.Source))"
+    }
     $matrix = Read-TestLabJson -Path $MatrixConfig
     $matrixCells = @($matrix.cells)
     $matrixVersionResolution = Use-ProvisionedMatrixUnraidVersions -Lab $lab -MatrixCells $matrixCells -Matrix $matrix
@@ -440,7 +449,9 @@ if ($MyInvocation.InvocationName -ne '.') {
     $result = @()
     $cellIndex = 0
     $configuredBuildCacheRoot = Get-ObjectValue -Object (Get-ObjectValue -Object $lab -Name "plugin") -Name "buildCacheRoot"
+    $wslKeepAlive = Start-TestLabWslKeepAlive -Lab $lab -DoExecute:$Execute
 
+    try {
     foreach ($cell in $matrixCells) {
         $cellIndex += 1
         $nodeA = Get-TestLabNodeValue -Object $cell -NodeName 'nodeA'
@@ -574,4 +585,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     Write-Host "[testlab] Summary: $passCount passed, $failCount failed"
     Write-TestLabResultTable -Rows $result
     Write-Host "[testlab] Results written to $outPath"
+    } finally {
+        Stop-TestLabWslKeepAlive -Process $wslKeepAlive
+    }
 }

@@ -44,7 +44,7 @@ my $plugin_dir = File::Spec->catdir(
 );
 my $rc_script = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup');
 my $rc_php    = File::Spec->catfile($plugin_dir, 'scripts', 'rc.buddybackup.php');
-my $snap_page = File::Spec->catfile($plugin_dir, 'SnapshotSettings.page');
+my $snap_page = File::Spec->catfile($plugin_dir, 'BuddyBackupSnapshotSettings.page');
 
 sub slurp {
     my ($path) = @_;
@@ -100,9 +100,9 @@ subtest 'rc.buddybackup defines ensure_child_datasets_have_snapshots and wires i
 };
 
 # ---------------------------------------------------------------------------
-# Test 2: Static assertions on rc.buddybackup.php and SnapshotSettings.page
+# Test 2: Static assertions on rc.buddybackup.php and BuddyBackupSnapshotSettings.page
 # ---------------------------------------------------------------------------
-subtest 'rc.buddybackup.php and SnapshotSettings.page configure atomic ZFS recursion' => sub {
+subtest 'rc.buddybackup.php and BuddyBackupSnapshotSettings.page configure atomic ZFS recursion' => sub {
     like(
         $php,
         qr/\$key\s*===\s*'recursive'/,
@@ -118,13 +118,13 @@ subtest 'rc.buddybackup.php and SnapshotSettings.page configure atomic ZFS recur
     like(
         $page_html,
         qr/Yes \(All child datasets\)/,
-        'SnapshotSettings.page exposes "Yes (All child datasets)" label'
+        'BuddyBackupSnapshotSettings.page exposes "Yes (All child datasets)" label'
     );
 
     like(
         $page_html,
         qr/in_array\(\$data\['recursive'\]\s*\?\?\s*'',\s*\['yes',\s*'zfs'\],\s*true\)/,
-        'SnapshotSettings.page card header recognizes both yes and zfs as recursive'
+        'BuddyBackupSnapshotSettings.page card header recognizes both yes and zfs as recursive'
     );
 };
 

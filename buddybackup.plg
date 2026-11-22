@@ -4,7 +4,7 @@
   <!ENTITY name         "buddybackup">
   <!ENTITY displayName  "ZFS Buddy Backup">
   <!ENTITY author       "Alexander Wester">
-  <!ENTITY version      "2026.10.25">
+  <!ENTITY version      "2026.11.22">
   <!ENTITY launch       "Settings/BuddyBackup">
   <!ENTITY branch       "main">
   <!ENTITY gitURL       "https://raw.githubusercontent.com/Piratkopia13/unraid-&name;/refs/heads/&branch;">
@@ -14,7 +14,7 @@
   <!ENTITY emhttp        "/usr/local/emhttp/plugins/&name;">
   <!ENTITY pkgPath       "/boot/config/plugins/&name;">
   <!ENTITY pkgName       "&name;.txz">
-  <!ENTITY pkgMD5        "b5490f5fa3ddbc9b6748d8a3511092e1">
+  <!ENTITY pkgMD5        "ec614ad2b2f6abc5cbf05d2f77a69178">
 ]>
 
 <PLUGIN  name="&name;"
@@ -26,6 +26,10 @@
          >
 <CHANGES>
 ##&name;
+
+###2026.11.22
+- Fix scheduled snapshot runs occasionally using stale snapshot cache data and logging duplicate snapshot errors [#41](https://github.com/Piratkopia13/unraid-buddybackup/issues/41)
+- Fix a WebGUI settings tab conflict when the Unraid Snapshots plugin is also installed [#16](https://github.com/Piratkopia13/unraid-buddybackup/issues/16)
 
 ###2026.10.25
 - Fix scheduled backups being silently dropped when optional fields (pre/post-backup scripts, destination user) were saved empty

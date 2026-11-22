@@ -49,19 +49,13 @@ function Get-WslUnraidDownloadUrl {
         [string]$Version
     )
 
-    if ($null -eq $WslConfig) {
+    if ([string]::IsNullOrWhiteSpace($Version)) {
         return $null
     }
 
-    $versionUrls = Get-ObjectValue -Object $WslConfig -Name "unraidDownloadUrls"
-    $versionUrl = [string](Get-ObjectValue -Object $versionUrls -Name $Version)
-    if (-not [string]::IsNullOrWhiteSpace($versionUrl)) {
-        return $versionUrl
-    }
-
-    $urlTemplate = [string](Get-ObjectValue -Object $WslConfig -Name "unraidDownloadUrlTemplate")
-    if (-not [string]::IsNullOrWhiteSpace($urlTemplate)) {
-        return $urlTemplate
+    $resolved = Resolve-UnraidVersionSpec -Version $Version -WslConfig $WslConfig
+    if ($resolved) {
+        return $resolved.DownloadUrl
     }
 
     return $null
@@ -1568,6 +1562,10 @@ if (-not (Test-Path -LiteralPath $LabConfig)) {
 }
 
 $lab = Get-Json -Path $LabConfig
+$resolvedUnraidVersions = @(Resolve-LabUnraidVersions -Lab $lab -AllowOfflineFallback:(-not $Execute))
+foreach ($resolvedItem in $resolvedUnraidVersions) {
+    Write-Host "[testlab] Resolved $($resolvedItem.Target) '$($resolvedItem.RequestedVersion)' -> '$($resolvedItem.ResolvedVersion)' (source=$($resolvedItem.Source))"
+}
 $wslCfg = $lab.wslQemu
 $distro = if ($wslCfg -and $wslCfg.distro) { [string]$wslCfg.distro } else { "Ubuntu" }
 $cacheRoot = if ($wslCfg -and $wslCfg.cacheRoot) { [string]$wslCfg.cacheRoot } else { ".testlab/cache" }
@@ -1666,6 +1664,7 @@ try {
         }
 
         $version = [string](Get-ObjectValue -Object $node -Name "unraidVersion")
+        $versionRequested = [string](Get-ObjectValue -Object $node -Name "unraidVersionRequested")
         if ([string]::IsNullOrWhiteSpace($version)) {
             throw "Missing lab.nodes.$nodeName.unraidVersion"
         }
@@ -1727,6 +1726,7 @@ try {
             host                = "127.0.0.1"
             port                = $desiredPort
             unraidVersion       = $version
+            unraidVersionRequested = if (-not [string]::IsNullOrWhiteSpace($versionRequested)) { $versionRequested } else { $version }
             payloadPath         = $payloadPath
             instanceName        = $instanceName
             pluginVersion       = $pluginRequest.displayVersion
