@@ -318,7 +318,7 @@ mysql -e 'UNLOCK TABLES;' || true
 ```
 
 > [!NOTE]
-> Sanoid runs automatically every 15 minutes (`*/15 * * * *`) via cron whenever snapshot or incoming buddy tasks are enabled.
+> Sanoid runs automatically every minute (`* * * * *`) via cron with `--force-update` whenever snapshot or incoming buddy tasks are enabled, refreshing snapshot state directly from ZFS on each run.
 
 ---
 
